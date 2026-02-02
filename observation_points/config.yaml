@@ -1,0 +1,148 @@
+# 观察点监控系统配置文件
+# Observation Points Monitor Configuration
+
+# 全局配置
+global:
+  check_interval: 30        # 默认检查间隔（秒）
+  max_memory_mb: 50         # 内存上限（MB）
+  subprocess_timeout: 10    # 子进程超时（秒）
+
+# 告警上报配置
+reporter:
+  output: file              # 输出方式: file, syslog, both, console
+  file_path: /var/log/observation-points/alerts.log
+  syslog_facility: local0   # syslog facility
+  cooldown_seconds: 300     # 相同告警的冷却时间（秒）
+
+# 观察点配置
+observers:
+  # 1. 误码监测（端口误码 + PCIe 链路误码）
+  error_code:
+    enabled: true
+    interval: 30            # 检查间隔（秒）
+    threshold: 0            # 误码增量阈值，0表示任何新增都告警
+    ports: []               # 要监控的端口列表，空表示所有
+    pcie_enabled: true      # 是否监控 PCIe 误码
+    protocols:              # 限定协议类型
+      - iscsi
+      - nvme
+      - nas
+
+  # 2. 链路状态监测（link down/up）
+  link_status:
+    enabled: true
+    interval: 5             # 链路状态变化需要较短的检查间隔
+    whitelist: []           # 白名单端口，这些端口的变化不告警
+    # 示例白名单（维护窗口可临时添加）:
+    # whitelist:
+    #   - eth0
+    #   - bond0
+    ports: []               # 要监控的端口，空表示所有
+    protocols:
+      - iscsi
+      - nvme
+      - nas
+
+  # 3. 卡修复监测（recovery/probe/remove）
+  card_recovery:
+    enabled: true
+    log_path: /OSM/log/coffer_log/cur_debug/messages
+    keywords:               # 监控的关键字
+      - recovery
+      - probe
+      - remove
+    # 排除模式（已知的故障注入场景等）
+    exclude_patterns: []
+    # 示例排除模式:
+    # exclude_patterns:
+    #   - 'fault_injection_test'
+    #   - 'expected_recovery'
+    max_lines_per_check: 1000
+
+  # 4. 亚健康监测（时延、丢包、乱序激增）
+  subhealth:
+    enabled: true
+    interval: 15
+    window_size: 5          # 滑动窗口大小
+    spike_threshold_percent: 50  # 激增阈值（相对均值增长百分比）
+    cooldown_seconds: 60    # 告警冷却时间
+    metrics:
+      - latency
+      - packet_loss
+      - out_of_order
+    ports: []
+    # 内部命令（可选，用于获取亚健康数据）
+    # internal_command: '/opt/internal/get_subhealth.sh {port}'
+
+  # 5. 敏感信息监测
+  sensitive_info:
+    enabled: true
+    log_paths:
+      - /OSM/log/coffer_log/cur_debug/messages
+      - /var/log/messages
+    max_lines_per_check: 500
+    cooldown_seconds: 300
+    # 自定义敏感信息模式（正则表达式）
+    patterns:
+      - 'password\s*[=:]\s*\S+'
+      - 'passwd\s*[=:]\s*\S+'
+      - 'nqn\.[a-zA-Z0-9.\-:]+'
+      - 'iqn\.[a-zA-Z0-9.\-:]+'
+      - 'secret\s*[=:]\s*\S+'
+      - 'token\s*[=:]\s*\S+'
+
+  # 6. 性能波动监测（IOPS、带宽、时延 >10%）
+  performance:
+    enabled: true
+    interval: 10
+    window_size: 5          # 滑动窗口大小
+    fluctuation_threshold_percent: 10  # 波动阈值
+    min_iops_threshold: 100     # 最小 IOPS 阈值（低于此值不检测波动）
+    min_bandwidth_threshold_mbps: 10  # 最小带宽阈值（Mbps）
+    cooldown_seconds: 60
+    metrics:
+      - iops
+      - bandwidth
+      - latency
+    dimensions:             # 监测维度
+      - bond
+      - port
+    protocols:
+      - iscsi
+      - nvme
+      - nas
+    # 内部命令（可选，用于获取性能数据）
+    # internal_command: '/opt/internal/get_perf.sh'
+
+  # 7. 自定义命令观察点
+  custom_commands:
+    enabled: false
+    default_timeout: 10
+    # 允许执行的命令路径前缀（安全白名单）
+    allowed_paths:
+      - /opt/
+      - /usr/local/bin/
+      - /OSM/
+    # 命令列表
+    commands: []
+    # 示例命令配置:
+    # commands:
+    #   - name: check_port_health
+    #     command: /opt/internal/check_port.sh
+    #     interval: 30
+    #     timeout: 10
+    #     parse_type: json    # json, key_value, regex, raw
+    #     alert_conditions:
+    #       - field: status
+    #         operator: '!='
+    #         value: 'OK'
+    #         level: error
+    #   - name: check_firmware
+    #     command: /opt/internal/fw_version.sh
+    #     interval: 3600
+    #     parse_type: key_value
+    #     alert_conditions:
+    #       - field: version
+    #         operator: contains
+    #         value: 'BETA'
+    #         level: warning
