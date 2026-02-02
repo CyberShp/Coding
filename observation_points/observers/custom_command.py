@@ -9,7 +9,7 @@ import json
 import logging
 import re
 from datetime import datetime
-from typing import Any
+from typing import Any, Dict, List, Tuple
 
 from ..core.base import BaseObserver, ObserverResult, AlertLevel
 from ..utils.helpers import run_command
@@ -66,7 +66,7 @@ class CustomCommandObserver(BaseObserver):
         'not_matches': lambda a, b: not bool(re.search(b, str(a))),
     }
     
-    def __init__(self, name: str, config: dict[str, Any]):
+    def __init__(self, name: str, config: Dict[str, Any]):
         super().__init__(name, config)
         
         self.commands = config.get('commands', [])
@@ -79,8 +79,7 @@ class CustomCommandObserver(BaseObserver):
             '/OSM/',
         ])
         
-        # 每个命令的上次执行时间和结果
-        self._last_run: dict[str, dict[str, Any]] = {}
+        self._last_run = {}  # type: Dict[str, Dict[str, Any]]
         
         # 验证命令配置
         self._validate_commands()
@@ -173,7 +172,7 @@ class CustomCommandObserver(BaseObserver):
             details=details,
         )
     
-    def _execute_command(self, cmd_config: dict) -> tuple[dict, list[str]]:
+    def _execute_command(self, cmd_config: Dict) -> Tuple[Dict, List[str]]:
         """执行单个命令"""
         cmd_name = cmd_config.get('name', 'unnamed')
         command = cmd_config.get('command', '')
@@ -212,7 +211,7 @@ class CustomCommandObserver(BaseObserver):
         
         return result, alerts
     
-    def _parse_output(self, output: str, parse_type: str) -> dict[str, Any]:
+    def _parse_output(self, output: str, parse_type: str) -> Dict[str, Any]:
         """解析命令输出"""
         output = output.strip()
         
@@ -245,7 +244,7 @@ class CustomCommandObserver(BaseObserver):
             return {'raw': output}
     
     def _check_condition(self, cmd_name: str, parsed: dict, 
-                        condition: dict) -> tuple[bool, str]:
+                        condition: Dict) -> Tuple[bool, str]:
         """检查告警条件"""
         field = condition.get('field', '')
         operator = condition.get('operator', '==')

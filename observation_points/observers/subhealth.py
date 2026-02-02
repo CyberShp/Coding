@@ -9,7 +9,7 @@ import logging
 from collections import deque
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Dict, List, Optional, Tuple
 
 from ..core.base import BaseObserver, ObserverResult, AlertLevel
 from ..utils.helpers import run_command, read_sysfs, safe_int, safe_float
@@ -27,20 +27,15 @@ class SubhealthObserver(BaseObserver):
     - 支持端口级和 bond 级聚合
     """
     
-    def __init__(self, name: str, config: dict[str, Any]):
+    def __init__(self, name: str, config: Dict[str, Any]):
         super().__init__(name, config)
-        
         self.window_size = config.get('window_size', 5)
         self.spike_threshold_percent = config.get('spike_threshold_percent', 50)
         self.metrics = config.get('metrics', ['latency', 'packet_loss', 'out_of_order'])
         self.ports = config.get('ports', [])
         self.cooldown_seconds = config.get('cooldown_seconds', 60)
-        
-        # 每个端口的历史数据窗口: {port: {metric: deque}}
-        self._history: dict[str, dict[str, deque]] = {}
-        
-        # 上次告警时间: {port_metric: timestamp}
-        self._last_alert_time: dict[str, datetime] = {}
+        self._history = {}  # type: Dict[str, Dict[str, deque]]
+        self._last_alert_time = {}  # type: Dict[str, datetime]
         
         # 内部命令配置（可能需要调用内部工具获取亚健康数据）
         self.internal_command = config.get('internal_command', None)
@@ -104,7 +99,7 @@ class SubhealthObserver(BaseObserver):
             details=details,
         )
     
-    def _get_ports_to_check(self) -> list[str]:
+    def _get_ports_to_check(self) -> List[str]:
         """获取要检查的端口列表"""
         if self.ports:
             return self.ports
@@ -122,7 +117,7 @@ class SubhealthObserver(BaseObserver):
         
         return sorted(ports)
     
-    def _get_port_metrics(self, port: str) -> dict[str, float]:
+    def _get_port_metrics(self, port: str) -> Dict[str, float]:
         """获取端口亚健康指标"""
         metrics = {}
         
@@ -137,7 +132,7 @@ class SubhealthObserver(BaseObserver):
         
         return metrics
     
-    def _get_metrics_from_command(self, port: str) -> dict[str, float]:
+    def _get_metrics_from_command(self, port: str) -> Dict[str, float]:
         """从内部命令获取指标"""
         metrics = {}
         
@@ -159,7 +154,7 @@ class SubhealthObserver(BaseObserver):
         
         return metrics
     
-    def _get_metrics_from_system(self, port: str) -> dict[str, float]:
+    def _get_metrics_from_system(self, port: str) -> Dict[str, float]:
         """从系统获取指标"""
         metrics = {}
         
@@ -197,7 +192,7 @@ class SubhealthObserver(BaseObserver):
         
         return metrics
     
-    def _get_tcp_out_of_order(self) -> float | None:
+    def _get_tcp_out_of_order(self) -> Optional[float]:
         """获取 TCP 乱序统计"""
         try:
             netstat_path = Path('/proc/net/netstat')
@@ -224,7 +219,7 @@ class SubhealthObserver(BaseObserver):
             logger.debug(f"获取 TCP 乱序统计失败: {e}")
             return None
     
-    def _get_tcp_rtt(self, port: str) -> float | None:
+    def _get_tcp_rtt(self, port: str) -> Optional[float]:
         """获取 TCP RTT（时延）"""
         try:
             # 使用 ss 命令获取 RTT
@@ -248,7 +243,7 @@ class SubhealthObserver(BaseObserver):
             logger.debug(f"获取 TCP RTT 失败: {e}")
             return None
     
-    def _check_spike(self, port: str, metric: str, current_value: float) -> tuple[bool, float]:
+    def _check_spike(self, port: str, metric: str, current_value: float) -> Tuple[bool, float]:
         """检测指标是否激增"""
         history = self._get_history(port, metric)
         

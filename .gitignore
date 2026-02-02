@@ -1,0 +1,24 @@
+# macOS
+.DS_Store
+
+# IDE
+.idea/
+
+# 大文件 / 虚拟机与镜像
+*.iso
+*.qcow2
+*.qcow
+efi_vars.fd
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.env
+.venv/
+venv/
+
+# 可选：若 config.json 含敏感信息可取消下一行注释
+# observation_points/config.json

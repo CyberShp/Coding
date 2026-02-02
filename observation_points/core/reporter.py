@@ -12,7 +12,7 @@ import syslog
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Dict
 
 from .base import ObserverResult, AlertLevel
 
@@ -26,7 +26,7 @@ class Alert:
     level: AlertLevel
     message: str
     timestamp: datetime
-    details: dict[str, Any]
+    details: Dict[str, Any]
     
     def to_json(self) -> str:
         """转换为 JSON 字符串"""
@@ -59,7 +59,7 @@ class Reporter:
         (r'(iqn\.[a-zA-Z0-9.\-:]+)', r'iqn.***'),
     ]
     
-    def __init__(self, config: dict[str, Any], dry_run: bool = False):
+    def __init__(self, config: Dict[str, Any], dry_run: bool = False):
         """
         初始化上报器
         
@@ -75,8 +75,8 @@ class Reporter:
         self.syslog_facility = config.get('syslog_facility', 'local0')
         self.cooldown_seconds = config.get('cooldown_seconds', 300)
         
-        # 告警冷却记录: {observer_name: {message_hash: last_alert_time}}
-        self._cooldown_cache: dict[str, dict[str, datetime]] = {}
+        # 告警冷却记录
+        self._cooldown_cache = {}  # type: Dict[str, Dict[str, datetime]]
         
         # 初始化输出
         self._init_outputs()
@@ -191,17 +191,20 @@ class Reporter:
             result = pattern.sub(replacement, result)
         return result
     
-    def _sanitize_dict(self, data: dict) -> dict:
-        """对字典中的字符串值进行脱敏"""
+    def _sanitize_dict(self, data: Dict) -> Dict:
+        """对字典中的字符串值进行脱敏，datetime 转为 isoformat 以便 JSON 序列化"""
         result = {}
         for key, value in data.items():
-            if isinstance(value, str):
+            if isinstance(value, datetime):
+                result[key] = value.isoformat()
+            elif isinstance(value, str):
                 result[key] = self._sanitize(value)
             elif isinstance(value, dict):
                 result[key] = self._sanitize_dict(value)
             elif isinstance(value, list):
                 result[key] = [
-                    self._sanitize(v) if isinstance(v, str) else v
+                    (v.isoformat() if isinstance(v, datetime) else
+                     (self._sanitize(v) if isinstance(v, str) else v))
                     for v in value
                 ]
             else:

@@ -8,7 +8,7 @@
 import logging
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, Dict, List
 
 from ..core.base import BaseObserver, ObserverResult, AlertLevel
 from ..utils.helpers import run_command, read_sysfs, safe_int
@@ -53,17 +53,14 @@ class ErrorCodeObserver(BaseObserver):
         'UnsupReq',
     ]
     
-    def __init__(self, name: str, config: dict[str, Any]):
+    def __init__(self, name: str, config: Dict[str, Any]):
         super().__init__(name, config)
-        
         self.threshold = config.get('threshold', 0)
-        self.ports = config.get('ports', [])  # 空表示监控所有
+        self.ports = config.get('ports', [])
         self.pcie_enabled = config.get('pcie_enabled', True)
         self.protocols = config.get('protocols', ['iscsi', 'nvme', 'nas'])
-        
-        # 上次误码值缓存
-        self._last_port_errors: dict[str, dict[str, int]] = {}
-        self._last_pcie_errors: dict[str, dict[str, int]] = {}
+        self._last_port_errors = {}  # type: Dict[str, Dict[str, int]]
+        self._last_pcie_errors = {}  # type: Dict[str, Dict[str, int]]
     
     def check(self) -> ObserverResult:
         """执行误码检查"""
@@ -102,7 +99,7 @@ class ErrorCodeObserver(BaseObserver):
             details=details,
         )
     
-    def _check_port_errors(self) -> list[str]:
+    def _check_port_errors(self) -> List[str]:
         """检查端口误码"""
         alerts = []
         
@@ -139,7 +136,7 @@ class ErrorCodeObserver(BaseObserver):
         
         return alerts
     
-    def _check_pcie_errors(self) -> list[str]:
+    def _check_pcie_errors(self) -> List[str]:
         """检查 PCIe 误码"""
         alerts = []
         
@@ -167,7 +164,7 @@ class ErrorCodeObserver(BaseObserver):
         
         return alerts
     
-    def _get_ports_to_check(self) -> list[str]:
+    def _get_ports_to_check(self) -> List[str]:
         """获取要检查的端口列表"""
         if self.ports:
             return self.ports
@@ -186,7 +183,7 @@ class ErrorCodeObserver(BaseObserver):
         
         return sorted(ports)
     
-    def _get_port_error_counters(self, port: str) -> dict[str, int]:
+    def _get_port_error_counters(self, port: str) -> Dict[str, int]:
         """获取端口误码计数器"""
         errors = {}
         
@@ -204,7 +201,7 @@ class ErrorCodeObserver(BaseObserver):
         
         return errors
     
-    def _get_ethtool_stats(self, port: str) -> dict[str, int]:
+    def _get_ethtool_stats(self, port: str) -> Dict[str, int]:
         """通过 ethtool 获取统计信息"""
         errors = {}
         
@@ -227,7 +224,7 @@ class ErrorCodeObserver(BaseObserver):
         
         return errors
     
-    def _get_pcie_aer_errors(self) -> dict[str, dict[str, int]]:
+    def _get_pcie_aer_errors(self) -> Dict[str, Dict[str, int]]:
         """获取 PCIe AER 错误统计"""
         result = {}
         
@@ -259,7 +256,7 @@ class ErrorCodeObserver(BaseObserver):
         
         return result
     
-    def _parse_aer_stats(self, content: str, prefix: str = '') -> dict[str, int]:
+    def _parse_aer_stats(self, content: str, prefix: str = '') -> Dict[str, int]:
         """解析 AER 统计信息"""
         errors = {}
         

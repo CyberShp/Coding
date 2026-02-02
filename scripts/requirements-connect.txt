@@ -1,0 +1,2 @@
+# 仅用于 scripts/connect_observation_points_to_github.py（Chrome 图形界面连接 GitHub）
+playwright>=1.40.0

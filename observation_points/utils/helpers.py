@@ -6,8 +6,9 @@
 
 import logging
 import subprocess
+import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 logger = logging.getLogger(__name__)
 
@@ -16,12 +17,13 @@ DEFAULT_TIMEOUT = 10
 
 
 def run_command(
-    cmd: str | list[str],
+    cmd: Union[str, List[str]],
     timeout: int = DEFAULT_TIMEOUT,
     shell: bool = False,
     check: bool = False,
     capture_stderr: bool = True,
-) -> tuple[int, str, str]:
+):
+    # type: (...) -> Tuple[int, str, str]
     """
     执行命令并返回结果
     
@@ -39,14 +41,15 @@ def run_command(
         if isinstance(cmd, str) and not shell:
             cmd = cmd.split()
         
-        result = subprocess.run(
-            cmd,
-            shell=shell,
-            timeout=timeout,
-            capture_output=True,
-            text=True,
-            check=check,
-        )
+        run_kw = dict(shell=shell, timeout=timeout, check=check)
+        if sys.version_info >= (3, 7):
+            run_kw['capture_output'] = True
+            run_kw['text'] = True
+        else:
+            run_kw['stdout'] = subprocess.PIPE
+            run_kw['stderr'] = subprocess.PIPE
+            run_kw['universal_newlines'] = True
+        result = subprocess.run(cmd, **run_kw)
         
         return result.returncode, result.stdout, result.stderr
         
@@ -60,7 +63,7 @@ def run_command(
         return -1, "", str(e)
 
 
-def read_sysfs(path: str | Path) -> str | None:
+def read_sysfs(path: Union[str, Path]) -> Optional[str]:
     """
     读取 sysfs 文件内容
     
@@ -81,10 +84,11 @@ def read_sysfs(path: str | Path) -> str | None:
 
 
 def tail_file(
-    path: str | Path,
+    path: Union[str, Path],
     last_position: int = 0,
     max_lines: int = 1000,
-) -> tuple[list[str], int]:
+):
+    # type: (...) -> Tuple[List[str], int]
     """
     读取文件新增内容（类似 tail -f）
     
@@ -130,7 +134,7 @@ def tail_file(
         return [], last_position
 
 
-def parse_key_value(text: str, sep: str = ':', strip: bool = True) -> dict[str, str]:
+def parse_key_value(text: str, sep: str = ':', strip: bool = True) -> Dict[str, str]:
     """
     解析键值对格式的文本
     
@@ -194,7 +198,7 @@ def safe_float(value: Any, default: float = 0.0) -> float:
         return default
 
 
-def get_network_interfaces() -> list[str]:
+def get_network_interfaces() -> List[str]:
     """
     获取网络接口列表
     
@@ -214,7 +218,7 @@ def get_network_interfaces() -> list[str]:
     return sorted(interfaces)
 
 
-def get_pcie_devices() -> list[dict[str, str]]:
+def get_pcie_devices() -> List[Dict[str, str]]:
     """
     获取 PCIe 设备列表
     

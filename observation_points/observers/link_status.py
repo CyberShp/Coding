@@ -10,8 +10,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from typing import Any, Dict, List, Optional
+
 from ..core.base import BaseObserver, ObserverResult, AlertLevel
-from ..utils.helpers import read_sysfs, run_command
+from ..utils.helpers import read_sysfs
 
 logger = logging.getLogger(__name__)
 
@@ -26,15 +28,12 @@ class LinkStatusObserver(BaseObserver):
     - 支持白名单排除
     """
     
-    def __init__(self, name: str, config: dict[str, Any]):
+    def __init__(self, name: str, config: Dict[str, Any]):
         super().__init__(name, config)
-        
         self.whitelist = set(config.get('whitelist', []))
         self.protocols = config.get('protocols', ['iscsi', 'nvme', 'nas'])
-        self.ports = config.get('ports', [])  # 空表示监控所有
-        
-        # 上次状态缓存: {port: {'carrier': '1', 'operstate': 'up', 'timestamp': datetime}}
-        self._last_states: dict[str, dict[str, Any]] = {}
+        self.ports = config.get('ports', [])
+        self._last_states = {}  # type: Dict[str, Dict[str, Any]]
         
         # 首次运行标记
         self._first_run = True
@@ -55,7 +54,6 @@ class LinkStatusObserver(BaseObserver):
                 continue
             
             details['current_states'][port] = state
-            
             # 跳过白名单端口
             if port in self.whitelist:
                 continue
@@ -99,7 +97,7 @@ class LinkStatusObserver(BaseObserver):
             details=details,
         )
     
-    def _get_ports_to_check(self) -> list[str]:
+    def _get_ports_to_check(self) -> List[str]:
         """获取要检查的端口列表"""
         if self.ports:
             return self.ports
@@ -126,7 +124,7 @@ class LinkStatusObserver(BaseObserver):
         master_path = Path(f'/sys/class/net/{port}/master')
         return master_path.exists()
     
-    def _get_port_state(self, port: str) -> dict[str, Any] | None:
+    def _get_port_state(self, port: str):  # type: (...) -> Optional[Dict[str, Any]]
         """获取端口状态"""
         port_path = Path(f'/sys/class/net/{port}')
         
@@ -138,7 +136,7 @@ class LinkStatusObserver(BaseObserver):
             'operstate': read_sysfs(port_path / 'operstate') or 'unknown',
             'speed': read_sysfs(port_path / 'speed'),
             'duplex': read_sysfs(port_path / 'duplex'),
-            'timestamp': datetime.now(),
+            'timestamp': datetime.now().isoformat(),
         }
         
         # 获取 bond 信息（如果是 bond）
@@ -149,7 +147,7 @@ class LinkStatusObserver(BaseObserver):
         
         return state
     
-    def _detect_changes(self, port: str, last: dict, current: dict) -> list[str]:
+    def _detect_changes(self, port: str, last: Dict, current: Dict) -> List[str]:
         """检测状态变化"""
         changes = []
         

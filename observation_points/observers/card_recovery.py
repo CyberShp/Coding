@@ -9,7 +9,7 @@ import logging
 import re
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Dict, List, Optional
 
 from ..core.base import BaseObserver, ObserverResult, AlertLevel
 from ..utils.helpers import tail_file
@@ -39,7 +39,7 @@ class CardRecoveryObserver(BaseObserver):
         r'uncorrectable.*error',
     ]
     
-    def __init__(self, name: str, config: dict[str, Any]):
+    def __init__(self, name: str, config: Dict[str, Any]):
         super().__init__(name, config)
         
         self.log_path = Path(config.get('log_path', '/OSM/log/coffer_log/cur_debug/messages'))
@@ -56,7 +56,7 @@ class CardRecoveryObserver(BaseObserver):
         self._file_position = 0
         
         # 已检测到的事件（用于去重）
-        self._recent_events: list[dict] = []
+        self._recent_events = []  # type: List[dict]
         self._max_recent_events = 100
     
     def check(self) -> ObserverResult:
@@ -112,7 +112,7 @@ class CardRecoveryObserver(BaseObserver):
             details={'lines_checked': len(new_lines)},
         )
     
-    def _analyze_line(self, line: str) -> dict | None:
+    def _analyze_line(self, line: str) -> Optional[Dict]:
         """分析日志行，检测关键事件"""
         if not line.strip():
             return None
@@ -140,7 +140,7 @@ class CardRecoveryObserver(BaseObserver):
         
         return event
     
-    def _parse_timestamp(self, line: str) -> str | None:
+    def _parse_timestamp(self, line: str) -> Optional[str]:
         """尝试从日志行解析时间戳"""
         # 常见的日志时间戳格式
         patterns = [
@@ -159,7 +159,7 @@ class CardRecoveryObserver(BaseObserver):
         
         return None
     
-    def _classify_event(self, line: str, patterns: list[str]) -> str:
+    def _classify_event(self, line: str, patterns: List[str]) -> str:
         """分类事件类型"""
         line_lower = line.lower()
         
@@ -188,7 +188,7 @@ class CardRecoveryObserver(BaseObserver):
         
         return 'unknown'
     
-    def _generate_summary(self, line: str, patterns: list[str]) -> str:
+    def _generate_summary(self, line: str, patterns: List[str]) -> str:
         """生成事件摘要"""
         # 提取关键部分
         summary_parts = []
@@ -237,7 +237,7 @@ class CardRecoveryObserver(BaseObserver):
         if len(self._recent_events) > self._max_recent_events:
             self._recent_events.pop(0)
     
-    def set_fault_injection_mode(self, enabled: bool, patterns: list[str] | None = None):
+    def set_fault_injection_mode(self, enabled: bool, patterns: Optional[List[str]] = None):
         """
         设置故障注入模式
         

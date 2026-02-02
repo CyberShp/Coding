@@ -8,13 +8,14 @@ import logging
 import signal
 import sys
 from pathlib import Path
+from typing import Optional
 
 from .config.loader import ConfigLoader
 from .core.scheduler import Scheduler
 from .core.reporter import Reporter
 
 
-def setup_logging(log_level: str, log_file: str | None = None):
+def setup_logging(log_level: str, log_file: Optional[str] = None):
     """配置日志系统"""
     level = getattr(logging, log_level.upper(), logging.INFO)
     
@@ -36,8 +37,8 @@ def main():
     )
     parser.add_argument(
         '-c', '--config',
-        default='/etc/observation-points/config.yaml',
-        help='配置文件路径 (默认: /etc/observation-points/config.yaml)'
+        default='/etc/observation-points/config.json',
+        help='配置文件路径 (默认: /etc/observation-points/config.json，仅支持 JSON)'
     )
     parser.add_argument(
         '--log-level',
@@ -65,7 +66,7 @@ def main():
     config_path = Path(args.config)
     if not config_path.exists():
         # 尝试使用项目目录下的默认配置
-        default_config = Path(__file__).parent / 'config.yaml'
+        default_config = Path(__file__).parent / 'config.json'
         if default_config.exists():
             config_path = default_config
             logger.info(f"使用默认配置文件: {config_path}")

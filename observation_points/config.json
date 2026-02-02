@@ -1,0 +1,78 @@
+{
+  "global": {
+    "check_interval": 30,
+    "max_memory_mb": 50,
+    "subprocess_timeout": 10
+  },
+  "reporter": {
+    "output": "file",
+    "file_path": "/var/log/observation-points/alerts.log",
+    "syslog_facility": "local0",
+    "cooldown_seconds": 300
+  },
+  "observers": {
+    "error_code": {
+      "enabled": true,
+      "interval": 30,
+      "threshold": 0,
+      "ports": [],
+      "pcie_enabled": true,
+      "protocols": ["iscsi", "nvme", "nas"]
+    },
+    "link_status": {
+      "enabled": true,
+      "interval": 5,
+      "whitelist": [],
+      "ports": [],
+      "protocols": ["iscsi", "nvme", "nas"]
+    },
+    "card_recovery": {
+      "enabled": true,
+      "log_path": "/OSM/log/coffer_log/cur_debug/messages",
+      "keywords": ["recovery", "probe", "remove"],
+      "exclude_patterns": [],
+      "max_lines_per_check": 1000
+    },
+    "subhealth": {
+      "enabled": true,
+      "interval": 15,
+      "window_size": 5,
+      "spike_threshold_percent": 50,
+      "cooldown_seconds": 60,
+      "metrics": ["latency", "packet_loss", "out_of_order"],
+      "ports": []
+    },
+    "sensitive_info": {
+      "enabled": true,
+      "log_paths": ["/OSM/log/coffer_log/cur_debug/messages", "/var/log/messages"],
+      "max_lines_per_check": 500,
+      "cooldown_seconds": 300,
+      "patterns": [
+        "password\\s*[=:]\\s*\\S+",
+        "passwd\\s*[=:]\\s*\\S+",
+        "nqn\\.[a-zA-Z0-9.\\-:]+",
+        "iqn\\.[a-zA-Z0-9.\\-:]+",
+        "secret\\s*[=:]\\s*\\S+",
+        "token\\s*[=:]\\s*\\S+"
+      ]
+    },
+    "performance": {
+      "enabled": true,
+      "interval": 10,
+      "window_size": 5,
+      "fluctuation_threshold_percent": 10,
+      "min_iops_threshold": 100,
+      "min_bandwidth_threshold_mbps": 10,
+      "cooldown_seconds": 60,
+      "metrics": ["iops", "bandwidth", "latency"],
+      "dimensions": ["bond", "port"],
+      "protocols": ["iscsi", "nvme", "nas"]
+    },
+    "custom_commands": {
+      "enabled": false,
+      "default_timeout": 10,
+      "allowed_paths": ["/opt/", "/usr/local/bin/", "/OSM/"],
+      "commands": []
+    }
+  }
+}

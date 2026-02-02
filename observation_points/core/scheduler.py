@@ -8,7 +8,7 @@
 import logging
 import time
 from datetime import datetime
-from typing import Any
+from typing import Any, Dict, List, Tuple
 
 from .base import BaseObserver
 from .reporter import Reporter
@@ -23,7 +23,7 @@ class Scheduler:
     单线程轮询模式，按各观察点配置的间隔执行检查。
     """
     
-    def __init__(self, config: dict[str, Any], reporter: Reporter):
+    def __init__(self, config: Dict[str, Any], reporter: Reporter):
         """
         初始化调度器
         
@@ -34,7 +34,7 @@ class Scheduler:
         self.config = config
         self.reporter = reporter
         self._running = False
-        self._observers: list[tuple[BaseObserver, float]] = []  # (观察点, 下次执行时间)
+        self._observers = []  # type: List[Tuple[BaseObserver, float]]
         
         # 从配置加载并注册观察点
         self._load_observers()
@@ -63,7 +63,7 @@ class Scheduler:
             except Exception as e:
                 logger.error(f"初始化观察点 {name} 失败: {e}")
     
-    def _get_observer_classes(self) -> dict[str, type]:
+    def _get_observer_classes(self) -> Dict[str, type]:
         """获取所有观察点类的映射"""
         from ..observers.error_code import ErrorCodeObserver
         from ..observers.link_status import LinkStatusObserver

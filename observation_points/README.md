@@ -14,9 +14,9 @@
 
 ## 系统要求
 
-- Python 3.9+
+- Python 3.6–3.9（已做兼容，无 3.10+ 语法）
 - Euler ARM 操作系统
-- 依赖：PyYAML
+- 无第三方依赖（仅标准库 + Python 3.6 下可选 `dataclasses`）；配置仅支持 **JSON**（便于离线/ARM，无需 PyYAML）
 
 ## 快速开始
 
@@ -29,9 +29,9 @@ cp -r observation_points /opt/observation_points
 # 安装依赖
 pip3 install -r requirements.txt
 
-# 复制配置文件
+# 复制配置文件（仅 JSON）
 mkdir -p /etc/observation-points
-cp observation_points/config.yaml /etc/observation-points/
+cp observation_points/config.json /etc/observation-points/
 ```
 
 ### 运行
@@ -40,8 +40,8 @@ cp observation_points/config.yaml /etc/observation-points/
 # 直接运行
 python3 -m observation_points
 
-# 指定配置文件
-python3 -m observation_points -c /etc/observation-points/config.yaml
+# 指定配置文件（仅支持 .json）
+python3 -m observation_points -c /etc/observation-points/config.json
 
 # 试运行模式（不实际告警）
 python3 -m observation_points --dry-run
@@ -61,7 +61,7 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/python3 -m observation_points -c /etc/observation-points/config.yaml
+ExecStart=/usr/bin/python3 -m observation_points -c /etc/observation-points/config.json
 Restart=always
 RestartSec=10
 User=root

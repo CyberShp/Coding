@@ -1,9 +1,5 @@
-# 观察点监控系统依赖
-# Observation Points Monitor Dependencies
+# 观察点监控系统依赖（兼容 Python 3.6-3.9）
+# 无 PyYAML，仅用 JSON 配置，便于离线/ARM 环境
 
-# 必需依赖
-PyYAML>=6.0              # YAML 配置文件解析
-
-# 可选依赖（根据需要取消注释）
-# watchdog>=3.0          # 文件系统监控（inotify），用于更高效的日志监控
-# psutil>=5.9            # 系统信息获取，可增强性能监控能力
+# Python 3.6 需 dataclasses 回退包（3.7+ 内置）
+dataclasses; python_version<'3.7'

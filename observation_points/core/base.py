@@ -10,7 +10,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Any
+from typing import Any, Dict, List, Optional, Tuple
 
 
 class AlertLevel(Enum):
@@ -29,10 +29,10 @@ class ObserverResult:
     has_alert: bool = False
     alert_level: AlertLevel = AlertLevel.INFO
     message: str = ""
-    details: dict[str, Any] = field(default_factory=dict)
+    details: Dict[str, Any] = field(default_factory=dict)
     raw_data: Any = None
-    
-    def to_dict(self) -> dict[str, Any]:
+
+    def to_dict(self) -> Dict[str, Any]:
         """转换为字典"""
         return {
             'observer_name': self.observer_name,
@@ -53,7 +53,7 @@ class BaseObserver(ABC):
     - cleanup(): 清理资源（可选）
     """
     
-    def __init__(self, name: str, config: dict[str, Any]):
+    def __init__(self, name: str, config: Dict[str, Any]):
         """
         初始化观察点
         
@@ -68,14 +68,12 @@ class BaseObserver(ABC):
         self.logger = logging.getLogger(f'observer.{name}')
         
         # 上次检查时间
-        self._last_check: datetime | None = None
-        
+        self._last_check = None  # type: Optional[datetime]
         # 历史数据窗口（用于滑动窗口计算）
         window_size = config.get('window_size', 5)
-        self._history: deque = deque(maxlen=window_size)
-        
+        self._history = deque(maxlen=window_size)
         # 上次值（用于增量检测）
-        self._last_values: dict[str, Any] = {}
+        self._last_values = {}  # type: Dict[str, Any]
         
         self.logger.debug(f"观察点 {name} 初始化完成")
     
@@ -113,11 +111,11 @@ class BaseObserver(ABC):
             'data': data,
         })
     
-    def get_history(self) -> list[dict]:
+    def get_history(self) -> List[dict]:
         """获取历史数据"""
         return list(self._history)
     
-    def calculate_average(self, key: str | None = None) -> float | None:
+    def calculate_average(self, key: Optional[str] = None) -> Optional[float]:
         """
         计算历史数据平均值
         
@@ -143,8 +141,8 @@ class BaseObserver(ABC):
         
         return sum(values) / len(values) if values else None
     
-    def detect_spike(self, current_value: float, key: str | None = None, 
-                     threshold_percent: float = 50) -> tuple[bool, float]:
+    def detect_spike(self, current_value: float, key: Optional[str] = None,
+                     threshold_percent: float = 50) -> Tuple[bool, float]:
         """
         检测激增
         
@@ -183,7 +181,7 @@ class BaseObserver(ABC):
     def create_result(self, has_alert: bool = False,
                       alert_level: AlertLevel = AlertLevel.INFO,
                       message: str = "",
-                      details: dict | None = None,
+                      details: Optional[Dict] = None,
                       raw_data: Any = None) -> ObserverResult:
         """
         创建检查结果

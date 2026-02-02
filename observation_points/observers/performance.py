@@ -10,7 +10,7 @@ import logging
 from collections import deque
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Dict, List, Tuple
 
 from ..core.base import BaseObserver, ObserverResult, AlertLevel
 from ..utils.helpers import run_command, read_sysfs, safe_int, safe_float
@@ -29,9 +29,8 @@ class PerformanceObserver(BaseObserver):
     - 可配置最小阈值避免低负载误报
     """
     
-    def __init__(self, name: str, config: dict[str, Any]):
+    def __init__(self, name: str, config: Dict[str, Any]):
         super().__init__(name, config)
-        
         self.window_size = config.get('window_size', 5)
         self.fluctuation_threshold_percent = config.get('fluctuation_threshold_percent', 10)
         self.min_iops_threshold = config.get('min_iops_threshold', 100)
@@ -40,18 +39,10 @@ class PerformanceObserver(BaseObserver):
         self.dimensions = config.get('dimensions', ['bond', 'port'])
         self.protocols = config.get('protocols', ['iscsi', 'nvme', 'nas'])
         self.cooldown_seconds = config.get('cooldown_seconds', 60)
-        
-        # 内部命令（用于获取性能数据）
         self.internal_command = config.get('internal_command', None)
-        
-        # 历史数据: {dimension_id: {metric: deque}}
-        self._history: dict[str, dict[str, deque]] = {}
-        
-        # 上次采集的原始数据（用于计算增量）
-        self._last_raw: dict[str, dict[str, Any]] = {}
-        
-        # 上次告警时间
-        self._last_alert_time: dict[str, datetime] = {}
+        self._history = {}  # type: Dict[str, Dict[str, deque]]
+        self._last_raw = {}  # type: Dict[str, Dict[str, Any]]
+        self._last_alert_time = {}  # type: Dict[str, datetime]
     
     def check(self) -> ObserverResult:
         """检查性能波动"""
@@ -118,7 +109,7 @@ class PerformanceObserver(BaseObserver):
             details=details,
         )
     
-    def _collect_performance_data(self) -> dict[str, dict[str, float]]:
+    def _collect_performance_data(self) -> Dict[str, Dict[str, float]]:
         """收集各维度的性能数据"""
         data = {}
         
@@ -133,7 +124,7 @@ class PerformanceObserver(BaseObserver):
         
         return data
     
-    def _collect_from_command(self) -> dict[str, dict[str, float]]:
+    def _collect_from_command(self) -> Dict[str, Dict[str, float]]:
         """从内部命令收集性能数据"""
         data = {}
         
@@ -174,7 +165,7 @@ class PerformanceObserver(BaseObserver):
         
         return data
     
-    def _collect_from_system(self) -> dict[str, dict[str, float]]:
+    def _collect_from_system(self) -> Dict[str, Dict[str, float]]:
         """从系统收集性能数据"""
         data = {}
         
@@ -194,7 +185,7 @@ class PerformanceObserver(BaseObserver):
         
         return data
     
-    def _collect_port_performance(self) -> dict[str, dict[str, float]]:
+    def _collect_port_performance(self) -> Dict[str, Dict[str, float]]:
         """收集端口级性能"""
         data = {}
         
@@ -249,7 +240,7 @@ class PerformanceObserver(BaseObserver):
         
         return data
     
-    def _collect_bond_performance(self) -> dict[str, dict[str, float]]:
+    def _collect_bond_performance(self) -> Dict[str, Dict[str, float]]:
         """收集 bond 级性能"""
         data = {}
         
@@ -303,7 +294,7 @@ class PerformanceObserver(BaseObserver):
         
         return data
     
-    def _collect_block_performance(self) -> dict[str, dict[str, float]]:
+    def _collect_block_performance(self) -> Dict[str, Dict[str, float]]:
         """收集块设备性能（用于 iSCSI/NVMe 目标侧）"""
         data = {}
         
@@ -390,7 +381,7 @@ class PerformanceObserver(BaseObserver):
         return True  # 其他指标默认检查
     
     def _check_fluctuation(self, dimension_id: str, metric: str, 
-                          current_value: float) -> tuple[bool, float]:
+                          current_value: float) -> Tuple[bool, float]:
         """检测波动率"""
         history = self._get_history(dimension_id, metric)
         

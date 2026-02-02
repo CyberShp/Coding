@@ -9,7 +9,7 @@ import logging
 import re
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Dict, List
 
 from ..core.base import BaseObserver, ObserverResult, AlertLevel
 from ..utils.helpers import tail_file
@@ -58,7 +58,7 @@ class SensitiveInfoObserver(BaseObserver):
         r'password\s*[=:]\s*\[hidden\]',
     ]
     
-    def __init__(self, name: str, config: dict[str, Any]):
+    def __init__(self, name: str, config: Dict[str, Any]):
         super().__init__(name, config)
         
         self.log_paths = [Path(p) for p in config.get('log_paths', ['/var/log/messages'])]
@@ -69,7 +69,7 @@ class SensitiveInfoObserver(BaseObserver):
         user_patterns = config.get('patterns', [])
         
         # 编译所有模式
-        self._patterns: dict[str, list[re.Pattern]] = {}
+        self._patterns = {}  # type: Dict[str, List[Any]]
         for category, patterns in self.DEFAULT_PATTERNS.items():
             self._patterns[category] = [re.compile(p, re.IGNORECASE) for p in patterns]
         
@@ -81,10 +81,8 @@ class SensitiveInfoObserver(BaseObserver):
         self._safe_patterns = [re.compile(p, re.IGNORECASE) for p in self.SAFE_PATTERNS]
         
         # 文件位置缓存
-        self._file_positions: dict[str, int] = {}
-        
-        # 告警冷却
-        self._last_alerts: dict[str, datetime] = {}
+        self._file_positions = {}  # type: Dict[str, int]
+        self._last_alerts = {}  # type: Dict[str, datetime]
     
     def check(self) -> ObserverResult:
         """检查敏感信息"""
@@ -158,7 +156,7 @@ class SensitiveInfoObserver(BaseObserver):
             details={'files_checked': details['files_checked']},
         )
     
-    def _scan_line(self, line: str) -> list[dict]:
+    def _scan_line(self, line: str) -> List[Dict]:
         """扫描单行内容"""
         findings = []
         
