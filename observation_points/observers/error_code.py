@@ -1,8 +1,9 @@
 """
-误码监测观察点
+端口计数器监测观察点
 
-监测端口误码和 PCIe 链路误码。
-支持增量检测，仅当新增误码超过阈值时告警。
+监测端口统计计数器和 PCIe 链路误码。
+按类型分类：误码、丢包、FIFO/队列、聚合统计等。
+支持增量检测，仅当新增计数超过阈值时告警。
 """
 
 import logging
@@ -18,27 +19,63 @@ logger = logging.getLogger(__name__)
 
 class ErrorCodeObserver(BaseObserver):
     """
-    误码监测观察点
+    端口计数器监测观察点
     
     功能：
-    - 监测网络端口误码（通过 ethtool 或 sysfs）
+    - 监测网络端口统计计数器（通过 ethtool 或 sysfs）
     - 监测 PCIe 链路误码
-    - 增量检测：仅告警新增的误码
+    - 按类型分类告警：误码、丢包、FIFO/队列、聚合统计
+    - 增量检测：仅告警新增的计数
     """
     
-    # 关注的 ethtool 误码计数器
-    ETHTOOL_ERROR_COUNTERS = [
-        'rx_errors',
-        'tx_errors',
-        'rx_dropped',
-        'tx_dropped',
-        'rx_crc_errors',
-        'rx_frame_errors',
-        'rx_fifo_errors',
-        'tx_fifo_errors',
-        'rx_missed_errors',
-        'collisions',
-    ]
+    # 计数器分类
+    COUNTER_CATEGORIES = {
+        # 真正的误码（链路层错误）
+        'error_code': {
+            'name': '误码',
+            'level': AlertLevel.WARNING,
+            'counters': [
+                'rx_crc_errors',
+                'fcs_errors',
+                'rx_frame_errors',
+                'tx_carrier_errors',
+            ]
+        },
+        # 丢包统计
+        'dropped': {
+            'name': '丢包',
+            'level': AlertLevel.WARNING,
+            'counters': [
+                'rx_dropped',
+                'tx_dropped',
+            ]
+        },
+        # FIFO/队列错误
+        'fifo': {
+            'name': 'FIFO队列',
+            'level': AlertLevel.INFO,
+            'counters': [
+                'rx_fifo_errors',
+                'tx_fifo_errors',
+                'rx_missed_errors',
+            ]
+        },
+        # 聚合统计（可能包含上述分类的汇总）
+        'aggregated': {
+            'name': '聚合统计',
+            'level': AlertLevel.INFO,
+            'counters': [
+                'rx_errors',
+                'tx_errors',
+                'collisions',
+            ]
+        },
+    }
+    
+    # 所有要监控的计数器（扁平化列表）
+    ALL_COUNTERS = []
+    for cat_info in COUNTER_CATEGORIES.values():
+        ALL_COUNTERS.extend(cat_info['counters'])
     
     # PCIe AER 错误类型
     PCIE_AER_ERRORS = [
@@ -62,61 +99,106 @@ class ErrorCodeObserver(BaseObserver):
         self._last_port_errors = {}  # type: Dict[str, Dict[str, int]]
         self._last_pcie_errors = {}  # type: Dict[str, Dict[str, int]]
     
+    def _get_counter_category(self, counter_name: str) -> tuple:
+        """获取计数器所属分类及其信息"""
+        for cat_key, cat_info in self.COUNTER_CATEGORIES.items():
+            if counter_name in cat_info['counters']:
+                return cat_key, cat_info['name'], cat_info['level']
+        # 默认归类为聚合统计
+        return 'aggregated', '其他', AlertLevel.INFO
+    
     def check(self) -> ObserverResult:
-        """执行误码检查"""
-        alerts = []
+        """执行计数器检查"""
+        # 按分类收集告警
+        categorized_alerts = {}  # type: Dict[str, List[str]]
         details = {
-            'port_errors': {},
+            'port_counters': {},
             'pcie_errors': {},
+            'by_category': {},
         }
         
-        # 检查端口误码
-        port_alerts = self._check_port_errors()
-        alerts.extend(port_alerts)
-        details['port_errors'] = self._last_port_errors
+        # 检查端口计数器
+        port_alerts = self._check_port_counters()
+        for alert_info in port_alerts:
+            cat_key = alert_info['category']
+            if cat_key not in categorized_alerts:
+                categorized_alerts[cat_key] = []
+            categorized_alerts[cat_key].append(alert_info['message'])
+        
+        details['port_counters'] = self._last_port_errors
         
         # 检查 PCIe 误码
         if self.pcie_enabled:
             pcie_alerts = self._check_pcie_errors()
-            alerts.extend(pcie_alerts)
+            if pcie_alerts:
+                if 'pcie' not in categorized_alerts:
+                    categorized_alerts['pcie'] = []
+                categorized_alerts['pcie'].extend(pcie_alerts)
             details['pcie_errors'] = self._last_pcie_errors
         
-        if alerts:
-            message = f"检测到误码: {'; '.join(alerts[:5])}"
-            if len(alerts) > 5:
-                message += f" (共 {len(alerts)} 项)"
+        # 汇总统计
+        details['by_category'] = {
+            cat: len(alerts) for cat, alerts in categorized_alerts.items()
+        }
+        
+        if categorized_alerts:
+            # 构建分类消息
+            message_parts = []
+            max_level = AlertLevel.INFO
+            
+            for cat_key, alerts in categorized_alerts.items():
+                if cat_key == 'pcie':
+                    cat_name = 'PCIe误码'
+                    cat_level = AlertLevel.WARNING
+                else:
+                    cat_info = self.COUNTER_CATEGORIES.get(cat_key, {})
+                    cat_name = cat_info.get('name', cat_key)
+                    cat_level = cat_info.get('level', AlertLevel.INFO)
+                
+                # 取最高告警级别
+                if cat_level.value > max_level.value:
+                    max_level = cat_level
+                
+                # 每个分类显示前2个告警
+                sample = alerts[:2]
+                if len(alerts) > 2:
+                    message_parts.append(f"{cat_name}: {'; '.join(sample)} (共{len(alerts)}项)")
+                else:
+                    message_parts.append(f"{cat_name}: {'; '.join(sample)}")
+            
+            message = " | ".join(message_parts)
             
             return self.create_result(
                 has_alert=True,
-                alert_level=AlertLevel.WARNING,
+                alert_level=max_level,
                 message=message,
                 details=details,
             )
         
         return self.create_result(
             has_alert=False,
-            message="误码检查正常",
+            message="端口计数器检查正常",
             details=details,
         )
     
-    def _check_port_errors(self) -> List[str]:
-        """检查端口误码"""
+    def _check_port_counters(self) -> List[Dict[str, Any]]:
+        """检查端口计数器"""
         alerts = []
         
         # 获取要检查的端口列表
         ports = self._get_ports_to_check()
         
         for port in ports:
-            errors = self._get_port_error_counters(port)
-            if not errors:
+            counters = self._get_port_counter_values(port)
+            if not counters:
                 continue
             
             # 获取上次值
-            last_errors = self._last_port_errors.get(port, {})
+            last_counters = self._last_port_errors.get(port, {})
             
             # 检查增量
-            for counter, value in errors.items():
-                last_value = last_errors.get(counter, 0)
+            for counter_name, value in counters.items():
+                last_value = last_counters.get(counter_name, 0)
                 delta = value - last_value
                 
                 # 首次运行或值回绕时，不告警
@@ -128,11 +210,19 @@ class ErrorCodeObserver(BaseObserver):
                     continue
                 
                 if delta > self.threshold:
-                    alerts.append(f"{port}.{counter} 新增 {delta}")
-                    logger.warning(f"端口 {port} 误码 {counter} 新增: {delta}")
+                    cat_key, cat_name, cat_level = self._get_counter_category(counter_name)
+                    alerts.append({
+                        'category': cat_key,
+                        'message': f"{port}.{counter_name} +{delta}",
+                        'level': cat_level,
+                    })
+                    logger.log(
+                        logging.WARNING if cat_level in (AlertLevel.WARNING, AlertLevel.ERROR) else logging.INFO,
+                        f"端口 {port} {cat_name} {counter_name} 新增: {delta}"
+                    )
             
             # 更新缓存
-            self._last_port_errors[port] = errors
+            self._last_port_errors[port] = counters
         
         return alerts
     
@@ -157,7 +247,7 @@ class ErrorCodeObserver(BaseObserver):
                     continue
                 
                 if delta > self.threshold:
-                    alerts.append(f"PCIe {device} {error_type} 新增 {delta}")
+                    alerts.append(f"{device} {error_type} +{delta}")
                     logger.warning(f"PCIe 设备 {device} 错误 {error_type} 新增: {delta}")
             
             self._last_pcie_errors[device] = errors
@@ -183,31 +273,31 @@ class ErrorCodeObserver(BaseObserver):
         
         return sorted(ports)
     
-    def _get_port_error_counters(self, port: str) -> Dict[str, int]:
-        """获取端口误码计数器"""
-        errors = {}
+    def _get_port_counter_values(self, port: str) -> Dict[str, int]:
+        """获取端口计数器值"""
+        counters = {}
         
         # 方法1: 通过 sysfs 读取
         stats_path = Path(f'/sys/class/net/{port}/statistics')
         if stats_path.exists():
-            for counter in self.ETHTOOL_ERROR_COUNTERS:
-                value = read_sysfs(stats_path / counter)
+            for counter_name in self.ALL_COUNTERS:
+                value = read_sysfs(stats_path / counter_name)
                 if value is not None:
-                    errors[counter] = safe_int(value)
+                    counters[counter_name] = safe_int(value)
         
         # 方法2: 通过 ethtool（如果 sysfs 不完整）
-        if not errors:
-            errors = self._get_ethtool_stats(port)
+        if not counters:
+            counters = self._get_ethtool_stats(port)
         
-        return errors
+        return counters
     
     def _get_ethtool_stats(self, port: str) -> Dict[str, int]:
         """通过 ethtool 获取统计信息"""
-        errors = {}
+        counters = {}
         
         ret, stdout, _ = run_command(['ethtool', '-S', port], timeout=5)
         if ret != 0:
-            return errors
+            return counters
         
         for line in stdout.split('\n'):
             line = line.strip()
@@ -218,11 +308,11 @@ class ErrorCodeObserver(BaseObserver):
             key = key.strip().lower()
             value = value.strip()
             
-            # 只关注错误相关的计数器
-            if any(err in key for err in ['error', 'drop', 'crc', 'fifo', 'miss', 'collision']):
-                errors[key] = safe_int(value)
+            # 匹配所有相关计数器
+            if any(err in key for err in ['error', 'drop', 'crc', 'fifo', 'miss', 'collision', 'carrier', 'fcs', 'frame']):
+                counters[key] = safe_int(value)
         
-        return errors
+        return counters
     
     def _get_pcie_aer_errors(self) -> Dict[str, Dict[str, int]]:
         """获取 PCIe AER 错误统计"""

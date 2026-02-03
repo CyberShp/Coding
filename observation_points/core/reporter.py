@@ -59,16 +59,34 @@ class Reporter:
         (r'(iqn\.[a-zA-Z0-9.\-:]+)', r'iqn.***'),
     ]
     
-    def __init__(self, config: Dict[str, Any], dry_run: bool = False):
+    # 告警级别优先级（用于筛选）
+    LEVEL_PRIORITY = {
+        AlertLevel.INFO: 0,
+        AlertLevel.WARNING: 1,
+        AlertLevel.ERROR: 2,
+        AlertLevel.CRITICAL: 3,
+    }
+    
+    def __init__(self, config: Dict[str, Any], dry_run: bool = False, min_level: str = 'INFO'):
         """
         初始化上报器
         
         Args:
             config: 上报器配置
             dry_run: 试运行模式
+            min_level: 最低告警级别筛选（INFO/WARNING/ERROR）
         """
         self.config = config
         self.dry_run = dry_run
+        
+        # 解析最低告警级别
+        level_map = {
+            'INFO': AlertLevel.INFO,
+            'WARNING': AlertLevel.WARNING,
+            'ERROR': AlertLevel.ERROR,
+            'CRITICAL': AlertLevel.CRITICAL,
+        }
+        self.min_level = level_map.get(min_level.upper(), AlertLevel.INFO)
         
         self.output_mode = config.get('output', 'file')  # file, syslog, both, console
         self.file_path = Path(config.get('file_path', '/var/log/observation-points/alerts.log'))
@@ -119,16 +137,31 @@ class Reporter:
         if not result.has_alert:
             return
         
-        # 检查冷却
-        if self._is_in_cooldown(result):
+        # 检查告警级别是否达到最低要求
+        result_priority = self.LEVEL_PRIORITY.get(result.alert_level, 0)
+        min_priority = self.LEVEL_PRIORITY.get(self.min_level, 0)
+        if result_priority < min_priority:
+            logger.debug(
+                f"告警 {result.observer_name} 级别 {result.alert_level.value} "
+                f"低于最低级别 {self.min_level.value}，跳过"
+            )
+            return
+        
+        # 检查冷却（sticky 告警不受冷却限制）
+        if not result.sticky and self._is_in_cooldown(result):
             logger.debug(f"告警 {result.observer_name} 在冷却期内，跳过")
             return
+        
+        # 为 sticky 告警添加标记
+        message = self._sanitize(result.message)
+        if result.sticky:
+            message = f"（持续）{message}"
         
         # 创建告警
         alert = Alert(
             observer_name=result.observer_name,
             level=result.alert_level,
-            message=self._sanitize(result.message),
+            message=message,
             timestamp=result.timestamp,
             details=self._sanitize_dict(result.details),
         )
@@ -141,7 +174,7 @@ class Reporter:
         # 实际上报
         self._do_report(alert)
         
-        # 更新冷却缓存
+        # 更新冷却缓存（sticky 告警也更新，以便跟踪）
         self._update_cooldown(result)
     
     def _is_in_cooldown(self, result: ObserverResult) -> bool:

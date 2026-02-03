@@ -31,6 +31,7 @@ class ObserverResult:
     message: str = ""
     details: Dict[str, Any] = field(default_factory=dict)
     raw_data: Any = None
+    sticky: bool = False  # 持续告警标志，True 时不受冷却限制
 
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典"""
@@ -41,6 +42,7 @@ class ObserverResult:
             'alert_level': self.alert_level.value,
             'message': self.message,
             'details': self.details,
+            'sticky': self.sticky,
         }
 
 
@@ -182,7 +184,8 @@ class BaseObserver(ABC):
                       alert_level: AlertLevel = AlertLevel.INFO,
                       message: str = "",
                       details: Optional[Dict] = None,
-                      raw_data: Any = None) -> ObserverResult:
+                      raw_data: Any = None,
+                      sticky: bool = False) -> ObserverResult:
         """
         创建检查结果
         
@@ -192,6 +195,7 @@ class BaseObserver(ABC):
             message: 告警消息
             details: 详细信息
             raw_data: 原始数据
+            sticky: 持续告警标志（True 时不受冷却限制，每次检查都上报）
             
         Returns:
             ObserverResult
@@ -203,4 +207,5 @@ class BaseObserver(ABC):
             message=message,
             details=details or {},
             raw_data=raw_data,
+            sticky=sticky,
         )

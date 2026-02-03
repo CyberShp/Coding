@@ -3,17 +3,23 @@
 from .error_code import ErrorCodeObserver
 from .link_status import LinkStatusObserver
 from .card_recovery import CardRecoveryObserver
-from .subhealth import SubhealthObserver
 from .sensitive_info import SensitiveInfoObserver
-from .performance import PerformanceObserver
 from .custom_command import CustomCommandObserver
+from .alarm_type import AlarmTypeObserver
+from .memory_leak import MemoryLeakObserver
+from .cpu_usage import CpuUsageObserver
+from .cmd_response import CmdResponseObserver
+from .sig_monitor import SigMonitorObserver
 
 __all__ = [
     'ErrorCodeObserver',
     'LinkStatusObserver',
     'CardRecoveryObserver',
-    'SubhealthObserver',
     'SensitiveInfoObserver',
-    'PerformanceObserver',
     'CustomCommandObserver',
+    'AlarmTypeObserver',
+    'MemoryLeakObserver',
+    'CpuUsageObserver',
+    'CmdResponseObserver',
+    'SigMonitorObserver',
 ]

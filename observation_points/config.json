@@ -28,23 +28,15 @@
     },
     "card_recovery": {
       "enabled": true,
-      "log_path": "/OSM/log/coffer_log/cur_debug/messages",
-      "keywords": ["recovery", "probe", "remove"],
-      "exclude_patterns": [],
+      "interval": 30,
+      "log_path": "/OSM/log/cur_debug/messages",
+      "keyword": "recover chiperr",
       "max_lines_per_check": 1000
-    },
-    "subhealth": {
-      "enabled": true,
-      "interval": 15,
-      "window_size": 5,
-      "spike_threshold_percent": 50,
-      "cooldown_seconds": 60,
-      "metrics": ["latency", "packet_loss", "out_of_order"],
-      "ports": []
     },
     "sensitive_info": {
       "enabled": true,
-      "log_paths": ["/OSM/log/coffer_log/cur_debug/messages", "/var/log/messages"],
+      "interval": 30,
+      "log_paths": ["/OSM/log/cur_debug/messages", "/var/log/messages"],
       "max_lines_per_check": 500,
       "cooldown_seconds": 300,
       "patterns": [
@@ -56,17 +48,36 @@
         "token\\s*[=:]\\s*\\S+"
       ]
     },
-    "performance": {
+    "alarm_type": {
       "enabled": true,
-      "interval": 10,
-      "window_size": 5,
-      "fluctuation_threshold_percent": 10,
-      "min_iops_threshold": 100,
-      "min_bandwidth_threshold_mbps": 10,
-      "cooldown_seconds": 60,
-      "metrics": ["iops", "bandwidth", "latency"],
-      "dimensions": ["bond", "port"],
-      "protocols": ["iscsi", "nvme", "nas"]
+      "interval": 30,
+      "log_path": "/OSM/log/cur_debug/messages",
+      "max_lines_per_check": 1000
+    },
+    "memory_leak": {
+      "enabled": true,
+      "interval": 5400,
+      "consecutive_threshold": 8
+    },
+    "cpu_usage": {
+      "enabled": true,
+      "interval": 30,
+      "threshold_percent": 90,
+      "consecutive_threshold": 6
+    },
+    "cmd_response": {
+      "enabled": true,
+      "interval": 60,
+      "timeout_seconds": 1,
+      "commands": ["lscpu", "anytest frameallinfo"],
+      "execution_timeout": 10
+    },
+    "sig_monitor": {
+      "enabled": true,
+      "interval": 30,
+      "log_path": "/OSM/log/cur_debug/messages",
+      "whitelist": [15, 61],
+      "max_lines_per_check": 1000
     },
     "custom_commands": {
       "enabled": false,

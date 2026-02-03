@@ -83,6 +83,7 @@ class SensitiveInfoObserver(BaseObserver):
         # 文件位置缓存
         self._file_positions = {}  # type: Dict[str, int]
         self._last_alerts = {}  # type: Dict[str, datetime]
+        self._first_run = {}  # type: Dict[str, bool]
     
     def check(self) -> ObserverResult:
         """检查敏感信息"""
@@ -102,10 +103,15 @@ class SensitiveInfoObserver(BaseObserver):
             position_key = str(log_path)
             last_position = self._file_positions.get(position_key, 0)
             
+            # 首次运行时跳过历史数据
+            skip_existing = self._first_run.get(position_key, True)
+            self._first_run[position_key] = False
+            
             new_lines, new_position = tail_file(
                 log_path,
                 last_position,
-                self.max_lines_per_check
+                self.max_lines_per_check,
+                skip_existing=skip_existing
             )
             self._file_positions[position_key] = new_position
             

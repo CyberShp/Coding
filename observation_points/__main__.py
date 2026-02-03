@@ -55,6 +55,12 @@ def main():
         action='store_true',
         help='试运行模式，不实际执行告警'
     )
+    parser.add_argument(
+        '--alert-level',
+        default='INFO',
+        choices=['INFO', 'WARNING', 'ERROR'],
+        help='最低告警级别筛选（默认 INFO 显示所有）'
+    )
     
     args = parser.parse_args()
     
@@ -84,7 +90,11 @@ def main():
     logger.info(f"配置文件: {config_path}")
     
     # 创建告警器
-    reporter = Reporter(config.get('reporter', {}), dry_run=args.dry_run)
+    reporter = Reporter(
+        config.get('reporter', {}),
+        dry_run=args.dry_run,
+        min_level=args.alert_level
+    )
     
     # 创建调度器并注册观察点
     scheduler = Scheduler(config, reporter)

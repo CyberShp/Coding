@@ -68,19 +68,25 @@ class Scheduler:
         from ..observers.error_code import ErrorCodeObserver
         from ..observers.link_status import LinkStatusObserver
         from ..observers.card_recovery import CardRecoveryObserver
-        from ..observers.subhealth import SubhealthObserver
         from ..observers.sensitive_info import SensitiveInfoObserver
-        from ..observers.performance import PerformanceObserver
         from ..observers.custom_command import CustomCommandObserver
+        from ..observers.alarm_type import AlarmTypeObserver
+        from ..observers.memory_leak import MemoryLeakObserver
+        from ..observers.cpu_usage import CpuUsageObserver
+        from ..observers.cmd_response import CmdResponseObserver
+        from ..observers.sig_monitor import SigMonitorObserver
         
         return {
             'error_code': ErrorCodeObserver,
             'link_status': LinkStatusObserver,
             'card_recovery': CardRecoveryObserver,
-            'subhealth': SubhealthObserver,
             'sensitive_info': SensitiveInfoObserver,
-            'performance': PerformanceObserver,
             'custom_commands': CustomCommandObserver,
+            'alarm_type': AlarmTypeObserver,
+            'memory_leak': MemoryLeakObserver,
+            'cpu_usage': CpuUsageObserver,
+            'cmd_response': CmdResponseObserver,
+            'sig_monitor': SigMonitorObserver,
         }
     
     def register(self, observer: BaseObserver):

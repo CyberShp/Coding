@@ -87,6 +87,7 @@ def tail_file(
     path: Union[str, Path],
     last_position: int = 0,
     max_lines: int = 1000,
+    skip_existing: bool = False,
 ):
     # type: (...) -> Tuple[List[str], int]
     """
@@ -96,6 +97,7 @@ def tail_file(
         path: 文件路径
         last_position: 上次读取的位置
         max_lines: 最大返回行数
+        skip_existing: 若为 True 且 last_position=0，则跳到文件末尾（用于启动时不读历史）
         
     Returns:
         (新增行列表, 新的位置)
@@ -111,6 +113,10 @@ def tail_file(
             f.seek(0, 2)  # 移到文件末尾
             file_size = f.tell()
             
+            # 如果 skip_existing=True 且首次运行，直接返回末尾位置
+            if skip_existing and last_position == 0:
+                return [], file_size
+            
             # 如果文件变小了（可能被轮转），从头开始
             if file_size < last_position:
                 last_position = 0
@@ -118,9 +124,12 @@ def tail_file(
             # 移到上次位置
             f.seek(last_position)
             
-            # 读取新内容
+            # 读取新内容（使用 readline 避免迭代器与 tell() 冲突）
             lines = []
-            for line in f:
+            while True:
+                line = f.readline()
+                if not line:
+                    break
                 lines.append(line.rstrip('\n\r'))
                 if len(lines) >= max_lines:
                     break
