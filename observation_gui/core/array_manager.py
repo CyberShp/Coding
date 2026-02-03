@@ -6,6 +6,8 @@
 
 import json
 import logging
+import os
+import tempfile
 import threading
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
@@ -39,10 +41,10 @@ class ArrayConfig:
     key_path: str = ""
     
     def to_dict(self) -> Dict[str, Any]:
-        """转换为字典（不含密码）"""
+        """转换为字典（不含密码，保留密钥路径）"""
         d = asdict(self)
+        # 只排除密码，保留密钥路径（密钥路径不是敏感信息）
         d.pop('password', None)
-        d.pop('key_path', None)
         return d
 
 
@@ -100,30 +102,82 @@ class ArrayManager:
         except Exception as e:
             logger.error(f"加载配置失败: {e}")
     
-    def _save_config(self):
-        """保存配置到文件"""
+    def _save_config(self) -> bool:
+        """
+        保存配置到文件
+        
+        使用原子写入（先写临时文件，再重命名）确保可靠性。
+        
+        Returns:
+            是否保存成功
+        """
         if not self.config_path:
-            return
+            logger.warning("配置路径未设置，无法保存")
+            return False
         
         try:
+            # 确保配置目录存在
+            config_dir = self.config_path.parent
+            if not config_dir.exists():
+                config_dir.mkdir(parents=True, exist_ok=True)
+                logger.info(f"创建配置目录: {config_dir}")
+            
             # 读取现有配置
             if self.config_path.exists():
                 with open(self.config_path, 'r', encoding='utf-8') as f:
                     config = json.load(f)
             else:
-                config = {}
+                config = {
+                    'app': {
+                        'title': '观察点监控平台',
+                        'refresh_interval': 30,
+                        'window_width': 1000,
+                        'window_height': 700,
+                    }
+                }
             
-            # 更新阵列配置（不保存密码）
+            # 更新阵列配置（不保存密码，但保留密钥路径）
             config['arrays'] = [
                 status.config.to_dict()
                 for status in self._arrays.values()
             ]
             
-            with open(self.config_path, 'w', encoding='utf-8') as f:
-                json.dump(config, f, indent=2, ensure_ascii=False)
+            # 原子写入：先写临时文件，再重命名
+            temp_fd, temp_path = tempfile.mkstemp(
+                suffix='.json',
+                prefix='config_',
+                dir=str(config_dir)
+            )
+            try:
+                with os.fdopen(temp_fd, 'w', encoding='utf-8') as f:
+                    json.dump(config, f, indent=2, ensure_ascii=False)
+                
+                # 重命名（原子操作）
+                os.replace(temp_path, str(self.config_path))
+                
+            except Exception:
+                # 清理临时文件
+                if os.path.exists(temp_path):
+                    os.unlink(temp_path)
+                raise
+            
+            # 验证保存结果
+            with open(self.config_path, 'r', encoding='utf-8') as f:
+                saved_config = json.load(f)
+            
+            saved_count = len(saved_config.get('arrays', []))
+            expected_count = len(self._arrays)
+            
+            if saved_count != expected_count:
+                logger.error(f"配置验证失败: 期望 {expected_count} 个阵列，实际保存 {saved_count} 个")
+                return False
+            
+            logger.info(f"配置已保存: {self.config_path} ({saved_count} 个阵列)")
+            return True
                 
         except Exception as e:
-            logger.error(f"保存配置失败: {e}")
+            logger.error(f"保存配置失败: {e}", exc_info=True)
+            return False
     
     def add_callback(self, callback: Callable):
         """添加状态变更回调"""

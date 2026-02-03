@@ -472,6 +472,12 @@ class MainWindow:
     
     def _on_close(self):
         """关闭窗口"""
+        # 保存配置
+        if self.array_manager._save_config():
+            logger.info("退出前配置已保存")
+        else:
+            logger.warning("退出前配置保存失败")
+        
         # 断开所有连接
         for status in self.array_manager.get_all_arrays():
             self.array_manager.disconnect_array(status.config.id)
