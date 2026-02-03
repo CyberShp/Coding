@@ -39,11 +39,12 @@ class ArrayConfig:
     username: str = "root"
     password: str = ""
     key_path: str = ""
+    folder: str = ""  # 所属文件夹名称，空表示未分类
     
     def to_dict(self) -> Dict[str, Any]:
-        """转换为字典（不含密码，保留密钥路径）"""
+        """转换为字典（不含密码，保留密钥路径和文件夹）"""
         d = asdict(self)
-        # 只排除密码，保留密钥路径（密钥路径不是敏感信息）
+        # 只排除密码，保留密钥路径和文件夹（都不是敏感信息）
         d.pop('password', None)
         return d
 
@@ -67,10 +68,14 @@ class ArrayManager:
     
     功能：
     - 管理多台阵列的配置
+    - 管理文件夹分类
     - 建立/维护 SSH 连接
     - 协调监控任务
     - 收集和汇总状态
     """
+    
+    # 默认文件夹名称
+    DEFAULT_FOLDER = "未分类"
     
     def __init__(self, config_path: Optional[Path] = None):
         """
@@ -81,21 +86,27 @@ class ArrayManager:
         """
         self.config_path = config_path
         self._arrays = {}  # type: Dict[str, ArrayStatus]
+        self._folders = []  # type: List[str]  # 文件夹列表（有序）
         self._connectors = {}  # type: Dict[str, SSHConnector]
         self._remote_ops = {}  # type: Dict[str, RemoteOperations]
         self._lock = threading.RLock()
         self._callbacks = []  # type: List[Callable]
         
-        # 从配置加载阵列
+        # 从配置加载阵列和文件夹
         if config_path and config_path.exists():
             self._load_config()
     
     def _load_config(self):
-        """从配置文件加载阵列"""
+        """从配置文件加载阵列和文件夹"""
         try:
             with open(self.config_path, 'r', encoding='utf-8') as f:
                 config = json.load(f)
             
+            # 加载文件夹列表
+            self._folders = config.get('folders', [])
+            logger.info(f"加载了 {len(self._folders)} 个文件夹")
+            
+            # 加载阵列
             for array_conf in config.get('arrays', []):
                 self.add_array(ArrayConfig(**array_conf), save=False)
                 
@@ -136,7 +147,10 @@ class ArrayManager:
                     }
                 }
             
-            # 更新阵列配置（不保存密码，但保留密钥路径）
+            # 更新文件夹列表
+            config['folders'] = self._folders
+            
+            # 更新阵列配置（不保存密码，但保留密钥路径和文件夹）
             config['arrays'] = [
                 status.config.to_dict()
                 for status in self._arrays.values()
@@ -247,6 +261,163 @@ class ArrayManager:
     def get_all_arrays(self) -> List[ArrayStatus]:
         """获取所有阵列状态"""
         return list(self._arrays.values())
+    
+    # ==================== 文件夹管理 ====================
+    
+    def get_folders(self) -> List[str]:
+        """获取所有文件夹列表"""
+        return list(self._folders)
+    
+    def add_folder(self, name: str) -> bool:
+        """
+        添加文件夹
+        
+        Args:
+            name: 文件夹名称
+            
+        Returns:
+            是否成功
+        """
+        with self._lock:
+            if not name or name in self._folders:
+                return False
+            
+            self._folders.append(name)
+            self._save_config()
+            
+            logger.info(f"添加文件夹: {name}")
+            self._notify_callbacks('folder_added', name)
+            return True
+    
+    def remove_folder(self, name: str) -> bool:
+        """
+        删除文件夹（文件夹内的阵列移到未分类）
+        
+        Args:
+            name: 文件夹名称
+            
+        Returns:
+            是否成功
+        """
+        with self._lock:
+            if name not in self._folders:
+                return False
+            
+            # 将该文件夹内的阵列移到未分类
+            for status in self._arrays.values():
+                if status.config.folder == name:
+                    status.config.folder = ""
+            
+            self._folders.remove(name)
+            self._save_config()
+            
+            logger.info(f"删除文件夹: {name}")
+            self._notify_callbacks('folder_removed', name)
+            return True
+    
+    def rename_folder(self, old_name: str, new_name: str) -> bool:
+        """
+        重命名文件夹
+        
+        Args:
+            old_name: 原名称
+            new_name: 新名称
+            
+        Returns:
+            是否成功
+        """
+        with self._lock:
+            if old_name not in self._folders or new_name in self._folders:
+                return False
+            
+            if not new_name:
+                return False
+            
+            # 更新文件夹列表
+            idx = self._folders.index(old_name)
+            self._folders[idx] = new_name
+            
+            # 更新阵列的文件夹引用
+            for status in self._arrays.values():
+                if status.config.folder == old_name:
+                    status.config.folder = new_name
+            
+            self._save_config()
+            
+            logger.info(f"重命名文件夹: {old_name} -> {new_name}")
+            self._notify_callbacks('folder_renamed', new_name)
+            return True
+    
+    def move_array_to_folder(self, array_id: str, folder_name: str) -> bool:
+        """
+        将阵列移动到指定文件夹
+        
+        Args:
+            array_id: 阵列 ID
+            folder_name: 目标文件夹名称（空字符串表示未分类）
+            
+        Returns:
+            是否成功
+        """
+        with self._lock:
+            status = self._arrays.get(array_id)
+            if status is None:
+                return False
+            
+            # 检查目标文件夹是否存在（空字符串表示未分类，始终有效）
+            if folder_name and folder_name not in self._folders:
+                return False
+            
+            old_folder = status.config.folder
+            status.config.folder = folder_name
+            self._save_config()
+            
+            logger.info(f"移动阵列 {array_id}: {old_folder or '未分类'} -> {folder_name or '未分类'}")
+            self._notify_callbacks('array_moved', array_id)
+            return True
+    
+    def get_arrays_by_folder(self, folder_name: str) -> List[ArrayStatus]:
+        """
+        获取指定文件夹中的阵列
+        
+        Args:
+            folder_name: 文件夹名称（空字符串表示未分类）
+            
+        Returns:
+            阵列列表
+        """
+        return [
+            status for status in self._arrays.values()
+            if status.config.folder == folder_name
+        ]
+    
+    def get_arrays_grouped_by_folder(self) -> Dict[str, List[ArrayStatus]]:
+        """
+        按文件夹分组获取所有阵列
+        
+        Returns:
+            {文件夹名称: [阵列列表]}，包含"未分类"
+        """
+        result = {}  # type: Dict[str, List[ArrayStatus]]
+        
+        # 按文件夹顺序添加
+        for folder in self._folders:
+            result[folder] = []
+        
+        # 未分类放最后
+        result[""] = []
+        
+        # 分配阵列到文件夹
+        for status in self._arrays.values():
+            folder = status.config.folder
+            if folder not in result:
+                # 文件夹不存在（可能被删除了），放到未分类
+                folder = ""
+            result[folder].append(status)
+        
+        return result
+    
+    # ==================== 连接管理 ====================
     
     def connect_array(self, array_id: str) -> bool:
         """

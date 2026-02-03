@@ -6,7 +6,7 @@
 
 import tkinter as tk
 from tkinter import ttk, filedialog
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 
 class LoginDialog:
@@ -19,22 +19,25 @@ class LoginDialog:
     - 端口
     - 用户名
     - 密码 / 密钥文件
+    - 所属文件夹
     """
     
-    def __init__(self, parent: tk.Tk):
+    def __init__(self, parent: tk.Tk, folders: Optional[List[str]] = None):
         """
         初始化对话框
         
         Args:
             parent: 父窗口
+            folders: 可选的文件夹列表
         """
         self.parent = parent
+        self.folders = folders or []
         self.result = None  # type: Optional[Dict[str, Any]]
         
         # 创建对话框窗口
         self.dialog = tk.Toplevel(parent)
         self.dialog.title("添加阵列")
-        self.dialog.geometry("400x350")
+        self.dialog.geometry("400x400")
         self.dialog.resizable(False, False)
         
         # 模态
@@ -169,6 +172,24 @@ class LoginDialog:
         self.key_label.grid_remove()
         self.key_frame.grid_remove()
         
+        # 所属文件夹
+        row += 1
+        ttk.Label(main_frame, text="所属文件夹:").grid(
+            row=row, column=0, sticky=tk.W, pady=5
+        )
+        
+        self.folder_var = tk.StringVar(value="")
+        folder_values = ["（未分类）"] + self.folders
+        self.folder_combo = ttk.Combobox(
+            main_frame,
+            textvariable=self.folder_var,
+            values=folder_values,
+            state='readonly',
+            width=27,
+        )
+        self.folder_combo.current(0)  # 默认选择"未分类"
+        self.folder_combo.grid(row=row, column=1, sticky=tk.W, pady=5)
+        
         # 按钮
         btn_frame = ttk.Frame(main_frame)
         btn_frame.grid(row=row+1, column=0, columnspan=2, pady=20)
@@ -270,6 +291,10 @@ class LoginDialog:
             self.result['password'] = self.password_var.get()
         else:
             self.result['key_path'] = self.key_var.get().strip()
+        
+        # 文件夹（"（未分类）"转为空字符串）
+        folder = self.folder_var.get()
+        self.result['folder'] = "" if folder == "（未分类）" else folder
         
         self.dialog.destroy()
     

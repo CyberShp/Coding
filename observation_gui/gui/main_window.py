@@ -61,8 +61,9 @@ class MainWindow:
         self.array_manager = ArrayManager(self.config_path)
         self.array_manager.add_callback(self._on_array_event)
         
-        # 当前选中的阵列 ID
+        # 当前选中的阵列 ID 和文件夹
         self._selected_array_id = None
+        self._selected_folder = None
         
         # 刷新定时器
         self._refresh_interval = self.config.get('app', {}).get('refresh_interval', 30)
@@ -159,9 +160,9 @@ class MainWindow:
         self.root.bind('<F5>', lambda e: self._manual_refresh())
     
     def _build_array_list(self, parent) -> tk.Frame:
-        """构建阵列列表"""
+        """构建阵列列表（使用 Treeview 实现文件夹树）"""
         # 使用 tk.Frame 替代 ttk.Frame，macOS 兼容性更好
-        frame = tk.Frame(parent, width=200, bg='#f0f0f0')
+        frame = tk.Frame(parent, width=220, bg='#f0f0f0')
         
         # 标题
         title_label = tk.Label(
@@ -169,107 +170,241 @@ class MainWindow:
             font=('', 12, 'bold'),
             bg='#f0f0f0'
         )
-        title_label.pack(pady=(10, 10))
+        title_label.pack(pady=(10, 5))
         
-        # 列表框
-        list_frame = tk.Frame(frame, bg='#f0f0f0')
-        list_frame.pack(fill=tk.BOTH, expand=True, padx=5)
+        # 树形列表框
+        tree_frame = tk.Frame(frame, bg='#f0f0f0')
+        tree_frame.pack(fill=tk.BOTH, expand=True, padx=5)
         
-        self.array_listbox = tk.Listbox(
-            list_frame,
-            selectmode=tk.SINGLE,
-            font=('', 11),
-            activestyle='none',
-            relief=tk.SUNKEN,
-            borderwidth=1,
+        # 使用 Treeview 实现文件夹树
+        self.array_tree = ttk.Treeview(
+            tree_frame,
+            selectmode='browse',
+            show='tree',  # 只显示树，不显示列头
         )
-        self.array_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self.array_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         
-        scrollbar = tk.Scrollbar(list_frame, orient=tk.VERTICAL)
+        scrollbar = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL, command=self.array_tree.yview)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        self.array_tree.configure(yscrollcommand=scrollbar.set)
         
-        self.array_listbox.config(yscrollcommand=scrollbar.set)
-        scrollbar.config(command=self.array_listbox.yview)
+        # 绑定事件
+        self.array_tree.bind('<<TreeviewSelect>>', self._on_tree_select)
+        self.array_tree.bind('<Double-1>', self._on_tree_double_click)
+        self.array_tree.bind('<Button-3>', self._on_tree_right_click)  # 右键菜单
         
-        self.array_listbox.bind('<<ListboxSelect>>', self._on_array_select)
-        self.array_listbox.bind('<Double-1>', self._on_array_double_click)
+        # 拖拽支持
+        self.array_tree.bind('<ButtonPress-1>', self._on_drag_start)
+        self.array_tree.bind('<B1-Motion>', self._on_drag_motion)
+        self.array_tree.bind('<ButtonRelease-1>', self._on_drag_release)
+        self._drag_data = {'item': None, 'x': 0, 'y': 0}
         
         # 按钮区域
         btn_frame = tk.Frame(frame, bg='#f0f0f0')
-        btn_frame.pack(fill=tk.X, padx=5, pady=10)
+        btn_frame.pack(fill=tk.X, padx=5, pady=5)
+        
+        add_folder_btn = tk.Button(
+            btn_frame, text="+文件夹", 
+            command=self._add_folder,
+            relief=tk.RAISED,
+            font=('', 9),
+        )
+        add_folder_btn.pack(side=tk.LEFT, padx=2)
         
         add_btn = tk.Button(
-            btn_frame, text="+ 添加", 
+            btn_frame, text="+阵列", 
             command=self._add_array,
             relief=tk.RAISED,
+            font=('', 9),
         )
         add_btn.pack(side=tk.LEFT, padx=2)
         
+        # 第二行按钮
+        btn_frame2 = tk.Frame(frame, bg='#f0f0f0')
+        btn_frame2.pack(fill=tk.X, padx=5, pady=(0, 10))
+        
         connect_btn = tk.Button(
-            btn_frame, text="连接", 
+            btn_frame2, text="连接", 
             command=self._connect_selected,
             relief=tk.RAISED,
+            font=('', 9),
         )
         connect_btn.pack(side=tk.LEFT, padx=2)
         
         disconnect_btn = tk.Button(
-            btn_frame, text="断开",
+            btn_frame2, text="断开",
             command=self._disconnect_selected,
             relief=tk.RAISED,
+            font=('', 9),
         )
         disconnect_btn.pack(side=tk.LEFT, padx=2)
         
+        # 创建右键菜单
+        self._create_context_menus()
+        
         return frame
     
-    def _refresh_array_list(self):
-        """刷新阵列列表"""
-        self.array_listbox.delete(0, tk.END)
+    def _create_context_menus(self):
+        """创建右键菜单"""
+        # 文件夹右键菜单
+        self.folder_menu = tk.Menu(self.root, tearoff=0)
+        self.folder_menu.add_command(label="重命名", command=self._rename_folder)
+        self.folder_menu.add_command(label="删除文件夹", command=self._delete_folder)
         
-        for status in self.array_manager.get_all_arrays():
-            # 状态图标
-            if status.state == ConnectionState.CONNECTED:
-                if status.agent_running:
-                    icon = "● "  # 运行中
-                else:
-                    icon = "○ "  # 已连接但未运行
-            elif status.state == ConnectionState.CONNECTING:
-                icon = "◐ "  # 连接中
-            elif status.state == ConnectionState.ERROR:
-                icon = "✗ "  # 错误
-            else:
-                icon = "○ "  # 未连接
-            
-            display = f"{icon}{status.config.name}"
-            self.array_listbox.insert(tk.END, display)
-            
-            # 存储 ID 用于查找
-            self.array_listbox.itemconfig(
-                tk.END,
-                selectbackground='#0078D7',
-                selectforeground='white',
-            )
+        # 阵列右键菜单
+        self.array_menu = tk.Menu(self.root, tearoff=0)
+        self.array_menu.add_command(label="连接", command=self._connect_selected)
+        self.array_menu.add_command(label="断开", command=self._disconnect_selected)
+        self.array_menu.add_separator()
+        self.array_menu.add_command(label="移动到...", command=self._show_move_menu)
+        self.array_menu.add_separator()
+        self.array_menu.add_command(label="删除", command=self._remove_array)
     
-    def _on_array_select(self, event):
-        """阵列选择事件"""
-        selection = self.array_listbox.curselection()
+    def _refresh_array_list(self):
+        """刷新阵列列表（文件夹树结构）"""
+        # 保存当前选中项和展开状态
+        selected = self.array_tree.selection()
+        expanded_folders = set()
+        for item in self.array_tree.get_children(''):
+            if self.array_tree.item(item, 'open'):
+                expanded_folders.add(self.array_tree.item(item, 'text'))
+        
+        # 清空树
+        for item in self.array_tree.get_children(''):
+            self.array_tree.delete(item)
+        
+        # 获取按文件夹分组的阵列
+        grouped = self.array_manager.get_arrays_grouped_by_folder()
+        folders = self.array_manager.get_folders()
+        
+        # 添加文件夹和阵列
+        for folder in folders:
+            folder_id = f"folder_{folder}"
+            # 文件夹图标
+            self.array_tree.insert(
+                '', 'end', 
+                iid=folder_id,
+                text=f"📁 {folder}",
+                open=folder in expanded_folders,
+                tags=('folder',)
+            )
+            
+            # 添加该文件夹下的阵列
+            for status in grouped.get(folder, []):
+                self._insert_array_item(folder_id, status)
+        
+        # 未分类（空文件夹名）
+        uncategorized = grouped.get("", [])
+        if uncategorized or not folders:
+            folder_id = "folder_uncategorized"
+            self.array_tree.insert(
+                '', 'end',
+                iid=folder_id,
+                text="📁 未分类",
+                open="未分类" in expanded_folders or not folders,
+                tags=('folder',)
+            )
+            for status in uncategorized:
+                self._insert_array_item(folder_id, status)
+        
+        # 恢复选中项
+        if selected:
+            try:
+                self.array_tree.selection_set(selected)
+            except tk.TclError:
+                pass
+    
+    def _insert_array_item(self, parent: str, status):
+        """插入阵列项到树中"""
+        # 状态图标
+        if status.state == ConnectionState.CONNECTED:
+            if status.agent_running:
+                icon = "●"  # 运行中
+            else:
+                icon = "○"  # 已连接但未运行
+        elif status.state == ConnectionState.CONNECTING:
+            icon = "◐"  # 连接中
+        elif status.state == ConnectionState.ERROR:
+            icon = "✗"  # 错误
+        else:
+            icon = "○"  # 未连接
+        
+        display = f"{icon} {status.config.name}"
+        self.array_tree.insert(
+            parent, 'end',
+            iid=f"array_{status.config.id}",
+            text=display,
+            tags=('array',)
+        )
+    
+    def _get_status_icon(self, status) -> str:
+        """获取状态图标"""
+        if status.state == ConnectionState.CONNECTED:
+            return "●" if status.agent_running else "○"
+        elif status.state == ConnectionState.CONNECTING:
+            return "◐"
+        elif status.state == ConnectionState.ERROR:
+            return "✗"
+        return "○"
+    
+    def _on_tree_select(self, event):
+        """树选择事件"""
+        selection = self.array_tree.selection()
         if not selection:
+            self._selected_array_id = None
             return
         
-        index = selection[0]
-        arrays = self.array_manager.get_all_arrays()
+        item_id = selection[0]
         
-        if index < len(arrays):
-            self._selected_array_id = arrays[index].config.id
+        # 检查是否是阵列项
+        if item_id.startswith('array_'):
+            array_id = item_id[6:]  # 去掉 'array_' 前缀
+            self._selected_array_id = array_id
             self._update_detail_panel()
+        else:
+            # 选中的是文件夹
+            self._selected_array_id = None
+            self.array_panel.clear()
     
-    def _on_array_double_click(self, event):
-        """阵列双击事件（连接/断开）"""
-        if self._selected_array_id:
-            status = self.array_manager.get_array(self._selected_array_id)
+    def _on_tree_double_click(self, event):
+        """树双击事件"""
+        item_id = self.array_tree.identify_row(event.y)
+        if not item_id:
+            return
+        
+        if item_id.startswith('array_'):
+            # 双击阵列：连接/断开
+            array_id = item_id[6:]
+            status = self.array_manager.get_array(array_id)
             if status and status.state == ConnectionState.CONNECTED:
                 self._disconnect_selected()
             else:
+                self._selected_array_id = array_id
                 self._connect_selected()
+        else:
+            # 双击文件夹：展开/折叠
+            is_open = self.array_tree.item(item_id, 'open')
+            self.array_tree.item(item_id, open=not is_open)
+    
+    def _on_tree_right_click(self, event):
+        """树右键点击事件"""
+        item_id = self.array_tree.identify_row(event.y)
+        if not item_id:
+            return
+        
+        # 选中该项
+        self.array_tree.selection_set(item_id)
+        
+        if item_id.startswith('array_'):
+            # 阵列右键菜单
+            self._selected_array_id = item_id[6:]
+            self.array_menu.tk_popup(event.x_root, event.y_root)
+        elif item_id.startswith('folder_'):
+            # 文件夹右键菜单
+            folder_name = self.array_tree.item(item_id, 'text').replace('📁 ', '')
+            self._selected_folder = folder_name
+            if folder_name != "未分类":
+                self.folder_menu.tk_popup(event.x_root, event.y_root)
     
     def _update_detail_panel(self):
         """更新详情面板"""
@@ -301,20 +436,164 @@ class MainWindow:
             running=summary['running_arrays'],
         )
     
+    # ==================== 拖拽支持 ====================
+    
+    def _on_drag_start(self, event):
+        """开始拖拽"""
+        item_id = self.array_tree.identify_row(event.y)
+        if item_id and item_id.startswith('array_'):
+            self._drag_data['item'] = item_id
+            self._drag_data['x'] = event.x
+            self._drag_data['y'] = event.y
+        else:
+            self._drag_data['item'] = None
+    
+    def _on_drag_motion(self, event):
+        """拖拽移动"""
+        if self._drag_data['item']:
+            # 可以添加视觉反馈，例如高亮目标文件夹
+            pass
+    
+    def _on_drag_release(self, event):
+        """释放拖拽"""
+        if not self._drag_data['item']:
+            return
+        
+        # 获取释放位置的项
+        target_id = self.array_tree.identify_row(event.y)
+        source_id = self._drag_data['item']
+        
+        if not target_id or source_id == target_id:
+            self._drag_data['item'] = None
+            return
+        
+        # 获取源阵列 ID
+        array_id = source_id[6:]  # 去掉 'array_' 前缀
+        
+        # 确定目标文件夹
+        if target_id.startswith('folder_'):
+            # 拖到文件夹上
+            if target_id == 'folder_uncategorized':
+                target_folder = ""
+            else:
+                target_folder = target_id[7:]  # 去掉 'folder_' 前缀
+        elif target_id.startswith('array_'):
+            # 拖到另一个阵列上，获取其所属文件夹
+            parent = self.array_tree.parent(target_id)
+            if parent == 'folder_uncategorized':
+                target_folder = ""
+            else:
+                target_folder = parent[7:] if parent.startswith('folder_') else ""
+        else:
+            self._drag_data['item'] = None
+            return
+        
+        # 移动阵列到文件夹
+        if self.array_manager.move_array_to_folder(array_id, target_folder):
+            self._refresh_array_list()
+        
+        self._drag_data['item'] = None
+    
+    # ==================== 文件夹操作 ====================
+    
+    def _add_folder(self):
+        """添加文件夹"""
+        from tkinter import simpledialog
+        name = simpledialog.askstring(
+            "新建文件夹",
+            "请输入文件夹名称：",
+            parent=self.root,
+        )
+        if name and name.strip():
+            if self.array_manager.add_folder(name.strip()):
+                self._refresh_array_list()
+            else:
+                messagebox.showwarning("提示", "文件夹已存在或名称无效")
+    
+    def _rename_folder(self):
+        """重命名文件夹"""
+        if not hasattr(self, '_selected_folder'):
+            return
+        
+        from tkinter import simpledialog
+        new_name = simpledialog.askstring(
+            "重命名文件夹",
+            f"请输入新名称（当前：{self._selected_folder}）：",
+            parent=self.root,
+            initialvalue=self._selected_folder,
+        )
+        if new_name and new_name.strip() and new_name != self._selected_folder:
+            if self.array_manager.rename_folder(self._selected_folder, new_name.strip()):
+                self._refresh_array_list()
+            else:
+                messagebox.showwarning("提示", "重命名失败，新名称可能已存在")
+    
+    def _delete_folder(self):
+        """删除文件夹"""
+        if not hasattr(self, '_selected_folder'):
+            return
+        
+        if messagebox.askyesno(
+            "确认删除",
+            f"确定要删除文件夹 '{self._selected_folder}' 吗？\n（文件夹内的阵列将移动到未分类）"
+        ):
+            if self.array_manager.remove_folder(self._selected_folder):
+                self._refresh_array_list()
+    
+    def _show_move_menu(self):
+        """显示移动到文件夹的菜单"""
+        if not self._selected_array_id:
+            return
+        
+        # 创建移动菜单
+        move_menu = tk.Menu(self.root, tearoff=0)
+        
+        # 添加所有文件夹选项
+        folders = self.array_manager.get_folders()
+        for folder in folders:
+            move_menu.add_command(
+                label=folder,
+                command=lambda f=folder: self._move_to_folder(f)
+            )
+        
+        if folders:
+            move_menu.add_separator()
+        
+        move_menu.add_command(
+            label="未分类",
+            command=lambda: self._move_to_folder("")
+        )
+        
+        # 显示菜单
+        move_menu.tk_popup(self.root.winfo_pointerx(), self.root.winfo_pointery())
+    
+    def _move_to_folder(self, folder_name: str):
+        """移动阵列到指定文件夹"""
+        if self._selected_array_id:
+            if self.array_manager.move_array_to_folder(self._selected_array_id, folder_name):
+                self._refresh_array_list()
+    
+    # ==================== 阵列操作 ====================
+    
     def _add_array(self):
         """添加阵列"""
-        dialog = LoginDialog(self.root)
+        dialog = LoginDialog(self.root, folders=self.array_manager.get_folders())
         result = dialog.show()
         
         if result:
+            # 生成唯一 ID
+            import time
+            array_id = f"array_{int(time.time() * 1000)}"
+            
             config = ArrayConfig(
-                id=f"array_{len(self.array_manager.get_all_arrays()) + 1}",
+                id=array_id,
                 name=result['name'],
                 host=result['host'],
                 port=result.get('port', 22),
                 username=result['username'],
                 password=result.get('password', ''),
                 key_path=result.get('key_path', ''),
+                folder=result.get('folder', ''),
             )
             
             if self.array_manager.add_array(config):
