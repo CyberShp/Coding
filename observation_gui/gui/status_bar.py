@@ -9,7 +9,7 @@ from tkinter import ttk
 from datetime import datetime
 
 
-class StatusBar(ttk.Frame):
+class StatusBar(tk.Frame):
     """
     状态栏
     
@@ -27,42 +27,42 @@ class StatusBar(ttk.Frame):
         Args:
             parent: 父组件
         """
-        super().__init__(parent, **kwargs)
+        super().__init__(parent, bg='#e0e0e0', **kwargs)
         
         self._build_ui()
     
     def _build_ui(self):
         """构建界面"""
         # 分隔线
-        separator = ttk.Separator(self, orient=tk.HORIZONTAL)
+        separator = tk.Frame(self, height=1, bg='#999999')
         separator.pack(fill=tk.X)
         
         # 状态栏内容
-        content_frame = ttk.Frame(self)
-        content_frame.pack(fill=tk.X, padx=5, pady=2)
+        content_frame = tk.Frame(self, bg='#e0e0e0')
+        content_frame.pack(fill=tk.X, padx=5, pady=3)
         
         # 左侧：消息
-        self.message_label = ttk.Label(content_frame, text="就绪")
+        self.message_label = tk.Label(content_frame, text="就绪", bg='#e0e0e0')
         self.message_label.pack(side=tk.LEFT)
         
         # 右侧：状态信息
-        right_frame = ttk.Frame(content_frame)
+        right_frame = tk.Frame(content_frame, bg='#e0e0e0')
         right_frame.pack(side=tk.RIGHT)
         
         # 连接状态
-        self.connection_label = ttk.Label(right_frame, text="已连接: 0/0")
+        self.connection_label = tk.Label(right_frame, text="已连接: 0/0", bg='#e0e0e0')
         self.connection_label.pack(side=tk.LEFT, padx=(0, 15))
         
         # 运行状态
-        self.running_label = ttk.Label(right_frame, text="运行中: 0")
+        self.running_label = tk.Label(right_frame, text="运行中: 0", bg='#e0e0e0')
         self.running_label.pack(side=tk.LEFT, padx=(0, 15))
         
         # 刷新时间
-        self.refresh_label = ttk.Label(right_frame, text="刷新间隔: 30s")
+        self.refresh_label = tk.Label(right_frame, text="刷新间隔: 30s", bg='#e0e0e0')
         self.refresh_label.pack(side=tk.LEFT, padx=(0, 15))
         
         # 上次刷新
-        self.last_refresh_label = ttk.Label(right_frame, text="")
+        self.last_refresh_label = tk.Label(right_frame, text="", bg='#e0e0e0')
         self.last_refresh_label.pack(side=tk.LEFT)
     
     def update_status(

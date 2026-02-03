@@ -100,28 +100,31 @@ class MainWindow:
         # 菜单栏
         self._build_menu()
         
+        # 状态栏（先创建，放在底部）
+        self.status_bar = StatusBar(self.root)
+        self.status_bar.pack(fill=tk.X, side=tk.BOTTOM)
+        
         # 主框架
         main_frame = ttk.Frame(self.root)
         main_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
         
-        # 使用 PanedWindow 实现可调整大小的分割
-        paned = ttk.PanedWindow(main_frame, orient=tk.HORIZONTAL)
+        # 使用 tk.PanedWindow（macOS 兼容性更好）
+        paned = tk.PanedWindow(main_frame, orient=tk.HORIZONTAL, sashrelief=tk.RAISED)
         paned.pack(fill=tk.BOTH, expand=True)
         
         # 左侧：阵列列表
         left_frame = self._build_array_list(paned)
-        paned.add(left_frame, weight=1)
+        paned.add(left_frame, minsize=150, width=200)
         
         # 右侧：详情面板
         right_frame = ttk.Frame(paned)
-        paned.add(right_frame, weight=4)
+        paned.add(right_frame, minsize=400)
         
         self.array_panel = ArrayPanel(right_frame)
         self.array_panel.pack(fill=tk.BOTH, expand=True)
         
-        # 状态栏
-        self.status_bar = StatusBar(self.root)
-        self.status_bar.pack(fill=tk.X, side=tk.BOTTOM)
+        # 强制刷新布局
+        self.root.update_idletasks()
     
     def _build_menu(self):
         """构建菜单栏"""
@@ -155,27 +158,34 @@ class MainWindow:
         # 快捷键
         self.root.bind('<F5>', lambda e: self._manual_refresh())
     
-    def _build_array_list(self, parent) -> ttk.Frame:
+    def _build_array_list(self, parent) -> tk.Frame:
         """构建阵列列表"""
-        frame = ttk.Frame(parent, width=200)
+        # 使用 tk.Frame 替代 ttk.Frame，macOS 兼容性更好
+        frame = tk.Frame(parent, width=200, bg='#f0f0f0')
         
         # 标题
-        title_label = ttk.Label(frame, text="阵列列表", font=('', 12, 'bold'))
-        title_label.pack(pady=(5, 10))
+        title_label = tk.Label(
+            frame, text="阵列列表", 
+            font=('', 12, 'bold'),
+            bg='#f0f0f0'
+        )
+        title_label.pack(pady=(10, 10))
         
         # 列表框
-        list_frame = ttk.Frame(frame)
+        list_frame = tk.Frame(frame, bg='#f0f0f0')
         list_frame.pack(fill=tk.BOTH, expand=True, padx=5)
         
         self.array_listbox = tk.Listbox(
             list_frame,
             selectmode=tk.SINGLE,
-            font=('', 10),
+            font=('', 11),
             activestyle='none',
+            relief=tk.SUNKEN,
+            borderwidth=1,
         )
         self.array_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         
-        scrollbar = ttk.Scrollbar(list_frame, orient=tk.VERTICAL)
+        scrollbar = tk.Scrollbar(list_frame, orient=tk.VERTICAL)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         
         self.array_listbox.config(yscrollcommand=scrollbar.set)
@@ -184,15 +194,30 @@ class MainWindow:
         self.array_listbox.bind('<<ListboxSelect>>', self._on_array_select)
         self.array_listbox.bind('<Double-1>', self._on_array_double_click)
         
-        # 按钮
-        btn_frame = ttk.Frame(frame)
+        # 按钮区域
+        btn_frame = tk.Frame(frame, bg='#f0f0f0')
         btn_frame.pack(fill=tk.X, padx=5, pady=10)
         
-        add_btn = ttk.Button(btn_frame, text="+ 添加", command=self._add_array)
+        add_btn = tk.Button(
+            btn_frame, text="+ 添加", 
+            command=self._add_array,
+            relief=tk.RAISED,
+        )
         add_btn.pack(side=tk.LEFT, padx=2)
         
-        connect_btn = ttk.Button(btn_frame, text="连接", command=self._connect_selected)
+        connect_btn = tk.Button(
+            btn_frame, text="连接", 
+            command=self._connect_selected,
+            relief=tk.RAISED,
+        )
         connect_btn.pack(side=tk.LEFT, padx=2)
+        
+        disconnect_btn = tk.Button(
+            btn_frame, text="断开",
+            command=self._disconnect_selected,
+            relief=tk.RAISED,
+        )
+        disconnect_btn.pack(side=tk.LEFT, padx=2)
         
         return frame
     

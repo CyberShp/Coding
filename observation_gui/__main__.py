@@ -3,9 +3,13 @@
 主入口：python3 -m observation_gui
 """
 
+import os
 import sys
 import logging
 from pathlib import Path
+
+# 抑制 macOS Tk 弃用警告
+os.environ['TK_SILENCE_DEPRECATION'] = '1'
 
 
 def setup_logging(level: str = "INFO"):

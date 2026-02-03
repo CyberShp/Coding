@@ -12,7 +12,7 @@ from ..core.array_manager import ArrayStatus, ConnectionState
 from ..core.result_parser import ResultParser
 
 
-class ArrayPanel(ttk.Frame):
+class ArrayPanel(tk.Frame):
     """
     阵列详情面板
     
@@ -30,32 +30,33 @@ class ArrayPanel(ttk.Frame):
         Args:
             parent: 父组件
         """
-        super().__init__(parent, **kwargs)
+        super().__init__(parent, bg='#f5f5f5', **kwargs)
         
         self._build_ui()
     
     def _build_ui(self):
         """构建界面"""
         # 信息区
-        info_frame = ttk.LabelFrame(self, text="阵列信息", padding=10)
+        info_frame = tk.LabelFrame(self, text="阵列信息", padx=10, pady=10, bg='#f5f5f5')
         info_frame.pack(fill=tk.X, padx=5, pady=5)
         
         # 阵列名称和状态
-        self.name_label = ttk.Label(
+        self.name_label = tk.Label(
             info_frame, 
             text="未选择阵列", 
-            font=('', 14, 'bold')
+            font=('', 14, 'bold'),
+            bg='#f5f5f5',
         )
         self.name_label.pack(anchor=tk.W)
         
-        self.status_label = ttk.Label(info_frame, text="")
+        self.status_label = tk.Label(info_frame, text="", bg='#f5f5f5')
         self.status_label.pack(anchor=tk.W, pady=(5, 0))
         
-        self.host_label = ttk.Label(info_frame, text="")
+        self.host_label = tk.Label(info_frame, text="", bg='#f5f5f5')
         self.host_label.pack(anchor=tk.W)
         
         # 观察点状态区
-        observer_frame = ttk.LabelFrame(self, text="观察点状态", padding=10)
+        observer_frame = tk.LabelFrame(self, text="观察点状态", padx=10, pady=10, bg='#f5f5f5')
         observer_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
         
         # 使用 Treeview 显示观察点状态
@@ -76,7 +77,7 @@ class ArrayPanel(ttk.Frame):
         self.observer_tree.column('message', width=300)
         
         # 滚动条
-        scrollbar = ttk.Scrollbar(
+        scrollbar = tk.Scrollbar(
             observer_frame, 
             orient=tk.VERTICAL,
             command=self.observer_tree.yview
@@ -87,7 +88,7 @@ class ArrayPanel(ttk.Frame):
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         
         # 最近告警区
-        alert_frame = ttk.LabelFrame(self, text="最近告警", padding=10)
+        alert_frame = tk.LabelFrame(self, text="最近告警", padx=10, pady=10, bg='#f5f5f5')
         alert_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
         
         # 告警列表
@@ -109,7 +110,7 @@ class ArrayPanel(ttk.Frame):
         self.alert_tree.column('observer', width=100)
         self.alert_tree.column('message', width=350)
         
-        alert_scrollbar = ttk.Scrollbar(
+        alert_scrollbar = tk.Scrollbar(
             alert_frame,
             orient=tk.VERTICAL,
             command=self.alert_tree.yview
