@@ -275,4 +275,5 @@ class Reporter:
             except Exception as e:
                 logger.error(f"写入 syslog 失败: {e}")
         
-        logger.info(f"告警已上报: [{alert.level.value}] {alert.observer_name}: {alert.message[:100]}")
+        # 日志输出不截断，完整显示消息
+        logger.info(f"告警已上报: [{alert.level.value}] {alert.observer_name}: {alert.message}")

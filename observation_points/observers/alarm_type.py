@@ -186,12 +186,19 @@ class AlarmTypeObserver(BaseObserver):
         # 提取时间戳
         timestamp = self._parse_timestamp(line)
         
+        # 调试：如果关键字段提取失败，记录警告
+        if alarm_name is None or alarm_id is None:
+            logger.debug(
+                f"字段提取不完整: type={alarm_type}, name={alarm_name}, id={alarm_id}, "
+                f"原始行(前200字符)={line[:200]}"
+            )
+        
         return {
             'timestamp': timestamp or datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
             'alarm_type': alarm_type,
             'alarm_name': alarm_name,
             'alarm_id': alarm_id,
-            'line': line[:300],
+            'line': line,  # 保留完整原始行，不截断
         }
     
     def _parse_timestamp(self, line: str) -> Optional[str]:
@@ -217,10 +224,11 @@ class AlarmTypeObserver(BaseObserver):
             return ""
         
         items = []
-        for event in self._recent_events:
+        for i, event in enumerate(self._recent_events, 1):
             name = event.get('alarm_name') or '未知'
             alarm_id = event.get('alarm_id') or '未知'
             ts = event.get('timestamp', '')
-            items.append(f"[{ts} name={name} id={alarm_id}]")
+            items.append(f"#{i}[{ts} name={name} id={alarm_id}]")
         
-        return f"最近{len(items)}次: " + ", ".join(items)
+        # 使用分号分隔，更清晰
+        return f"最近{len(items)}次: " + "; ".join(items)
