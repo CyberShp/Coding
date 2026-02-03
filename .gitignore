@@ -8,6 +8,8 @@
 *.iso
 *.qcow2
 *.qcow
+*.utm/
+iso/
 efi_vars.fd
 
 # Python

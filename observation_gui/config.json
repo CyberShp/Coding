@@ -1,0 +1,19 @@
+{
+  "app": {
+    "title": "观察点监控平台",
+    "refresh_interval": 30,
+    "window_width": 1000,
+    "window_height": 700
+  },
+  "ssh": {
+    "default_port": 22,
+    "timeout": 10,
+    "keepalive_interval": 30
+  },
+  "remote": {
+    "agent_path": "/opt/observation_points",
+    "log_path": "/var/log/observation-points/alerts.log",
+    "python_cmd": "python3"
+  },
+  "arrays": []
+}
