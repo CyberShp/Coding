@@ -52,7 +52,8 @@
       "enabled": true,
       "interval": 30,
       "log_path": "/OSM/log/cur_debug/messages",
-      "max_lines_per_check": 1000
+      "max_lines_per_check": 1000,
+      "recent_count": 5
     },
     "memory_leak": {
       "enabled": true,
