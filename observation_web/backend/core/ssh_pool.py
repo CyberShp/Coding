@@ -171,6 +171,21 @@ class SSHConnection:
             logger.error(f"Failed to read file {remote_path}: {e}")
             return None
 
+    def upload_file(self, local_path: str, remote_path: str) -> Tuple[bool, str]:
+        """Upload local file to remote path"""
+        if not self.is_connected():
+            return (False, "Not connected")
+
+        try:
+            if self._sftp is None:
+                self._sftp = self._client.open_sftp()
+
+            self._sftp.put(local_path, remote_path)
+            return (True, "")
+        except Exception as e:
+            logger.error(f"Failed to upload file {local_path} -> {remote_path}: {e}")
+            return (False, str(e))
+
 
 class SSHPool:
     """

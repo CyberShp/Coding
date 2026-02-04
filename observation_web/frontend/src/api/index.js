@@ -36,6 +36,10 @@ export default {
   connectArray: (id, password) => http.post(`/arrays/${id}/connect`, null, { params: { password } }),
   disconnectArray: (id) => http.post(`/arrays/${id}/disconnect`),
   refreshArray: (id) => http.post(`/arrays/${id}/refresh`),
+  deployAgent: (id) => http.post(`/arrays/${id}/deploy-agent`),
+  startAgent: (id) => http.post(`/arrays/${id}/start-agent`),
+  stopAgent: (id) => http.post(`/arrays/${id}/stop-agent`),
+  restartAgent: (id) => http.post(`/arrays/${id}/restart-agent`),
 
   // Alerts
   getAlerts: (params) => http.get('/alerts', { params }),

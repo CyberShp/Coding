@@ -13,6 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import get_config
+from ..core.agent_deployer import AgentDeployer
 from ..core.ssh_pool import get_ssh_pool, SSHPool
 from ..db.database import get_db
 from ..models.array import (
@@ -275,12 +276,20 @@ async def connect_array(
         )
     
     # Check agent status
-    exit_code, out, _ = conn.execute("test -d /opt/observation_points && echo 'deployed'")
-    status_obj.agent_deployed = 'deployed' in out
-    
-    exit_code, out, _ = conn.execute("pgrep -f 'python.*observation_points'")
-    status_obj.agent_running = exit_code == 0 and out.strip() != ''
-    
+    config = get_config()
+    deployer = AgentDeployer(conn, config)
+    status_obj.agent_deployed = deployer.check_deployed()
+    status_obj.agent_running = deployer.check_running()
+
+    if not status_obj.agent_deployed:
+        return {
+            "status": "connected",
+            "agent_status": "not_deployed",
+            "hint": "Agent 未部署，是否立即部署？",
+            "agent_deployed": status_obj.agent_deployed,
+            "agent_running": status_obj.agent_running,
+        }
+
     return {
         "status": "connected",
         "agent_deployed": status_obj.agent_deployed,
@@ -321,15 +330,14 @@ async def refresh_array(
     status_obj = _get_array_status(array_id)
     
     # Check agent status
-    exit_code, out, _ = conn.execute("test -d /opt/observation_points && echo 'deployed'")
-    status_obj.agent_deployed = 'deployed' in out
-    
-    exit_code, out, _ = conn.execute("pgrep -f 'python.*observation_points'")
-    status_obj.agent_running = exit_code == 0 and out.strip() != ''
+    config = get_config()
+    deployer = AgentDeployer(conn, config)
+    status_obj.agent_deployed = deployer.check_deployed()
+    status_obj.agent_running = deployer.check_running()
     
     # Get observer status from alerts.log
     config = get_config()
-    content = conn.read_file(config.remote.log_path)
+    content = conn.read_file(config.remote.agent_log_path)
     
     if content:
         # Parse recent alerts
@@ -366,6 +374,122 @@ async def refresh_array(
     status_obj.last_refresh = datetime.now()
     
     return status_obj
+
+
+@router.post("/{array_id}/deploy-agent")
+async def deploy_agent(
+    array_id: str,
+    ssh_pool: SSHPool = Depends(get_ssh_pool),
+):
+    """Deploy observation_points agent to array"""
+    conn = ssh_pool.get_connection(array_id)
+    if not conn or not conn.is_connected():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Array not connected"
+        )
+
+    config = get_config()
+    deployer = AgentDeployer(conn, config)
+    result = deployer.deploy()
+    if not result.get("ok"):
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=result.get("error", "Deploy failed")
+        )
+
+    status_obj = _get_array_status(array_id)
+    status_obj.agent_deployed = deployer.check_deployed()
+    status_obj.agent_running = deployer.check_running()
+
+    return result
+
+
+@router.post("/{array_id}/start-agent")
+async def start_agent(
+    array_id: str,
+    ssh_pool: SSHPool = Depends(get_ssh_pool),
+):
+    """Start observation_points agent on array"""
+    conn = ssh_pool.get_connection(array_id)
+    if not conn or not conn.is_connected():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Array not connected"
+        )
+
+    config = get_config()
+    deployer = AgentDeployer(conn, config)
+    result = deployer.start_agent()
+    if not result.get("ok"):
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=result.get("error", "Start failed")
+        )
+
+    status_obj = _get_array_status(array_id)
+    status_obj.agent_running = deployer.check_running()
+    status_obj.agent_deployed = deployer.check_deployed()
+
+    return result
+
+
+@router.post("/{array_id}/stop-agent")
+async def stop_agent(
+    array_id: str,
+    ssh_pool: SSHPool = Depends(get_ssh_pool),
+):
+    """Stop observation_points agent on array"""
+    conn = ssh_pool.get_connection(array_id)
+    if not conn or not conn.is_connected():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Array not connected"
+        )
+
+    config = get_config()
+    deployer = AgentDeployer(conn, config)
+    result = deployer.stop_agent()
+    if not result.get("ok"):
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=result.get("error", "Stop failed")
+        )
+
+    status_obj = _get_array_status(array_id)
+    status_obj.agent_running = deployer.check_running()
+    status_obj.agent_deployed = deployer.check_deployed()
+
+    return result
+
+
+@router.post("/{array_id}/restart-agent")
+async def restart_agent(
+    array_id: str,
+    ssh_pool: SSHPool = Depends(get_ssh_pool),
+):
+    """Restart observation_points agent on array"""
+    conn = ssh_pool.get_connection(array_id)
+    if not conn or not conn.is_connected():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Array not connected"
+        )
+
+    config = get_config()
+    deployer = AgentDeployer(conn, config)
+    result = deployer.restart_agent()
+    if not result.get("ok"):
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=result.get("error", "Restart failed")
+        )
+
+    status_obj = _get_array_status(array_id)
+    status_obj.agent_running = deployer.check_running()
+    status_obj.agent_deployed = deployer.check_deployed()
+
+    return result
 
 
 @router.get("", response_model=List[ArrayStatus])

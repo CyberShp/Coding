@@ -79,6 +79,58 @@
         <el-empty v-if="observerList.length === 0" description="暂无数据" />
       </el-card>
 
+      <!-- Agent Controls -->
+      <el-card class="agent-card">
+        <template #header>
+          <div class="card-header">
+            <span>Agent 控制</span>
+            <el-tag v-if="array.agent_running" type="success">运行中</el-tag>
+            <el-tag v-else-if="array.agent_deployed" type="warning">已部署</el-tag>
+            <el-tag v-else type="info">未部署</el-tag>
+          </div>
+        </template>
+
+        <div class="agent-actions">
+          <el-progress
+            v-if="isOperating"
+            :percentage="100"
+            :indeterminate="true"
+            :duration="2"
+            status="success"
+          >
+            <span>{{ operationText }}</span>
+          </el-progress>
+
+          <div class="agent-buttons">
+            <el-button
+              type="primary"
+              size="small"
+              :loading="deploying"
+              :disabled="array.state !== 'connected'"
+              @click="handleDeployAgent"
+            >
+              部署 Agent
+            </el-button>
+            <el-button
+              size="small"
+              :loading="restarting"
+              :disabled="array.state !== 'connected'"
+              @click="handleRestartAgent"
+            >
+              重启 Agent
+            </el-button>
+            <el-button
+              size="small"
+              :loading="stopping"
+              :disabled="array.state !== 'connected'"
+              @click="handleStopAgent"
+            >
+              停止 Agent
+            </el-button>
+          </div>
+        </div>
+      </el-card>
+
       <!-- Recent Alerts -->
       <el-card class="alerts-card">
         <template #header>
@@ -146,6 +198,9 @@ const refreshing = ref(false)
 const connectDialogVisible = ref(false)
 const connecting = ref(false)
 const array = ref(null)
+const deploying = ref(false)
+const stopping = ref(false)
+const restarting = ref(false)
 
 const connectForm = reactive({
   password: '',
@@ -160,6 +215,15 @@ const observerList = computed(() => {
       status: info.status,
       message: info.message,
     }))
+})
+
+const isOperating = computed(() => deploying.value || stopping.value || restarting.value)
+
+const operationText = computed(() => {
+  if (deploying.value) return '部署中...'
+  if (restarting.value) return '重启中...'
+  if (stopping.value) return '停止中...'
+  return ''
 })
 
 const OBSERVER_NAMES = {
@@ -264,9 +328,12 @@ function handleConnect() {
 async function doConnect() {
   connecting.value = true
   try {
-    await arrayStore.connectArray(array.value.array_id, connectForm.password)
+    const result = await arrayStore.connectArray(array.value.array_id, connectForm.password)
     ElMessage.success('连接成功')
     connectDialogVisible.value = false
+    if (result?.agent_status === 'not_deployed') {
+      ElMessage.warning(result.hint || 'Agent 未部署')
+    }
     await loadArray()
   } catch (error) {
     ElMessage.error(error.response?.data?.detail || '连接失败')
@@ -298,6 +365,45 @@ async function handleRefresh() {
   }
 }
 
+async function handleDeployAgent() {
+  deploying.value = true
+  try {
+    await api.deployAgent(array.value.array_id)
+    ElMessage.success('部署成功')
+    await loadArray()
+  } catch (error) {
+    ElMessage.error(error.response?.data?.detail || '部署失败')
+  } finally {
+    deploying.value = false
+  }
+}
+
+async function handleRestartAgent() {
+  restarting.value = true
+  try {
+    await api.restartAgent(array.value.array_id)
+    ElMessage.success('重启成功')
+    await loadArray()
+  } catch (error) {
+    ElMessage.error(error.response?.data?.detail || '重启失败')
+  } finally {
+    restarting.value = false
+  }
+}
+
+async function handleStopAgent() {
+  stopping.value = true
+  try {
+    await api.stopAgent(array.value.array_id)
+    ElMessage.success('停止成功')
+    await loadArray()
+  } catch (error) {
+    ElMessage.error(error.response?.data?.detail || '停止失败')
+  } finally {
+    stopping.value = false
+  }
+}
+
 onMounted(loadArray)
 </script>
 
@@ -317,6 +423,7 @@ onMounted(loadArray)
 
 .info-card,
 .observer-card,
+.agent-card,
 .alerts-card {
   margin-bottom: 20px;
 }
@@ -328,6 +435,17 @@ onMounted(loadArray)
 }
 
 .actions {
+  display: flex;
+  gap: 8px;
+}
+
+.agent-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.agent-buttons {
   display: flex;
   gap: 8px;
 }

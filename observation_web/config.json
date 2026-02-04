@@ -15,8 +15,8 @@
     "echo": false
   },
   "remote": {
-    "agent_path": "/opt/observation_points",
-    "log_path": "/var/log/observation-points/alerts.log",
+    "agent_deploy_path": "/home/permitdir/observation_points",
+    "agent_log_path": "/var/log/observation-points/alerts.log",
     "python_cmd": "python3"
   }
 }

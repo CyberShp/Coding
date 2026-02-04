@@ -7,6 +7,7 @@
 - **macOS**: ARM64 (M1/M2)
 - **Linux x86_64**: manylinux2014 兼容
 - **Linux ARM64 (aarch64)**: manylinux2014 兼容（适用于 Euler ARM OS）
+- **Windows**: win_amd64
 
 ## 支持的 Python 版本
 
@@ -31,6 +32,20 @@ pip install --no-index --find-links=. *.whl
 # 如果有 tar.gz 源码包（如 SQLAlchemy），需要单独安装
 pip install --no-index --find-links=. SQLAlchemy-1.4.50.tar.gz
 ```
+
+### Windows 安装说明
+
+Windows 仅需下载 win_amd64 相关的二进制 wheel 文件，纯 Python 包无需重复下载。
+
+需要的 Windows wheel（示例）：
+
+- `pydantic-*-win_amd64.whl` (cp37-cp310)
+- `greenlet-*-win_amd64.whl` (cp37-cp310)
+- `websockets-*-win_amd64.whl` (cp37-cp310)
+- `cffi-*-win_amd64.whl` (cp37-cp310)
+- `cryptography-*-win_amd64.whl`
+- `bcrypt-*-win_amd64.whl`
+- `pynacl-*-win_amd64.whl`
 
 ### 方法二：逐个安装
 

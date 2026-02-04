@@ -36,8 +36,8 @@ class ServerConfig:
 @dataclass
 class RemoteConfig:
     """Remote agent configuration"""
-    agent_path: str = "/opt/observation_points"
-    log_path: str = "/var/log/observation-points/alerts.log"
+    agent_deploy_path: str = "/home/permitdir/observation_points"
+    agent_log_path: str = "/var/log/observation-points/alerts.log"
     python_cmd: str = "python3"
 
 
@@ -69,7 +69,14 @@ class AppConfig:
                 if 'database' in data:
                     config.database = DatabaseConfig(**data['database'])
                 if 'remote' in data:
-                    config.remote = RemoteConfig(**data['remote'])
+                    remote_data = data['remote']
+                    if 'agent_deploy_path' not in remote_data and 'agent_path' in remote_data:
+                        remote_data = dict(remote_data)
+                        remote_data['agent_deploy_path'] = remote_data.pop('agent_path')
+                    if 'agent_log_path' not in remote_data and 'log_path' in remote_data:
+                        remote_data = dict(remote_data)
+                        remote_data['agent_log_path'] = remote_data.pop('log_path')
+                    config.remote = RemoteConfig(**remote_data)
                     
             except Exception as e:
                 print(f"Warning: Failed to load config: {e}")
@@ -98,8 +105,8 @@ class AppConfig:
                 'echo': self.database.echo,
             },
             'remote': {
-                'agent_path': self.remote.agent_path,
-                'log_path': self.remote.log_path,
+                'agent_deploy_path': self.remote.agent_deploy_path,
+                'agent_log_path': self.remote.agent_log_path,
                 'python_cmd': self.remote.python_cmd,
             },
         }
