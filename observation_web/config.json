@@ -1,0 +1,22 @@
+{
+  "server": {
+    "host": "0.0.0.0",
+    "port": 8000,
+    "debug": true,
+    "cors_origins": ["*"]
+  },
+  "ssh": {
+    "default_port": 22,
+    "timeout": 10,
+    "keepalive_interval": 30
+  },
+  "database": {
+    "path": "observation_web.db",
+    "echo": false
+  },
+  "remote": {
+    "agent_path": "/opt/observation_points",
+    "log_path": "/var/log/observation-points/alerts.log",
+    "python_cmd": "python3"
+  }
+}

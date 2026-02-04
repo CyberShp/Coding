@@ -1,0 +1,104 @@
+"""
+Array model definitions.
+"""
+
+from datetime import datetime
+from enum import Enum
+from typing import Any, Dict, List, Optional
+
+from pydantic import BaseModel
+from sqlalchemy import Column, Integer, String, DateTime, Boolean, Text
+from sqlalchemy.sql import func
+
+from ..db.database import Base
+
+
+class ConnectionState(str, Enum):
+    """Connection state enum"""
+    DISCONNECTED = "disconnected"
+    CONNECTING = "connecting"
+    CONNECTED = "connected"
+    ERROR = "error"
+
+
+# SQLAlchemy Model
+class ArrayModel(Base):
+    """Array database model"""
+    __tablename__ = "arrays"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    array_id = Column(String(64), unique=True, index=True, nullable=False)
+    name = Column(String(128), nullable=False)
+    host = Column(String(256), nullable=False)
+    port = Column(Integer, default=22)
+    username = Column(String(64), default="root")
+    key_path = Column(String(512), default="")
+    folder = Column(String(128), default="")
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+
+# Pydantic Models for API
+class ArrayBase(BaseModel):
+    """Base array schema"""
+    name: str
+    host: str
+    port: int = 22
+    username: str = "root"
+    key_path: str = ""
+    folder: str = ""
+
+
+class ArrayCreate(ArrayBase):
+    """Schema for creating array"""
+    password: str = ""  # Not stored, only used for connection
+
+
+class ArrayUpdate(BaseModel):
+    """Schema for updating array"""
+    name: Optional[str] = None
+    host: Optional[str] = None
+    port: Optional[int] = None
+    username: Optional[str] = None
+    key_path: Optional[str] = None
+    folder: Optional[str] = None
+
+
+class ArrayResponse(ArrayBase):
+    """Schema for array response"""
+    id: int
+    array_id: str
+    created_at: datetime
+    updated_at: datetime
+    
+    class Config:
+        orm_mode = True
+
+
+class ArrayStatus(BaseModel):
+    """Array runtime status"""
+    array_id: str
+    name: str
+    host: str
+    state: ConnectionState = ConnectionState.DISCONNECTED
+    last_error: str = ""
+    agent_deployed: bool = False
+    agent_running: bool = False
+    last_refresh: Optional[datetime] = None
+    observer_status: Dict[str, Dict[str, str]] = {}
+    recent_alerts: List[Dict[str, Any]] = []
+
+
+class Array(ArrayBase):
+    """Full array model with runtime state"""
+    id: int
+    array_id: str
+    state: ConnectionState = ConnectionState.DISCONNECTED
+    last_error: str = ""
+    agent_deployed: bool = False
+    agent_running: bool = False
+    last_refresh: Optional[datetime] = None
+    observer_status: Dict[str, Dict[str, str]] = {}
+    
+    class Config:
+        orm_mode = True

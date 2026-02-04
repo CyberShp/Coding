@@ -112,6 +112,9 @@ class LinkStatusObserver(BaseObserver):
                 # 排除 lo 和虚拟接口
                 if name == 'lo' or name.startswith('veth') or name.startswith('docker'):
                     continue
+                # 排除管理口和 eno 接口
+                if name.startswith('eth-m') or name.startswith('eno'):
+                    continue
                 # 排除 bond slave（只监控 bond 本身）
                 if self._is_bond_slave(name):
                     continue
@@ -158,10 +161,10 @@ class LinkStatusObserver(BaseObserver):
             
             if new_carrier == '0' and old_carrier == '1':
                 changes.append(f"{port} link DOWN")
-                logger.warning(f"端口 {port} 链路断开 (link down)")
+                logger.warning(f"[LinkStatus] {port} DOWN")
             elif new_carrier == '1' and old_carrier == '0':
                 changes.append(f"{port} link UP")
-                logger.info(f"端口 {port} 链路恢复 (link up)")
+                logger.info(f"[LinkStatus] {port} UP")
         
         # operstate 变化
         if last.get('operstate') != current.get('operstate'):
@@ -170,7 +173,7 @@ class LinkStatusObserver(BaseObserver):
             
             if new_state in ('down', 'notpresent', 'lowerlayerdown'):
                 changes.append(f"{port} operstate: {old_state} -> {new_state}")
-                logger.warning(f"端口 {port} 操作状态变化: {old_state} -> {new_state}")
+                logger.warning(f"[LinkStatus] {port} state: {old_state} -> {new_state}")
         
         # 速率变化（降速可能表示问题）
         old_speed = last.get('speed')
@@ -179,7 +182,7 @@ class LinkStatusObserver(BaseObserver):
             try:
                 if int(new_speed) < int(old_speed):
                     changes.append(f"{port} 速率降低: {old_speed} -> {new_speed} Mbps")
-                    logger.warning(f"端口 {port} 速率降低: {old_speed} -> {new_speed} Mbps")
+                    logger.warning(f"[LinkStatus] {port} speed: {old_speed} -> {new_speed}")
             except ValueError:
                 pass
         
@@ -188,9 +191,9 @@ class LinkStatusObserver(BaseObserver):
     def add_to_whitelist(self, port: str):
         """添加端口到白名单"""
         self.whitelist.add(port)
-        logger.info(f"端口 {port} 已添加到白名单")
+        logger.debug(f"白名单+: {port}")
     
     def remove_from_whitelist(self, port: str):
         """从白名单移除端口"""
         self.whitelist.discard(port)
-        logger.info(f"端口 {port} 已从白名单移除")
+        logger.debug(f"白名单-: {port}")

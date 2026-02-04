@@ -141,21 +141,16 @@ class Reporter:
         result_priority = self.LEVEL_PRIORITY.get(result.alert_level, 0)
         min_priority = self.LEVEL_PRIORITY.get(self.min_level, 0)
         if result_priority < min_priority:
-            logger.debug(
-                f"告警 {result.observer_name} 级别 {result.alert_level.value} "
-                f"低于最低级别 {self.min_level.value}，跳过"
-            )
-            return
+            return  # 低于最低级别，静默跳过
         
         # 检查冷却（sticky 告警不受冷却限制）
         if not result.sticky and self._is_in_cooldown(result):
-            logger.debug(f"告警 {result.observer_name} 在冷却期内，跳过")
-            return
+            return  # 冷却期内，静默跳过
         
         # 为 sticky 告警添加标记
         message = self._sanitize(result.message)
         if result.sticky:
-            message = f"（持续）{message}"
+            message = f"[持续] {message}"
         
         # 创建告警
         alert = Alert(
@@ -168,7 +163,7 @@ class Reporter:
         
         # 试运行模式
         if self.dry_run:
-            logger.info(f"[DRY-RUN] 告警: {alert.to_json()}")
+            logger.info(f"[DRY-RUN] {alert.observer_name}: {alert.message}")
             return
         
         # 实际上报
@@ -275,5 +270,6 @@ class Reporter:
             except Exception as e:
                 logger.error(f"写入 syslog 失败: {e}")
         
-        # 日志输出不截断，完整显示消息
-        logger.info(f"告警已上报: [{alert.level.value}] {alert.observer_name}: {alert.message}")
+        # 简洁的日志输出
+        level_tag = alert.level.value.upper()
+        logger.info(f"[{level_tag}] {alert.observer_name}: {alert.message}")

@@ -48,20 +48,20 @@ class Scheduler:
         
         for name, obs_config in observers_config.items():
             if not obs_config.get('enabled', True):
-                logger.info(f"观察点 {name} 已禁用，跳过")
+                logger.debug(f"跳过禁用的观察点: {name}")
                 continue
             
             obs_class = observer_classes.get(name)
             if obs_class is None:
-                logger.warning(f"未找到观察点类: {name}")
+                logger.warning(f"未知观察点: {name}")
                 continue
             
             try:
                 observer = obs_class(name, obs_config)
                 self.register(observer)
-                logger.info(f"观察点 {name} 已注册，间隔: {observer.get_interval()}s")
+                logger.debug(f"注册: {name} (间隔 {observer.get_interval()}s)")
             except Exception as e:
-                logger.error(f"初始化观察点 {name} 失败: {e}")
+                logger.error(f"初始化失败 {name}: {e}")
     
     def _get_observer_classes(self) -> Dict[str, type]:
         """获取所有观察点类的映射"""
@@ -103,7 +103,7 @@ class Scheduler:
     def start(self):
         """启动调度器"""
         self._running = True
-        logger.info(f"调度器启动，已注册 {len(self._observers)} 个观察点")
+        logger.info(f"调度器启动 ({len(self._observers)} 个观察点)")
         
         # 主循环
         while self._running:
@@ -123,7 +123,7 @@ class Scheduler:
                             self.reporter.report(result)
                         
                     except Exception as e:
-                        logger.error(f"观察点 {observer.name} 执行失败: {e}")
+                        logger.error(f"[{observer.name}] 执行失败: {e}")
                     
                     # 更新下次执行时间
                     next_run = now + observer.get_interval()
@@ -140,13 +140,13 @@ class Scheduler:
     def stop(self):
         """停止调度器"""
         self._running = False
-        logger.info("调度器正在停止...")
+        logger.info("调度器停止中...")
         
         # 清理所有观察点
         for observer, _ in self._observers:
             try:
                 observer.cleanup()
             except Exception as e:
-                logger.error(f"清理观察点 {observer.name} 失败: {e}")
+                logger.error(f"[{observer.name}] 清理失败: {e}")
         
         logger.info("调度器已停止")

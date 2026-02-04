@@ -196,6 +196,13 @@ class ArrayPanel(tk.Frame):
         if status.last_refresh:
             text += f" | 上次刷新: {status.last_refresh.strftime('%H:%M:%S')}"
         
+        # 添加元信息（如果有错误）
+        meta = status.observer_status.get('_meta', {})
+        if meta.get('error'):
+            text += f" | ⚠ {meta['error']}"
+        elif meta.get('alerts_count', 0) > 0:
+            text += f" | 告警日志: {meta['alerts_count']}条"
+        
         return text
     
     def _update_observer_status(self, observer_status: Dict[str, Dict[str, str]]):

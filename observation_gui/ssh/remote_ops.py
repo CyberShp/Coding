@@ -280,7 +280,7 @@ class RemoteOperations:
         获取各观察点的当前状态
         
         Returns:
-            观察点状态字典
+            观察点状态字典，包含 _meta 元信息
         """
         # 尝试读取状态文件或执行命令获取
         # 这里简化为从告警日志分析最近状态
@@ -295,35 +295,62 @@ class RemoteOperations:
             'cmd_response': {'status': 'unknown', 'message': ''},
             'sig_monitor': {'status': 'unknown', 'message': ''},
             'sensitive_info': {'status': 'unknown', 'message': ''},
+            '_meta': {'log_file_exists': False, 'alerts_count': 0, 'error': None},
         }
+        
+        if not self.connector.is_connected():
+            status['_meta']['error'] = '未连接'
+            return status
+        
+        # 检查告警日志文件是否存在
+        ret, out, _ = self.connector.execute(f"test -f {self.log_path} && echo 'exists'")
+        log_exists = 'exists' in out
+        status['_meta']['log_file_exists'] = log_exists
+        
+        if not log_exists:
+            # 文件不存在，可能 agent 还没产生告警，或输出模式不是 file
+            # 检查 agent 是否运行
+            ret, out, _ = self.connector.execute("pgrep -f 'python.*observation_points'")
+            if ret == 0 and out.strip():
+                # agent 运行中但没有告警文件，可能是刚启动或没有告警
+                status['_meta']['error'] = '告警日志文件尚未创建'
+            else:
+                status['_meta']['error'] = 'Agent 未运行'
+            return status
         
         # 获取最近的告警
         result = self.fetch_alerts()
         
         if result['error']:
+            status['_meta']['error'] = result['error']
             return status
         
-        # 分析告警，更新状态
-        for alert in result['alerts'][-50:]:  # 只看最近50条
+        alerts = result['alerts']
+        status['_meta']['alerts_count'] = len(alerts)
+        
+        # 分析告警，更新状态（只看最近100条）
+        for alert in alerts[-100:]:
             observer_name = alert.get('observer_name', '')
             level = alert.get('level', 'info')
             message = alert.get('message', '')
             
-            if observer_name in status:
+            if observer_name in status and observer_name != '_meta':
                 if level in ('error', 'critical'):
                     status[observer_name] = {
                         'status': 'error',
-                        'message': message[:100],
+                        'message': message[:200],
                     }
                 elif level == 'warning':
                     if status[observer_name]['status'] != 'error':
                         status[observer_name] = {
                             'status': 'warning',
-                            'message': message[:100],
+                            'message': message[:200],
                         }
         
         # 没有告警的观察点标记为正常
         for name, info in status.items():
+            if name == '_meta':
+                continue
             if info['status'] == 'unknown':
                 status[name] = {'status': 'ok', 'message': '正常'}
         

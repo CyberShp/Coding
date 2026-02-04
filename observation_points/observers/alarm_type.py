@@ -2,8 +2,13 @@
 AlarmType 监测观察点
 
 监测 /OSM/log/cur_debug/messages 日志中的 alarm type 相关事件。
-- alarm type(0): 告警产生
-- alarm type(1): 告警恢复（从活跃告警中剔除）
+
+告警逻辑：
+- 所有 alarm type 条目都有 "send alarm" 或 "resume alarm" 字样
+- "send alarm" = 告警上报（加入活跃告警）
+- "resume alarm" = 告警恢复（从活跃告警中移除）
+- alarm type(0) = 告警上报
+- alarm type(1) = 事件生成
 """
 
 import logging
@@ -26,9 +31,10 @@ class AlarmTypeObserver(BaseObserver):
     功能：
     - 监测 messages 日志中的 alarm type 事件
     - 提取 alarm type、alarm name、alarm id、时间戳
-    - alarm type(0) = 产生告警，alarm type(1) = 告警恢复
-    - 告警恢复时从活跃告警中剔除
-    - 打印累计事件个数和最近5次活跃告警详情
+    - 根据 "send alarm" / "resume alarm" 判断上报或恢复
+    - 活跃告警清晰标记 id 和 name
+    - 最近5次告警标记是否已恢复
+    - 无新告警时不输出例行日志
     """
     
     # 提取 alarm type(X) 的正则
@@ -39,6 +45,10 @@ class AlarmTypeObserver(BaseObserver):
     
     # 提取 alarm id(0xXXXXXX) 的正则
     ALARM_ID_PATTERN = re.compile(r'alarm\s*id\s*\(\s*(0x[0-9a-fA-F]+|[0-9a-fA-F]+)\s*\)', re.IGNORECASE)
+    
+    # 检测 send alarm / resume alarm
+    SEND_ALARM_PATTERN = re.compile(r'send\s+alarm', re.IGNORECASE)
+    RESUME_ALARM_PATTERN = re.compile(r'resume\s+alarm', re.IGNORECASE)
     
     # 日志时间戳格式
     TIMESTAMP_PATTERNS = [
@@ -59,13 +69,13 @@ class AlarmTypeObserver(BaseObserver):
         self._first_run = True
         
         # 统计数据
-        self._total_count = 0  # 累计告警产生次数（不含恢复）
-        self._recovered_count = 0  # 累计告警恢复次数
+        self._total_send_count = 0     # 累计告警上报次数
+        self._total_resume_count = 0   # 累计告警恢复次数
         
         # 活跃告警（未恢复）：alarm_id -> event_info
         self._active_alarms = OrderedDict()  # type: OrderedDict[str, Dict[str, Any]]
         
-        # 最近的告警事件（用于展示，包含已恢复的历史）
+        # 最近的告警事件（用于展示，包含 recovered 标记）
         self._recent_events = deque(maxlen=self.recent_count)  # type: deque
     
     def check(self) -> ObserverResult:
@@ -84,8 +94,8 @@ class AlarmTypeObserver(BaseObserver):
         self._file_position = new_position
         
         # 本次检测到的事件
-        new_alarms = []  # 新产生的告警
-        recovered_alarms = []  # 恢复的告警
+        new_send_alarms = []     # 新上报的告警
+        new_resume_alarms = []   # 新恢复的告警
         
         # 分析每一行
         for line in new_lines:
@@ -93,76 +103,92 @@ class AlarmTypeObserver(BaseObserver):
             if event is None:
                 continue
             
-            alarm_type = event['alarm_type']
             alarm_id = event['alarm_id']
+            is_send = event['is_send']
+            is_resume = event['is_resume']
             
-            if alarm_type == 0:
-                # 告警产生
-                self._total_count += 1
-                new_alarms.append(event)
+            if is_send:
+                # 告警上报
+                self._total_send_count += 1
+                new_send_alarms.append(event)
+                
+                # 添加到最近事件（标记未恢复）
+                event['recovered'] = False
                 self._recent_events.append(event)
                 
-                # 加入活跃告警（用 alarm_id 作为 key）
+                # 加入活跃告警
                 if alarm_id:
                     self._active_alarms[alarm_id] = event
                 
                 logger.warning(
-                    f"告警产生: name={event['alarm_name']}, id={alarm_id}, time={event['timestamp']}"
+                    f"[告警上报] name={event['alarm_name']} id={alarm_id}"
                 )
             
-            elif alarm_type == 1:
+            elif is_resume:
                 # 告警恢复
-                self._recovered_count += 1
-                recovered_alarms.append(event)
+                self._total_resume_count += 1
+                new_resume_alarms.append(event)
                 
-                # 从活跃告警中剔除
+                # 从活跃告警中移除
                 if alarm_id and alarm_id in self._active_alarms:
-                    removed = self._active_alarms.pop(alarm_id)
-                    # 同时从最近事件中剔除
-                    self._remove_from_recent(alarm_id)
-                    logger.info(
-                        f"告警恢复: name={event['alarm_name']}, id={alarm_id}, "
-                        f"原告警时间={removed['timestamp']}"
-                    )
+                    self._active_alarms.pop(alarm_id)
+                    # 标记最近事件中的该告警为已恢复
+                    self._mark_as_recovered(alarm_id)
+                    logger.info(f"[告警恢复] name={event['alarm_name']} id={alarm_id}")
                 else:
-                    logger.info(
-                        f"告警恢复（无匹配）: name={event['alarm_name']}, id={alarm_id}"
-                    )
+                    logger.info(f"[告警恢复] name={event['alarm_name']} id={alarm_id} (无匹配活跃告警)")
         
         # 构建结果
         active_list = list(self._active_alarms.values())
         recent_list = list(self._recent_events)
         
         details = {
-            'total_count': self._total_count,
-            'recovered_count': self._recovered_count,
+            'total_send_count': self._total_send_count,
+            'total_resume_count': self._total_resume_count,
             'active_count': len(self._active_alarms),
-            'new_alarms': new_alarms,
-            'recovered_alarms': recovered_alarms,
+            'new_send_alarms': new_send_alarms,
+            'new_resume_alarms': new_resume_alarms,
             'active_alarms': active_list,
             'recent_events': recent_list,
             'log_path': str(self.log_path),
         }
         
-        if new_alarms:
-            # 格式化最近活跃告警
+        # 只有有新事件时才产生告警
+        if new_send_alarms or new_resume_alarms:
+            # 格式化消息
+            message_parts = []
+            
+            if new_send_alarms:
+                message_parts.append(f"新上报 {len(new_send_alarms)} 条")
+            if new_resume_alarms:
+                message_parts.append(f"恢复 {len(new_resume_alarms)} 条")
+            
+            # 活跃告警信息
+            active_str = self._format_active_alarms()
             recent_str = self._format_recent_events()
+            
             message = (
-                f"告警统计: 累计 {self._total_count} 次，本次新增 {len(new_alarms)} 次，"
-                f"活跃 {len(self._active_alarms)} 个。{recent_str}"
+                f"[Alarm] {', '.join(message_parts)}; "
+                f"累计上报 {self._total_send_count}, 累计恢复 {self._total_resume_count}, "
+                f"当前活跃 {len(self._active_alarms)} 个"
             )
+            
+            if active_str:
+                message += f"\n  活跃告警: {active_str}"
+            if recent_str:
+                message += f"\n  最近{len(self._recent_events)}条: {recent_str}"
             
             return self.create_result(
                 has_alert=True,
-                alert_level=AlertLevel.WARNING,
+                alert_level=AlertLevel.WARNING if new_send_alarms else AlertLevel.INFO,
                 message=message,
                 details=details,
             )
         
-        # 即使没有新告警，也报告当前状态
+        # 无新告警时不输出（has_alert=False，不会被 reporter 打印）
         return self.create_result(
             has_alert=False,
-            message=f"AlarmType 检查正常（累计: {self._total_count}，活跃: {len(self._active_alarms)}）",
+            message="",  # 无新告警，不需要消息
             details=details,
         )
     
@@ -175,9 +201,18 @@ class AlarmTypeObserver(BaseObserver):
         
         alarm_type = int(type_match.group(1))
         
+        # 检测是 send alarm 还是 resume alarm
+        is_send = bool(self.SEND_ALARM_PATTERN.search(line))
+        is_resume = bool(self.RESUME_ALARM_PATTERN.search(line))
+        
+        # 如果都不是，跳过
+        if not is_send and not is_resume:
+            logger.debug(f"跳过无 send/resume 标记的行: {line[:100]}")
+            return None
+        
         # 提取 alarm name
         name_match = self.ALARM_NAME_PATTERN.search(line)
-        alarm_name = name_match.group(1).strip() if name_match else None
+        alarm_name = name_match.group(1).strip() if name_match else '未知'
         
         # 提取 alarm id
         id_match = self.ALARM_ID_PATTERN.search(line)
@@ -186,19 +221,14 @@ class AlarmTypeObserver(BaseObserver):
         # 提取时间戳
         timestamp = self._parse_timestamp(line)
         
-        # 调试：如果关键字段提取失败，记录警告
-        if alarm_name is None or alarm_id is None:
-            logger.debug(
-                f"字段提取不完整: type={alarm_type}, name={alarm_name}, id={alarm_id}, "
-                f"原始行(前200字符)={line[:200]}"
-            )
-        
         return {
             'timestamp': timestamp or datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
             'alarm_type': alarm_type,
             'alarm_name': alarm_name,
             'alarm_id': alarm_id,
-            'line': line,  # 保留完整原始行，不截断
+            'is_send': is_send,
+            'is_resume': is_resume,
+            'line': line,
         }
     
     def _parse_timestamp(self, line: str) -> Optional[str]:
@@ -209,26 +239,37 @@ class AlarmTypeObserver(BaseObserver):
                 return match.group(1)
         return None
     
-    def _remove_from_recent(self, alarm_id: str):
-        """从最近事件列表中移除指定 alarm_id 的事件"""
-        # deque 不支持直接删除，需要重建
-        new_recent = deque(maxlen=self.recent_count)
+    def _mark_as_recovered(self, alarm_id: str):
+        """将最近事件中指定 alarm_id 的告警标记为已恢复"""
         for event in self._recent_events:
-            if event.get('alarm_id') != alarm_id:
-                new_recent.append(event)
-        self._recent_events = new_recent
+            if event.get('alarm_id') == alarm_id:
+                event['recovered'] = True
+    
+    def _format_active_alarms(self) -> str:
+        """格式化活跃告警列表"""
+        if not self._active_alarms:
+            return ""
+        
+        items = []
+        for alarm_id, event in self._active_alarms.items():
+            name = event.get('alarm_name', '未知')
+            items.append(f"{name}({alarm_id})")
+        
+        return "; ".join(items)
     
     def _format_recent_events(self) -> str:
-        """格式化最近活跃告警列表"""
+        """格式化最近事件列表（标记是否已恢复）"""
         if not self._recent_events:
             return ""
         
         items = []
-        for i, event in enumerate(self._recent_events, 1):
-            name = event.get('alarm_name') or '未知'
-            alarm_id = event.get('alarm_id') or '未知'
+        for event in self._recent_events:
+            name = event.get('alarm_name', '未知')
+            alarm_id = event.get('alarm_id', '?')
             ts = event.get('timestamp', '')
-            items.append(f"#{i}[{ts} name={name} id={alarm_id}]")
+            recovered = event.get('recovered', False)
+            
+            status = "[已恢复]" if recovered else "[活跃]"
+            items.append(f"{status} {name}({alarm_id}) @{ts}")
         
-        # 使用分号分隔，更清晰
-        return f"最近{len(items)}次: " + "; ".join(items)
+        return "; ".join(items)

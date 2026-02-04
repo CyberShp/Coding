@@ -1,0 +1,261 @@
+<template>
+  <div class="alert-center">
+    <el-card>
+      <template #header>
+        <div class="card-header">
+          <span>告警中心</span>
+          <div class="filter-actions">
+            <el-select v-model="filters.level" placeholder="告警级别" clearable style="width: 120px">
+              <el-option label="信息" value="info" />
+              <el-option label="警告" value="warning" />
+              <el-option label="错误" value="error" />
+              <el-option label="严重" value="critical" />
+            </el-select>
+            <el-select v-model="filters.observer" placeholder="观察点" clearable style="width: 140px">
+              <el-option v-for="(name, key) in OBSERVER_NAMES" :key="key" :label="name" :value="key" />
+            </el-select>
+            <el-select v-model="filters.hours" style="width: 120px">
+              <el-option label="最近 1 小时" :value="1" />
+              <el-option label="最近 6 小时" :value="6" />
+              <el-option label="最近 24 小时" :value="24" />
+              <el-option label="最近 7 天" :value="168" />
+            </el-select>
+            <el-button type="primary" @click="loadAlerts">
+              <el-icon><Search /></el-icon>
+              查询
+            </el-button>
+          </div>
+        </div>
+      </template>
+
+      <!-- Stats -->
+      <el-row :gutter="20" class="stats-row">
+        <el-col :span="6">
+          <div class="stat-item">
+            <div class="stat-value">{{ stats?.total || 0 }}</div>
+            <div class="stat-label">总告警数</div>
+          </div>
+        </el-col>
+        <el-col :span="6">
+          <div class="stat-item">
+            <div class="stat-value error-text">{{ (stats?.by_level?.error || 0) + (stats?.by_level?.critical || 0) }}</div>
+            <div class="stat-label">错误</div>
+          </div>
+        </el-col>
+        <el-col :span="6">
+          <div class="stat-item">
+            <div class="stat-value warning-text">{{ stats?.by_level?.warning || 0 }}</div>
+            <div class="stat-label">警告</div>
+          </div>
+        </el-col>
+        <el-col :span="6">
+          <div class="stat-item">
+            <div class="stat-value info-text">{{ stats?.by_level?.info || 0 }}</div>
+            <div class="stat-label">信息</div>
+          </div>
+        </el-col>
+      </el-row>
+
+      <!-- Alert Table -->
+      <el-table :data="alerts" v-loading="loading" stripe>
+        <el-table-column type="expand">
+          <template #default="{ row }">
+            <div class="alert-detail">
+              <p><strong>完整消息:</strong></p>
+              <pre>{{ row.message }}</pre>
+              <p><strong>详细信息:</strong></p>
+              <pre>{{ JSON.stringify(row.details, null, 2) }}</pre>
+            </div>
+          </template>
+        </el-table-column>
+        <el-table-column label="时间" width="180">
+          <template #default="{ row }">
+            {{ formatDateTime(row.timestamp) }}
+          </template>
+        </el-table-column>
+        <el-table-column label="级别" width="80">
+          <template #default="{ row }">
+            <el-tag :type="getLevelType(row.level)" size="small">
+              {{ getLevelText(row.level) }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="阵列" width="120" prop="array_id" />
+        <el-table-column label="观察点" width="120">
+          <template #default="{ row }">
+            {{ OBSERVER_NAMES[row.observer_name] || row.observer_name }}
+          </template>
+        </el-table-column>
+        <el-table-column label="消息" prop="message" show-overflow-tooltip />
+      </el-table>
+
+      <!-- Pagination -->
+      <el-pagination
+        v-model:current-page="pagination.page"
+        v-model:page-size="pagination.size"
+        :total="pagination.total"
+        :page-sizes="[20, 50, 100]"
+        layout="total, sizes, prev, pager, next"
+        class="pagination"
+        @size-change="loadAlerts"
+        @current-change="loadAlerts"
+      />
+    </el-card>
+  </div>
+</template>
+
+<script setup>
+import { ref, reactive, onMounted } from 'vue'
+import { Search } from '@element-plus/icons-vue'
+import api from '../api'
+
+const loading = ref(false)
+const alerts = ref([])
+const stats = ref(null)
+
+const filters = reactive({
+  level: '',
+  observer: '',
+  hours: 24,
+})
+
+const pagination = reactive({
+  page: 1,
+  size: 20,
+  total: 0,
+})
+
+const OBSERVER_NAMES = {
+  error_code: '误码监测',
+  link_status: '链路状态',
+  card_recovery: '卡修复',
+  alarm_type: 'AlarmType',
+  memory_leak: '内存泄漏',
+  cpu_usage: 'CPU利用率',
+  cmd_response: '命令响应',
+  sig_monitor: 'sig信号',
+  sensitive_info: '敏感信息',
+}
+
+function getLevelType(level) {
+  const types = {
+    info: 'info',
+    warning: 'warning',
+    error: 'danger',
+    critical: 'danger',
+  }
+  return types[level] || 'info'
+}
+
+function getLevelText(level) {
+  const texts = {
+    info: '信息',
+    warning: '警告',
+    error: '错误',
+    critical: '严重',
+  }
+  return texts[level] || level
+}
+
+function formatDateTime(timestamp) {
+  if (!timestamp) return '-'
+  return new Date(timestamp).toLocaleString('zh-CN')
+}
+
+async function loadAlerts() {
+  loading.value = true
+  try {
+    const params = {
+      hours: filters.hours,
+      limit: pagination.size,
+      offset: (pagination.page - 1) * pagination.size,
+    }
+    if (filters.level) params.level = filters.level
+    if (filters.observer) params.observer_name = filters.observer
+
+    const response = await api.getAlerts(params)
+    alerts.value = response.data
+    
+    // Load stats
+    const statsResponse = await api.getAlertStats(filters.hours)
+    stats.value = statsResponse.data
+    pagination.total = statsResponse.data.total
+  } finally {
+    loading.value = false
+  }
+}
+
+onMounted(loadAlerts)
+</script>
+
+<style scoped>
+.alert-center {
+  padding: 20px;
+}
+
+.card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.filter-actions {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.stats-row {
+  margin-bottom: 20px;
+  padding: 16px 0;
+  border-bottom: 1px solid #ebeef5;
+}
+
+.stat-item {
+  text-align: center;
+}
+
+.stat-value {
+  font-size: 28px;
+  font-weight: bold;
+  color: #303133;
+}
+
+.stat-label {
+  font-size: 14px;
+  color: #909399;
+}
+
+.error-text {
+  color: #f56c6c;
+}
+
+.warning-text {
+  color: #e6a23c;
+}
+
+.info-text {
+  color: #909399;
+}
+
+.alert-detail {
+  padding: 16px;
+  background: #f5f7fa;
+}
+
+.alert-detail pre {
+  white-space: pre-wrap;
+  word-break: break-all;
+  font-size: 12px;
+  background: #fff;
+  padding: 8px;
+  border-radius: 4px;
+}
+
+.pagination {
+  margin-top: 20px;
+  justify-content: flex-end;
+}
+</style>

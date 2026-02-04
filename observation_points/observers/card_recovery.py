@@ -28,8 +28,8 @@ class CardRecoveryObserver(BaseObserver):
     - 记录最近3次修复的时间和 PCIe 槽位号
     """
     
-    # PCIe 槽位号提取正则：dev(0:x.0) 或 top(0:x.0)
-    PCIE_SLOT_PATTERN = re.compile(r'(?:dev|top)\(0:(\d+)\.0\)', re.IGNORECASE)
+    # PCIe 槽位号提取正则：完整提取 dev(0:x.0) 或 top(0:x.0) 格式
+    PCIE_SLOT_PATTERN = re.compile(r'((?:dev|top)\(0:\d+\.0\))', re.IGNORECASE)
     
     # 日志时间戳格式
     TIMESTAMP_PATTERNS = [
@@ -84,7 +84,7 @@ class CardRecoveryObserver(BaseObserver):
                 event = self._parse_event(line)
                 self._recent_events.append(event)
                 
-                logger.warning(f"检测到卡修复事件: slot={event['slot']} time={event['timestamp']}")
+                logger.warning(f"[CardRecovery] slot={event['slot']} @{event['timestamp']}")
         
         # 构建结果
         details = {

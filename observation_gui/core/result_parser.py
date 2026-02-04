@@ -141,6 +141,10 @@ class ResultParser:
         result = []
         
         for name, info in status.items():
+            # 跳过元信息
+            if name == '_meta':
+                continue
+            
             state = info.get('status', 'unknown')
             message = info.get('message', '')
             
@@ -154,6 +158,19 @@ class ResultParser:
             })
         
         return result
+    
+    @classmethod
+    def get_meta_info(cls, status: Dict[str, Dict[str, str]]) -> Dict[str, Any]:
+        """
+        获取元信息
+        
+        Args:
+            status: 观察点状态字典
+            
+        Returns:
+            元信息字典
+        """
+        return status.get('_meta', {})
     
     @classmethod
     def _get_status_color(cls, status: str) -> str:

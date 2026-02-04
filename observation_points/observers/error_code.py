@@ -218,7 +218,7 @@ class ErrorCodeObserver(BaseObserver):
                     })
                     logger.log(
                         logging.WARNING if cat_level in (AlertLevel.WARNING, AlertLevel.ERROR) else logging.INFO,
-                        f"端口 {port} {cat_name} {counter_name} 新增: {delta}"
+                        f"[ErrorCode] {port}.{counter_name} +{delta}"
                     )
             
             # 更新缓存
@@ -248,7 +248,7 @@ class ErrorCodeObserver(BaseObserver):
                 
                 if delta > self.threshold:
                     alerts.append(f"{device} {error_type} +{delta}")
-                    logger.warning(f"PCIe 设备 {device} 错误 {error_type} 新增: {delta}")
+                    logger.warning(f"[ErrorCode] PCIe {device} {error_type} +{delta}")
             
             self._last_pcie_errors[device] = errors
         
@@ -268,6 +268,9 @@ class ErrorCodeObserver(BaseObserver):
                 name = item.name
                 # 排除 lo 和虚拟接口
                 if name == 'lo' or name.startswith('veth') or name.startswith('docker'):
+                    continue
+                # 排除管理口和 eno 接口
+                if name.startswith('eth-m') or name.startswith('eno'):
                     continue
                 ports.append(name)
         

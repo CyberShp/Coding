@@ -1,0 +1,263 @@
+<template>
+  <div class="arrays-page">
+    <el-card>
+      <template #header>
+        <div class="card-header">
+          <span>阵列管理</span>
+          <el-button type="primary" @click="showAddDialog">
+            <el-icon><Plus /></el-icon>
+            添加阵列
+          </el-button>
+        </div>
+      </template>
+
+      <el-table :data="arrayStore.arrays" v-loading="arrayStore.loading" stripe>
+        <el-table-column label="状态" width="80">
+          <template #default="{ row }">
+            <el-tag :type="getStateType(row.state)" size="small">
+              {{ getStateText(row.state) }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column prop="name" label="名称" />
+        <el-table-column prop="host" label="地址" />
+        <el-table-column prop="port" label="端口" width="80" />
+        <el-table-column prop="username" label="用户名" width="100" />
+        <el-table-column prop="folder" label="分组" />
+        <el-table-column label="Agent" width="100">
+          <template #default="{ row }">
+            <el-tag v-if="row.agent_running" type="success" size="small">运行中</el-tag>
+            <el-tag v-else-if="row.agent_deployed" type="warning" size="small">已部署</el-tag>
+            <el-tag v-else type="info" size="small">未部署</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="操作" width="280">
+          <template #default="{ row }">
+            <el-button-group>
+              <el-button 
+                v-if="row.state !== 'connected'"
+                size="small"
+                type="primary"
+                @click="handleConnect(row)"
+              >
+                连接
+              </el-button>
+              <el-button 
+                v-else
+                size="small"
+                @click="handleDisconnect(row)"
+              >
+                断开
+              </el-button>
+              <el-button 
+                size="small"
+                @click="$router.push(`/arrays/${row.array_id}`)"
+              >
+                详情
+              </el-button>
+              <el-button 
+                size="small"
+                type="danger"
+                @click="handleDelete(row)"
+              >
+                删除
+              </el-button>
+            </el-button-group>
+          </template>
+        </el-table-column>
+      </el-table>
+    </el-card>
+
+    <!-- Add Array Dialog -->
+    <el-dialog v-model="dialogVisible" title="添加阵列" width="500px">
+      <el-form :model="form" :rules="rules" ref="formRef" label-width="80px">
+        <el-form-item label="名称" prop="name">
+          <el-input v-model="form.name" placeholder="阵列名称" />
+        </el-form-item>
+        <el-form-item label="地址" prop="host">
+          <el-input v-model="form.host" placeholder="IP 地址或主机名" />
+        </el-form-item>
+        <el-form-item label="端口" prop="port">
+          <el-input-number v-model="form.port" :min="1" :max="65535" />
+        </el-form-item>
+        <el-form-item label="用户名" prop="username">
+          <el-input v-model="form.username" />
+        </el-form-item>
+        <el-form-item label="密码" prop="password">
+          <el-input v-model="form.password" type="password" show-password placeholder="SSH 密码" />
+        </el-form-item>
+        <el-form-item label="密钥路径">
+          <el-input v-model="form.key_path" placeholder="可选：SSH 密钥文件路径" />
+        </el-form-item>
+        <el-form-item label="分组">
+          <el-input v-model="form.folder" placeholder="可选：分组名称" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="dialogVisible = false">取消</el-button>
+        <el-button type="primary" @click="handleAdd" :loading="submitting">确定</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- Connect Dialog -->
+    <el-dialog v-model="connectDialogVisible" title="连接阵列" width="400px">
+      <el-form :model="connectForm">
+        <el-form-item label="密码">
+          <el-input 
+            v-model="connectForm.password" 
+            type="password" 
+            show-password 
+            placeholder="输入 SSH 密码（如果已配置密钥可留空）" 
+          />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="connectDialogVisible = false">取消</el-button>
+        <el-button type="primary" @click="doConnect" :loading="connecting">连接</el-button>
+      </template>
+    </el-dialog>
+  </div>
+</template>
+
+<script setup>
+import { ref, reactive, onMounted } from 'vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { Plus } from '@element-plus/icons-vue'
+import { useArrayStore } from '../stores/arrays'
+
+const arrayStore = useArrayStore()
+
+const dialogVisible = ref(false)
+const connectDialogVisible = ref(false)
+const submitting = ref(false)
+const connecting = ref(false)
+const formRef = ref(null)
+const currentArray = ref(null)
+
+const form = reactive({
+  name: '',
+  host: '',
+  port: 22,
+  username: 'root',
+  password: '',
+  key_path: '',
+  folder: '',
+})
+
+const connectForm = reactive({
+  password: '',
+})
+
+const rules = {
+  name: [{ required: true, message: '请输入阵列名称', trigger: 'blur' }],
+  host: [{ required: true, message: '请输入地址', trigger: 'blur' }],
+  username: [{ required: true, message: '请输入用户名', trigger: 'blur' }],
+}
+
+function getStateType(state) {
+  const types = {
+    connected: 'success',
+    connecting: 'warning',
+    disconnected: 'info',
+    error: 'danger',
+  }
+  return types[state] || 'info'
+}
+
+function getStateText(state) {
+  const texts = {
+    connected: '已连接',
+    connecting: '连接中',
+    disconnected: '未连接',
+    error: '错误',
+  }
+  return texts[state] || state
+}
+
+function showAddDialog() {
+  Object.assign(form, {
+    name: '',
+    host: '',
+    port: 22,
+    username: 'root',
+    password: '',
+    key_path: '',
+    folder: '',
+  })
+  dialogVisible.value = true
+}
+
+async function handleAdd() {
+  await formRef.value.validate()
+  
+  submitting.value = true
+  try {
+    await arrayStore.createArray(form)
+    ElMessage.success('添加成功')
+    dialogVisible.value = false
+  } catch (error) {
+    ElMessage.error(error.response?.data?.detail || '添加失败')
+  } finally {
+    submitting.value = false
+  }
+}
+
+function handleConnect(row) {
+  currentArray.value = row
+  connectForm.password = ''
+  connectDialogVisible.value = true
+}
+
+async function doConnect() {
+  connecting.value = true
+  try {
+    await arrayStore.connectArray(currentArray.value.array_id, connectForm.password)
+    ElMessage.success('连接成功')
+    connectDialogVisible.value = false
+  } catch (error) {
+    ElMessage.error(error.response?.data?.detail || '连接失败')
+  } finally {
+    connecting.value = false
+  }
+}
+
+async function handleDisconnect(row) {
+  try {
+    await arrayStore.disconnectArray(row.array_id)
+    ElMessage.success('已断开连接')
+  } catch (error) {
+    ElMessage.error('断开连接失败')
+  }
+}
+
+async function handleDelete(row) {
+  await ElMessageBox.confirm(
+    `确定要删除阵列 "${row.name}" 吗？`,
+    '确认删除',
+    { type: 'warning' }
+  )
+  
+  try {
+    await arrayStore.deleteArray(row.array_id)
+    ElMessage.success('删除成功')
+  } catch (error) {
+    ElMessage.error('删除失败')
+  }
+}
+
+onMounted(() => {
+  arrayStore.fetchArrays()
+})
+</script>
+
+<style scoped>
+.arrays-page {
+  padding: 20px;
+}
+
+.card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+</style>

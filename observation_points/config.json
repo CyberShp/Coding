@@ -39,13 +39,18 @@
       "log_paths": ["/OSM/log/cur_debug/messages", "/var/log/messages"],
       "max_lines_per_check": 500,
       "cooldown_seconds": 300,
-      "patterns": [
-        "password\\s*[=:]\\s*\\S+",
-        "passwd\\s*[=:]\\s*\\S+",
-        "nqn\\.[a-zA-Z0-9.\\-:]+",
-        "iqn\\.[a-zA-Z0-9.\\-:]+",
-        "secret\\s*[=:]\\s*\\S+",
-        "token\\s*[=:]\\s*\\S+"
+      "patterns": [],
+      "whitelist_patterns": [
+        "password_file",
+        "password_policy",
+        "password_length",
+        "password_check",
+        "password_hash"
+      ],
+      "whitelist_paths": [
+        "/etc/passwd",
+        "/etc/shadow",
+        "passwd.txt"
       ]
     },
     "alarm_type": {

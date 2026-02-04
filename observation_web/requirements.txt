@@ -1,0 +1,25 @@
+# FastAPI Web Framework
+fastapi>=0.68.0
+uvicorn[standard]>=0.15.0
+
+# SSH Connection
+paramiko>=2.7.0
+
+# Database
+sqlalchemy>=1.4.0
+aiosqlite>=0.17.0
+
+# Data validation
+pydantic>=1.8.0
+
+# Async support
+aiofiles>=0.8.0
+
+# WebSocket
+websockets>=10.0
+
+# Python 3.6 compatibility
+dataclasses;python_version<"3.7"
+
+# CORS support
+python-multipart>=0.0.5
