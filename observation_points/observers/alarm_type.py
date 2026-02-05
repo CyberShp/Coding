@@ -7,7 +7,7 @@ AlarmType 监测观察点
 - 所有 alarm type 条目都有 "send alarm" 或 "resume alarm" 字样
 - "send alarm" = 告警上报（加入活跃告警）
 - "resume alarm" = 告警恢复（从活跃告警中移除）
-- alarm type(0) = 告警上报
+- alarm type(0) = 历史告警上报，仅通知，不加入活跃告警，不会有 resume
 - alarm type(1) = 事件生成
 """
 
@@ -112,17 +112,29 @@ class AlarmTypeObserver(BaseObserver):
                 self._total_send_count += 1
                 new_send_alarms.append(event)
                 
-                # 添加到最近事件（标记未恢复）
-                event['recovered'] = False
-                self._recent_events.append(event)
+                alarm_type = event.get('alarm_type', -1)
                 
-                # 加入活跃告警
-                if alarm_id:
-                    self._active_alarms[alarm_id] = event
-                
-                logger.warning(
-                    f"[告警上报] name={event['alarm_name']} id={alarm_id}"
-                )
+                if alarm_type == 0:
+                    # alarm type(0) 为历史告警上报，仅通知，不加入活跃告警
+                    event['recovered'] = True  # 标记为"已处理"（不期待恢复）
+                    event['is_history_report'] = True  # 标记为历史告警上报
+                    self._recent_events.append(event)
+                    logger.info(
+                        f"[历史告警上报] name={event['alarm_name']} id={alarm_id}"
+                    )
+                else:
+                    # 普通告警上报，加入活跃告警
+                    event['recovered'] = False
+                    event['is_history_report'] = False
+                    self._recent_events.append(event)
+                    
+                    # 加入活跃告警
+                    if alarm_id:
+                        self._active_alarms[alarm_id] = event
+                    
+                    logger.warning(
+                        f"[告警上报] name={event['alarm_name']} id={alarm_id}"
+                    )
             
             elif is_resume:
                 # 告警恢复
@@ -268,8 +280,14 @@ class AlarmTypeObserver(BaseObserver):
             alarm_id = event.get('alarm_id', '?')
             ts = event.get('timestamp', '')
             recovered = event.get('recovered', False)
+            is_history_report = event.get('is_history_report', False)
             
-            status = "[已恢复]" if recovered else "[活跃]"
+            if is_history_report:
+                status = "[历史告警上报]"
+            elif recovered:
+                status = "[已恢复]"
+            else:
+                status = "[活跃]"
             items.append(f"{status} {name}({alarm_id}) @{ts}")
         
         return "; ".join(items)

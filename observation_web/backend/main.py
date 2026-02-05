@@ -9,10 +9,13 @@ import logging
 import sys
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from .config import get_config
+from .core.system_alert import sys_error, sys_warning
 from .db.database import init_db, create_tables
 from .api import arrays_router, alerts_router, query_router, ws_router
 from .api.system_alerts import router as system_alerts_router
@@ -53,6 +56,38 @@ async def lifespan(app: FastAPI):
     logger.info("SSH connections closed")
 
 
+class ErrorTrackingMiddleware(BaseHTTPMiddleware):
+    """Middleware to track errors and slow requests"""
+    
+    async def dispatch(self, request: Request, call_next):
+        import time
+        start_time = time.time()
+        
+        try:
+            response = await call_next(request)
+            
+            # Track slow requests (>5 seconds)
+            duration = time.time() - start_time
+            if duration > 5:
+                sys_warning(
+                    "http",
+                    f"Slow request: {request.method} {request.url.path}",
+                    {"duration_seconds": round(duration, 2), "status_code": response.status_code}
+                )
+            
+            return response
+            
+        except Exception as e:
+            # Log unhandled exceptions to system alerts
+            sys_error(
+                "http",
+                f"Unhandled exception: {request.method} {request.url.path}",
+                {"error": str(e), "path": str(request.url)},
+                exception=e
+            )
+            raise
+
+
 def create_app() -> FastAPI:
     """Create and configure FastAPI application"""
     config = get_config()
@@ -72,6 +107,23 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    
+    # Add error tracking middleware
+    app.add_middleware(ErrorTrackingMiddleware)
+    
+    # Global exception handler
+    @app.exception_handler(Exception)
+    async def global_exception_handler(request: Request, exc: Exception):
+        sys_error(
+            "api",
+            f"API error: {request.method} {request.url.path}",
+            {"error": str(exc), "path": str(request.url)},
+            exception=exc
+        )
+        return JSONResponse(
+            status_code=500,
+            content={"detail": f"Internal server error: {str(exc)}"}
+        )
     
     # Register routers
     app.include_router(arrays_router, prefix="/api")

@@ -221,16 +221,24 @@ function formatTime(timestamp) {
 }
 
 async function loadArrays() {
-  await arrayStore.fetchArrays()
+  try {
+    await arrayStore.fetchArrays()
+  } catch (error) {
+    console.error('Failed to load arrays:', error)
+  }
 }
 
 async function loadData() {
-  await Promise.all([
-    loadArrays(),
-    alertStore.fetchRecentAlerts(),
-    api.getAlertSummary().then(res => summary.value = res.data),
-    api.getAlertStats().then(res => stats.value = res.data),
-  ])
+  // Load data in parallel with individual error handling
+  // so one failure doesn't block others
+  const tasks = [
+    loadArrays().catch(e => console.error('Load arrays failed:', e)),
+    alertStore.fetchRecentAlerts().catch(e => console.error('Load alerts failed:', e)),
+    api.getAlertSummary().then(res => summary.value = res.data).catch(e => console.error('Load summary failed:', e)),
+    api.getAlertStats().then(res => stats.value = res.data).catch(e => console.error('Load stats failed:', e)),
+  ]
+  
+  await Promise.all(tasks)
 }
 
 onMounted(loadData)

@@ -50,6 +50,31 @@ async def list_arrays(
     return arrays
 
 
+@router.get("/statuses", response_model=List[ArrayStatus])
+async def list_array_statuses(
+    db: AsyncSession = Depends(get_db),
+    ssh_pool: SSHPool = Depends(get_ssh_pool),
+):
+    """Get all array statuses with connection state"""
+    result = await db.execute(select(ArrayModel))
+    arrays = result.scalars().all()
+    
+    statuses = []
+    for array in arrays:
+        status_obj = _get_array_status(array.array_id)
+        status_obj.name = array.name
+        status_obj.host = array.host
+        
+        conn = ssh_pool.get_connection(array.array_id)
+        if conn:
+            status_obj.state = conn.state
+            status_obj.last_error = conn.last_error
+        
+        statuses.append(status_obj)
+    
+    return statuses
+
+
 @router.post("", response_model=ArrayResponse, status_code=status.HTTP_201_CREATED)
 async def create_array(
     array: ArrayCreate,
@@ -319,7 +344,12 @@ async def refresh_array(
     db: AsyncSession = Depends(get_db),
     ssh_pool: SSHPool = Depends(get_ssh_pool),
 ):
-    """Refresh array status"""
+    """Refresh array status and sync alerts"""
+    from ..core.alert_store import get_alert_store
+    from ..models.alert import AlertCreate, AlertLevel
+    from .websocket import broadcast_alert
+    from ..core.system_alert import sys_error, sys_info
+    
     conn = ssh_pool.get_connection(array_id)
     
     if not conn or not conn.is_connected():
@@ -336,24 +366,68 @@ async def refresh_array(
     status_obj.agent_deployed = deployer.check_deployed()
     status_obj.agent_running = deployer.check_running()
     
-    # Get observer status from alerts.log
-    config = get_config()
+    # Get alerts from alerts.log
     content = conn.read_file(config.remote.agent_log_path)
     
+    new_alerts_count = 0
     if content:
-        # Parse recent alerts
-        alerts = []
-        for line in content.strip().split('\n')[-50:]:
+        # Parse alerts
+        parsed_alerts = []
+        for line in content.strip().split('\n'):
+            if not line.strip():
+                continue
             try:
                 alert = json.loads(line)
-                alerts.append(alert)
+                parsed_alerts.append(alert)
             except Exception:
                 pass
         
-        status_obj.recent_alerts = alerts
+        # Get existing alert timestamps to avoid duplicates
+        alert_store = get_alert_store()
+        existing_alerts = await alert_store.get_alerts(db, array_id=array_id, limit=500)
+        existing_timestamps = {a.timestamp.isoformat() for a in existing_alerts}
+        
+        # Filter and save new alerts
+        new_alerts = []
+        for alert in parsed_alerts:
+            timestamp_str = alert.get('timestamp', '')
+            if timestamp_str and timestamp_str not in existing_timestamps:
+                try:
+                    level_str = alert.get('level', 'info').lower()
+                    level = AlertLevel(level_str) if level_str in [l.value for l in AlertLevel] else AlertLevel.INFO
+                    
+                    alert_create = AlertCreate(
+                        array_id=array_id,
+                        observer_name=alert.get('observer_name', 'unknown'),
+                        level=level,
+                        message=alert.get('message', ''),
+                        details=alert.get('details', {}),
+                        timestamp=datetime.fromisoformat(timestamp_str.replace('Z', '+00:00').replace('+00:00', '')),
+                    )
+                    new_alerts.append(alert_create)
+                except Exception as e:
+                    sys_error("arrays", f"Failed to parse alert", {"error": str(e), "alert": alert})
+        
+        # Batch create new alerts
+        if new_alerts:
+            new_alerts_count = await alert_store.create_alerts_batch(db, new_alerts)
+            sys_info("arrays", f"Synced {new_alerts_count} new alerts for array {array_id}")
+            
+            # Broadcast new alerts via WebSocket
+            for alert in new_alerts[-10:]:  # Only broadcast last 10 to avoid flood
+                await broadcast_alert({
+                    'array_id': alert.array_id,
+                    'observer_name': alert.observer_name,
+                    'level': alert.level.value,
+                    'message': alert.message,
+                    'timestamp': alert.timestamp.isoformat(),
+                })
+        
+        # Update status with recent alerts
+        status_obj.recent_alerts = parsed_alerts[-50:]
         
         # Update observer status
-        for alert in alerts:
+        for alert in parsed_alerts[-50:]:
             observer = alert.get('observer_name', '')
             level = alert.get('level', 'info')
             message = alert.get('message', '')
@@ -374,7 +448,10 @@ async def refresh_array(
     
     status_obj.last_refresh = datetime.now()
     
-    return status_obj
+    return {
+        **status_obj.dict(),
+        'new_alerts_synced': new_alerts_count,
+    }
 
 
 @router.post("/{array_id}/deploy-agent")
@@ -515,28 +592,3 @@ async def restart_agent(
     sys_info("arrays", f"Agent restarted for array {array_id}", {"array_id": array_id})
 
     return result
-
-
-@router.get("/statuses", response_model=List[ArrayStatus])
-async def list_array_statuses(
-    db: AsyncSession = Depends(get_db),
-    ssh_pool: SSHPool = Depends(get_ssh_pool),
-):
-    """Get all array statuses with connection state"""
-    result = await db.execute(select(ArrayModel))
-    arrays = result.scalars().all()
-    
-    statuses = []
-    for array in arrays:
-        status_obj = _get_array_status(array.array_id)
-        status_obj.name = array.name
-        status_obj.host = array.host
-        
-        conn = ssh_pool.get_connection(array.array_id)
-        if conn:
-            status_obj.state = conn.state
-            status_obj.last_error = conn.last_error
-        
-        statuses.append(status_obj)
-    
-    return statuses

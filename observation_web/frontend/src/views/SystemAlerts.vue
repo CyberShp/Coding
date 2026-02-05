@@ -112,12 +112,80 @@
         </el-alert>
       </div>
     </el-card>
+
+    <!-- Debug Info Card -->
+    <el-card class="debug-card">
+      <template #header>
+        <div class="card-header">
+          <span>系统调试信息</span>
+          <el-button type="primary" size="small" @click="loadDebugInfo">
+            <el-icon><Refresh /></el-icon>
+            刷新
+          </el-button>
+        </div>
+      </template>
+
+      <div v-loading="debugLoading">
+        <el-collapse v-if="debugInfo">
+          <el-collapse-item title="SSH 连接状态" name="ssh">
+            <el-table :data="sshConnections" size="small" stripe>
+              <el-table-column prop="array_id" label="阵列 ID" width="150" />
+              <el-table-column prop="host" label="主机" width="150" />
+              <el-table-column prop="state" label="状态" width="100">
+                <template #default="{ row }">
+                  <el-tag :type="row.state === 'connected' ? 'success' : 'danger'" size="small">
+                    {{ row.state }}
+                  </el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column prop="last_error" label="最后错误" show-overflow-tooltip />
+            </el-table>
+            <p v-if="!sshConnections.length" class="empty-text">暂无 SSH 连接</p>
+          </el-collapse-item>
+
+          <el-collapse-item title="阵列状态缓存" name="cache">
+            <el-table :data="statusCache" size="small" stripe>
+              <el-table-column prop="array_id" label="阵列 ID" width="150" />
+              <el-table-column prop="name" label="名称" width="120" />
+              <el-table-column prop="state" label="状态" width="100">
+                <template #default="{ row }">
+                  <el-tag :type="row.state === 'connected' ? 'success' : 'info'" size="small">
+                    {{ row.state }}
+                  </el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column prop="agent_running" label="Agent" width="80">
+                <template #default="{ row }">
+                  <el-tag :type="row.agent_running ? 'success' : 'info'" size="small">
+                    {{ row.agent_running ? '运行中' : '未运行' }}
+                  </el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column prop="last_refresh" label="最后刷新" width="180" />
+            </el-table>
+            <p v-if="!statusCache.length" class="empty-text">暂无状态缓存</p>
+          </el-collapse-item>
+
+          <el-collapse-item title="系统信息" name="system">
+            <el-descriptions :column="2" border size="small">
+              <el-descriptions-item label="Python 版本">{{ debugInfo.system_info?.python_version?.split(' ')[0] }}</el-descriptions-item>
+              <el-descriptions-item label="平台">{{ debugInfo.system_info?.platform }}</el-descriptions-item>
+              <el-descriptions-item label="当前时间">{{ debugInfo.system_info?.current_time }}</el-descriptions-item>
+              <el-descriptions-item label="告警统计">
+                错误: {{ debugInfo.alert_stats?.error || 0 }}, 
+                警告: {{ debugInfo.alert_stats?.warning || 0 }}
+              </el-descriptions-item>
+            </el-descriptions>
+          </el-collapse-item>
+        </el-collapse>
+      </div>
+    </el-card>
   </div>
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
-import { Search, Delete } from '@element-plus/icons-vue'
+import { ref, computed, onMounted } from 'vue'
+import { Search, Delete, Refresh } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import api from '@/api'
 
@@ -127,6 +195,26 @@ const stats = ref(null)
 const filters = ref({
   level: '',
   module: '',
+})
+
+// Debug info
+const debugLoading = ref(false)
+const debugInfo = ref(null)
+
+const sshConnections = computed(() => {
+  if (!debugInfo.value?.ssh_connections) return []
+  return Object.entries(debugInfo.value.ssh_connections).map(([id, info]) => ({
+    array_id: id,
+    ...info,
+  }))
+})
+
+const statusCache = computed(() => {
+  if (!debugInfo.value?.array_status_cache) return []
+  return Object.entries(debugInfo.value.array_status_cache).map(([id, info]) => ({
+    array_id: id,
+    ...info,
+  }))
 })
 
 const loadAlerts = async () => {
@@ -199,8 +287,21 @@ const getLevelText = (level) => {
   return texts[level] || level
 }
 
+const loadDebugInfo = async () => {
+  debugLoading.value = true
+  try {
+    const res = await api.getSystemDebugInfo()
+    debugInfo.value = res.data
+  } catch (error) {
+    ElMessage.error('加载调试信息失败')
+  } finally {
+    debugLoading.value = false
+  }
+}
+
 onMounted(() => {
   loadAlerts()
+  loadDebugInfo()
 })
 </script>
 
@@ -285,5 +386,15 @@ onMounted(() => {
 
 .alert-hint {
   margin-top: 20px;
+}
+
+.debug-card {
+  margin-top: 20px;
+}
+
+.empty-text {
+  color: #909399;
+  text-align: center;
+  padding: 20px;
 }
 </style>

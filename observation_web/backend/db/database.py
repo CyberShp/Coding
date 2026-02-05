@@ -2,6 +2,9 @@
 Database configuration and session management.
 """
 
+import os
+from pathlib import Path
+
 from sqlalchemy import create_engine
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
@@ -18,9 +21,16 @@ AsyncSessionLocal = None
 
 
 def get_database_url() -> str:
-    """Get database URL"""
+    """Get database URL with absolute path"""
     config = get_config()
-    return f"sqlite+aiosqlite:///{config.database.path}"
+    db_path = config.database.path
+    
+    # If path is relative, make it relative to the config directory
+    if not os.path.isabs(db_path):
+        config_dir = Path(__file__).parent.parent.parent  # observation_web directory
+        db_path = str(config_dir / db_path)
+    
+    return f"sqlite+aiosqlite:///{db_path}"
 
 
 def init_db():

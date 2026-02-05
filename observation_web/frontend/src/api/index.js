@@ -2,13 +2,18 @@ import axios from 'axios'
 
 const http = axios.create({
   baseURL: '/api',
-  timeout: 30000,
+  timeout: 15000,  // 15s default timeout
+})
+
+// Create a separate instance for long operations
+const httpLong = axios.create({
+  baseURL: '/api',
+  timeout: 60000,  // 60s for long operations
 })
 
 // Request interceptor
 http.interceptors.request.use(
   config => {
-    // Add auth token if needed
     return config
   },
   error => {
@@ -16,14 +21,31 @@ http.interceptors.request.use(
   }
 )
 
-// Response interceptor
-http.interceptors.response.use(
-  response => response,
+httpLong.interceptors.request.use(
+  config => {
+    return config
+  },
   error => {
-    console.error('API Error:', error.response?.data || error.message)
     return Promise.reject(error)
   }
 )
+
+// Response interceptor with better error handling
+const handleError = (error) => {
+  if (error.code === 'ECONNABORTED') {
+    console.error('API Timeout:', error.config?.url)
+    error.message = '请求超时，请重试'
+  } else if (error.code === 'ERR_NETWORK') {
+    console.error('Network Error:', error.config?.url)
+    error.message = '网络错误，请检查连接'
+  } else {
+    console.error('API Error:', error.response?.data || error.message)
+  }
+  return Promise.reject(error)
+}
+
+http.interceptors.response.use(response => response, handleError)
+httpLong.interceptors.response.use(response => response, handleError)
 
 export default {
   // Arrays
@@ -34,13 +56,14 @@ export default {
   updateArray: (id, data) => http.put(`/arrays/${id}`, data),
   deleteArray: (id) => http.delete(`/arrays/${id}`),
   getArrayStatus: (id) => http.get(`/arrays/${id}/status`),
-  connectArray: (id, password) => http.post(`/arrays/${id}/connect`, null, { params: { password } }),
+  // Long operations use httpLong with 60s timeout
+  connectArray: (id, password) => httpLong.post(`/arrays/${id}/connect`, null, { params: { password } }),
   disconnectArray: (id) => http.post(`/arrays/${id}/disconnect`),
-  refreshArray: (id) => http.post(`/arrays/${id}/refresh`),
-  deployAgent: (id) => http.post(`/arrays/${id}/deploy-agent`),
-  startAgent: (id) => http.post(`/arrays/${id}/start-agent`),
-  stopAgent: (id) => http.post(`/arrays/${id}/stop-agent`),
-  restartAgent: (id) => http.post(`/arrays/${id}/restart-agent`),
+  refreshArray: (id) => httpLong.post(`/arrays/${id}/refresh`),
+  deployAgent: (id) => httpLong.post(`/arrays/${id}/deploy-agent`),
+  startAgent: (id) => httpLong.post(`/arrays/${id}/start-agent`),
+  stopAgent: (id) => httpLong.post(`/arrays/${id}/stop-agent`),
+  restartAgent: (id) => httpLong.post(`/arrays/${id}/restart-agent`),
 
   // Alerts
   getAlerts: (params) => http.get('/alerts', { params }),
@@ -60,4 +83,5 @@ export default {
   getSystemAlerts: (params) => http.get('/system-alerts', { params }),
   getSystemAlertStats: () => http.get('/system-alerts/stats'),
   clearSystemAlerts: () => http.delete('/system-alerts'),
+  getSystemDebugInfo: () => http.get('/system-alerts/debug'),
 }
