@@ -1,0 +1,56 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "packet-storm"
+version = "0.1.0"
+description = "Storage protocol abnormal packet testing tool"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.10"
+authors = [
+    {name = "Packet Storm Team"}
+]
+
+dependencies = [
+    "scapy>=2.5.0",
+    "click>=8.0",
+    "rich>=13.0",
+    "pydantic>=2.0",
+]
+
+[project.optional-dependencies]
+web = [
+    "fastapi>=0.100.0",
+    "uvicorn[standard]>=0.20.0",
+    "websockets>=10.0",
+    "aiofiles>=0.8.0",
+]
+dpdk = [
+    "cffi>=1.15.0",
+]
+dev = [
+    "pytest>=7.0",
+    "pytest-asyncio>=0.21.0",
+    "ruff>=0.1.0",
+]
+all = ["packet-storm[web,dpdk,dev]"]
+
+[project.scripts]
+packet-storm = "packet_storm.cli.main:cli"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["packet_storm*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

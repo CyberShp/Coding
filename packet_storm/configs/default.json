@@ -1,0 +1,85 @@
+{
+    "global": {
+        "log_level": "INFO",
+        "log_file": "logs/packet_storm.log",
+        "csv_export_dir": "exports/",
+        "packet_dump_dir": "dumps/"
+    },
+    "network": {
+        "interface": "eth0",
+        "src_mac": "auto",
+        "dst_mac": "ff:ff:ff:ff:ff:ff",
+        "src_ip": "192.168.1.100",
+        "dst_ip": "192.168.1.200",
+        "src_ipv6": "",
+        "dst_ipv6": "",
+        "use_ipv6": false
+    },
+    "transport": {
+        "backend": "scapy",
+        "dpdk": {
+            "eal_args": ["-l", "0-3", "-n", "4"],
+            "port_id": 0,
+            "nb_rx_queues": 1,
+            "nb_tx_queues": 4,
+            "hugepage_size": "2M",
+            "driver": "vfio-pci"
+        },
+        "rate_limit": {
+            "enabled": false,
+            "mode": "pps",
+            "value": 100000
+        }
+    },
+    "protocol": {
+        "type": "iscsi",
+        "iscsi": {
+            "target_port": 3260,
+            "source_port": 0,
+            "initiator_name": "iqn.2024-01.com.packetstorm:initiator",
+            "target_name": "iqn.2024-01.com.storage:target",
+            "max_recv_data_segment_length": 65536,
+            "header_digest": "None",
+            "data_digest": "None"
+        },
+        "nvmeof": {
+            "target_port": 4420,
+            "source_port": 0,
+            "hostnqn": "nqn.2024-01.com.packetstorm:host",
+            "subnqn": "nqn.2024-01.com.storage:subsystem",
+            "hdr_digest": false,
+            "data_digest": false
+        },
+        "nas": {
+            "nfs": {
+                "version": "4.1",
+                "target_port": 2049,
+                "source_port": 0
+            },
+            "smb": {
+                "version": "3.1.1",
+                "target_port": 445,
+                "source_port": 0
+            }
+        }
+    },
+    "anomalies": [
+        {
+            "type": "field_tamper",
+            "enabled": true,
+            "target_layer": "iscsi",
+            "target_field": "opcode",
+            "mode": "random",
+            "count": 100,
+            "description": "Tamper iSCSI opcode with random values"
+        }
+    ],
+    "execution": {
+        "mode": "single",
+        "repeat": 1,
+        "interval_ms": 100,
+        "duration_seconds": 0,
+        "start_delay_seconds": 0,
+        "batch_configs": []
+    }
+}
