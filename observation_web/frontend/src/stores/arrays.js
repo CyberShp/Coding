@@ -23,7 +23,8 @@ export const useArrayStore = defineStore('arrays', () => {
   async function fetchArrays() {
     loading.value = true
     try {
-      const response = await api.getArrays()
+      // Use statuses endpoint to get connection state
+      const response = await api.getArrayStatuses()
       arrays.value = response.data
       return response.data
     } finally {

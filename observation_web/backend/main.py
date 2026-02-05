@@ -15,6 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from .config import get_config
 from .db.database import init_db, create_tables
 from .api import arrays_router, alerts_router, query_router, ws_router
+from .api.system_alerts import router as system_alerts_router
 from .core.ssh_pool import get_ssh_pool
 
 # Configure logging
@@ -76,6 +77,7 @@ def create_app() -> FastAPI:
     app.include_router(arrays_router, prefix="/api")
     app.include_router(alerts_router, prefix="/api")
     app.include_router(query_router, prefix="/api")
+    app.include_router(system_alerts_router, prefix="/api")
     app.include_router(ws_router)
     
     # Health check endpoint
@@ -93,6 +95,7 @@ def create_app() -> FastAPI:
                 "arrays": "/api/arrays",
                 "alerts": "/api/alerts",
                 "query": "/api/query",
+                "system_alerts": "/api/system-alerts",
                 "websocket_alerts": "/ws/alerts",
                 "websocket_status": "/ws/status",
             }

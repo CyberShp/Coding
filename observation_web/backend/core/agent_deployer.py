@@ -4,6 +4,7 @@ Agent deployment utilities for observation_points.
 
 import logging
 import os
+import posixpath
 import tarfile
 import tempfile
 from pathlib import Path
@@ -11,6 +12,7 @@ from typing import Any, Dict, Iterable, Tuple
 
 from ..config import AppConfig
 from .ssh_pool import SSHConnection
+from .system_alert import sys_error, sys_warning, sys_info
 
 logger = logging.getLogger(__name__)
 
@@ -30,11 +32,17 @@ class AgentDeployer:
         try:
             local_package = self._build_package()
             deploy_path = self.config.remote.agent_deploy_path
-            deploy_parent = str(Path(deploy_path).parent)
-            remote_package = f"{deploy_parent}/observation_points.tar.gz"
+            # Use posixpath for remote Linux paths (avoid Windows backslash issue)
+            deploy_parent = posixpath.dirname(deploy_path)
+            remote_package = posixpath.join(deploy_parent, "observation_points.tar.gz")
 
             ok, error = self.conn.upload_file(local_package, remote_package)
             if not ok:
+                sys_error(
+                    "agent_deployer",
+                    "Agent package upload failed",
+                    {"host": self.conn.host, "remote_path": remote_package, "error": error}
+                )
                 return {"ok": False, "error": f"Upload failed: {error}"}
 
             commands = [
@@ -72,9 +80,11 @@ class AgentDeployer:
         deploy_path = self.config.remote.agent_deploy_path
         log_path = self.config.remote.agent_log_path
         python_cmd = self.config.remote.python_cmd
+        # Use posixpath for remote Linux paths
+        log_parent = posixpath.dirname(log_path)
 
         commands = [
-            f"mkdir -p {Path(log_path).parent}",
+            f"mkdir -p {log_parent}",
             f"cd {deploy_path} && nohup {python_cmd} -m observation_points "
             f"-c /etc/observation-points/config.json "
             f"--log-file {log_path} >/dev/null 2>&1 &",
@@ -130,5 +140,10 @@ class AgentDeployer:
         for command in commands:
             exit_code, _, err = self.conn.execute(command)
             if exit_code != 0:
+                sys_warning(
+                    "agent_deployer",
+                    f"Remote command failed",
+                    {"host": self.conn.host, "command": command, "exit_code": exit_code, "error": err}
+                )
                 return False, err or f"Command failed: {command}"
         return True, ""

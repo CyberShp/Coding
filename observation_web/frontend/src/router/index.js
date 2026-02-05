@@ -31,6 +31,11 @@ const routes = [
     name: 'Settings',
     component: () => import('../views/Settings.vue'),
   },
+  {
+    path: '/system-alerts',
+    name: 'SystemAlerts',
+    component: () => import('../views/SystemAlerts.vue'),
+  },
 ]
 
 const router = createRouter({

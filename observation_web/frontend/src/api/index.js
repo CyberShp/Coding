@@ -28,6 +28,7 @@ http.interceptors.response.use(
 export default {
   // Arrays
   getArrays: () => http.get('/arrays'),
+  getArrayStatuses: () => http.get('/arrays/statuses'),
   getArray: (id) => http.get(`/arrays/${id}`),
   createArray: (data) => http.post('/arrays', data),
   updateArray: (id, data) => http.put(`/arrays/${id}`, data),
@@ -54,4 +55,9 @@ export default {
   getQueryTemplates: () => http.get('/query/templates'),
   createQueryTemplate: (data) => http.post('/query/templates', data),
   deleteQueryTemplate: (id) => http.delete(`/query/templates/${id}`),
+
+  // System Alerts
+  getSystemAlerts: (params) => http.get('/system-alerts', { params }),
+  getSystemAlertStats: () => http.get('/system-alerts/stats'),
+  clearSystemAlerts: () => http.delete('/system-alerts'),
 }

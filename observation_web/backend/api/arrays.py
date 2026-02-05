@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..config import get_config
 from ..core.agent_deployer import AgentDeployer
 from ..core.ssh_pool import get_ssh_pool, SSHPool
+from ..core.system_alert import sys_error, sys_warning, sys_info
 from ..db.database import get_db
 from ..models.array import (
     ArrayModel, ArrayCreate, ArrayUpdate, ArrayResponse,
@@ -43,7 +44,7 @@ def _get_array_status(array_id: str) -> ArrayStatus:
 async def list_arrays(
     db: AsyncSession = Depends(get_db),
 ):
-    """Get all arrays"""
+    """Get all arrays (database records only, no connection state)"""
     result = await db.execute(select(ArrayModel))
     arrays = result.scalars().all()
     return arrays
@@ -393,6 +394,11 @@ async def deploy_agent(
     deployer = AgentDeployer(conn, config)
     result = deployer.deploy()
     if not result.get("ok"):
+        sys_error(
+            "arrays",
+            f"Agent deploy failed for array {array_id}",
+            {"array_id": array_id, "error": result.get("error")}
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=result.get("error", "Deploy failed")
@@ -401,6 +407,7 @@ async def deploy_agent(
     status_obj = _get_array_status(array_id)
     status_obj.agent_deployed = deployer.check_deployed()
     status_obj.agent_running = deployer.check_running()
+    sys_info("arrays", f"Agent deployed for array {array_id}", {"array_id": array_id})
 
     return result
 
@@ -422,6 +429,11 @@ async def start_agent(
     deployer = AgentDeployer(conn, config)
     result = deployer.start_agent()
     if not result.get("ok"):
+        sys_error(
+            "arrays",
+            f"Agent start failed for array {array_id}",
+            {"array_id": array_id, "error": result.get("error")}
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=result.get("error", "Start failed")
@@ -430,6 +442,7 @@ async def start_agent(
     status_obj = _get_array_status(array_id)
     status_obj.agent_running = deployer.check_running()
     status_obj.agent_deployed = deployer.check_deployed()
+    sys_info("arrays", f"Agent started for array {array_id}", {"array_id": array_id})
 
     return result
 
@@ -451,6 +464,11 @@ async def stop_agent(
     deployer = AgentDeployer(conn, config)
     result = deployer.stop_agent()
     if not result.get("ok"):
+        sys_error(
+            "arrays",
+            f"Agent stop failed for array {array_id}",
+            {"array_id": array_id, "error": result.get("error")}
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=result.get("error", "Stop failed")
@@ -459,6 +477,7 @@ async def stop_agent(
     status_obj = _get_array_status(array_id)
     status_obj.agent_running = deployer.check_running()
     status_obj.agent_deployed = deployer.check_deployed()
+    sys_info("arrays", f"Agent stopped for array {array_id}", {"array_id": array_id})
 
     return result
 
@@ -480,6 +499,11 @@ async def restart_agent(
     deployer = AgentDeployer(conn, config)
     result = deployer.restart_agent()
     if not result.get("ok"):
+        sys_error(
+            "arrays",
+            f"Agent restart failed for array {array_id}",
+            {"array_id": array_id, "error": result.get("error")}
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=result.get("error", "Restart failed")
@@ -488,16 +512,17 @@ async def restart_agent(
     status_obj = _get_array_status(array_id)
     status_obj.agent_running = deployer.check_running()
     status_obj.agent_deployed = deployer.check_deployed()
+    sys_info("arrays", f"Agent restarted for array {array_id}", {"array_id": array_id})
 
     return result
 
 
-@router.get("", response_model=List[ArrayStatus])
+@router.get("/statuses", response_model=List[ArrayStatus])
 async def list_array_statuses(
     db: AsyncSession = Depends(get_db),
     ssh_pool: SSHPool = Depends(get_ssh_pool),
 ):
-    """Get all array statuses"""
+    """Get all array statuses with connection state"""
     result = await db.execute(select(ArrayModel))
     arrays = result.scalars().all()
     

@@ -112,6 +112,15 @@
               部署 Agent
             </el-button>
             <el-button
+              type="success"
+              size="small"
+              :loading="starting"
+              :disabled="array.state !== 'connected' || array.agent_running"
+              @click="handleStartAgent"
+            >
+              启动 Agent
+            </el-button>
+            <el-button
               size="small"
               :loading="restarting"
               :disabled="array.state !== 'connected'"
@@ -120,9 +129,10 @@
               重启 Agent
             </el-button>
             <el-button
+              type="danger"
               size="small"
               :loading="stopping"
-              :disabled="array.state !== 'connected'"
+              :disabled="array.state !== 'connected' || !array.agent_running"
               @click="handleStopAgent"
             >
               停止 Agent
@@ -199,6 +209,7 @@ const connectDialogVisible = ref(false)
 const connecting = ref(false)
 const array = ref(null)
 const deploying = ref(false)
+const starting = ref(false)
 const stopping = ref(false)
 const restarting = ref(false)
 
@@ -217,10 +228,11 @@ const observerList = computed(() => {
     }))
 })
 
-const isOperating = computed(() => deploying.value || stopping.value || restarting.value)
+const isOperating = computed(() => deploying.value || starting.value || stopping.value || restarting.value)
 
 const operationText = computed(() => {
   if (deploying.value) return '部署中...'
+  if (starting.value) return '启动中...'
   if (restarting.value) return '重启中...'
   if (stopping.value) return '停止中...'
   return ''
@@ -375,6 +387,19 @@ async function handleDeployAgent() {
     ElMessage.error(error.response?.data?.detail || '部署失败')
   } finally {
     deploying.value = false
+  }
+}
+
+async function handleStartAgent() {
+  starting.value = true
+  try {
+    await api.startAgent(array.value.array_id)
+    ElMessage.success('启动成功')
+    await loadArray()
+  } catch (error) {
+    ElMessage.error(error.response?.data?.detail || '启动失败')
+  } finally {
+    starting.value = false
   }
 }
 
