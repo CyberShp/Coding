@@ -22,5 +22,9 @@ __pycache__/
 .venv/
 venv/
 
+# Node.js
+node_modules/
+dist/
+
 # 可选：若 config.json 含敏感信息可取消下一行注释
 # observation_points/config.json

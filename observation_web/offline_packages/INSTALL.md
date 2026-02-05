@@ -1,6 +1,8 @@
 # 离线安装说明
 
-本目录包含 observation_web 项目所需的所有 Python 依赖包，支持以下平台和 Python 版本：
+本目录包含 observation_web 项目所需的所有依赖包，包括：
+- **Python 后端依赖**：所有 wheel 包
+- **Node.js 前端依赖**：预打包的 node_modules
 
 ## 支持的平台
 
@@ -155,3 +157,109 @@ A: 可以使用纯 Python 版本（性能略低）：
 ```bash
 pip install SQLAlchemy --no-binary :all:
 ```
+
+---
+
+## 前端依赖（npm）离线安装
+
+### 目录结构
+
+```
+offline_packages/npm/
+├── node_modules.tar.gz     # 预打包的所有依赖（约35MB）
+├── prepare-offline.sh      # Linux/macOS 准备脚本
+├── prepare-offline.bat     # Windows 准备脚本
+└── *.tgz                   # 主要依赖包（备用）
+```
+
+### 离线安装方法（推荐）
+
+使用预打包的 `node_modules.tar.gz`：
+
+```bash
+# 1. 进入前端目录
+cd observation_web/frontend
+
+# 2. 解压 node_modules
+tar -xzvf ../offline_packages/npm/node_modules.tar.gz
+
+# 3. 构建前端
+npm run build
+```
+
+**Windows 命令**：
+```cmd
+cd observation_web\frontend
+tar -xzvf ..\offline_packages\npm\node_modules.tar.gz
+npm run build
+```
+
+### 更新离线包
+
+如果依赖有更新，在联网环境运行准备脚本重新生成离线包：
+
+**Linux/macOS**：
+```bash
+cd observation_web/offline_packages/npm
+chmod +x prepare-offline.sh
+./prepare-offline.sh
+```
+
+**Windows**：
+```cmd
+cd observation_web\offline_packages\npm
+prepare-offline.bat
+```
+
+### 备用方法：使用 tgz 包
+
+如果预打包的 node_modules 不可用，可以使用单独的 tgz 包：
+
+```bash
+# 进入前端目录
+cd observation_web/frontend
+
+# 配置 npm 使用本地包
+npm config set offline true
+
+# 从本地安装（需要先将 tgz 放入 npm 缓存）
+npm cache add ../offline_packages/npm/*.tgz
+npm install --offline
+```
+
+### 包含的 npm 依赖
+
+| 包名 | 版本 | 说明 |
+|------|------|------|
+| vue | 3.3.0 | Vue.js 框架 |
+| vue-router | 4.2.0 | Vue 路由 |
+| pinia | 2.1.0 | Vue 状态管理 |
+| element-plus | 2.4.0 | UI 组件库 |
+| axios | 1.6.0 | HTTP 客户端 |
+| echarts | 5.4.0 | 图表库 |
+| vue-echarts | 6.6.0 | ECharts Vue 封装 |
+| @element-plus/icons-vue | 2.3.0 | Element Plus 图标 |
+| vite | 5.0.0 | 构建工具 |
+| @vitejs/plugin-vue | 4.5.0 | Vite Vue 插件 |
+| sass | 1.69.0 | CSS 预处理器 |
+
+### 前端常见问题
+
+#### Q: node_modules.tar.gz 太大无法传输
+A: 可以只传输构建好的 dist 目录，无需在目标环境重新构建：
+```bash
+# 联网环境构建
+cd observation_web/frontend
+npm install
+npm run build
+
+# 将 dist 目录复制到目标环境
+```
+
+#### Q: 解压 node_modules 后 npm run build 失败
+A: 检查 Node.js 版本，建议使用 Node.js 18.x 或更高版本。
+
+#### Q: Windows 上 tar 命令不可用
+A: Windows 10 1803+ 自带 tar 命令。如果不可用，可以：
+1. 使用 7-Zip 解压：右键 -> 7-Zip -> 解压到当前文件夹
+2. 使用 Git Bash 自带的 tar
