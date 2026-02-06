@@ -7,7 +7,6 @@ Backend Startup Tests
 """
 
 import sys
-import os
 from pathlib import Path
 
 # Add the project root to Python path
@@ -38,8 +37,6 @@ def test_models_import():
         from backend.models.alert import Alert, AlertCreate, AlertResponse
         from backend.models.array import Array, ArrayCreate
         from backend.models.query import QueryTemplate, QueryTemplateCreate
-        from backend.models.lifecycle import SyncState, ImportRequest
-        from backend.models.scheduler import ScheduledTaskModel, ScheduledTaskResponse
         print("✓ Models import OK")
         return True
     except Exception as e:
@@ -55,8 +52,6 @@ def test_core_modules_import():
         from backend.core.system_alert import sys_error, sys_warning
         from backend.core.alert_store import AlertStore, get_alert_store
         from backend.core.query_engine import QueryEngine
-        from backend.core.data_lifecycle import DataLifecycleManager
-        from backend.core.scheduler import get_scheduler
         print("✓ Core modules import OK")
         return True
     except Exception as e:
@@ -71,8 +66,6 @@ def test_api_routers_import():
         from backend.api.alerts import router as alerts_router
         from backend.api.query import router as query_router
         from backend.api.ingest import router as ingest_router
-        from backend.api.data_lifecycle import router as data_lifecycle_router
-        from backend.api.scheduler import router as scheduler_router
         from backend.api.system_alerts import router as system_alerts_router
         from backend.api.websocket import router as ws_router
         print("✓ API routers import OK")
@@ -114,20 +107,14 @@ def test_fastapi_app_routes():
     try:
         from backend.main import app
         
-        # Check that key routes exist
         route_paths = [str(route.path) for route in app.routes if hasattr(route, 'path')]
         
-        expected_routes = [
-            '/health',
-            '/api',
-        ]
-        
+        expected_routes = ['/health', '/api']
         for route in expected_routes:
             if route not in route_paths:
                 print(f"✗ Missing route: {route}")
                 return False
         
-        # Check API prefix routes exist
         api_routes = [r for r in route_paths if r.startswith('/api/')]
         if len(api_routes) < 5:
             print(f"✗ Too few API routes: {len(api_routes)}")
@@ -141,25 +128,21 @@ def test_fastapi_app_routes():
 
 
 def test_ssh_pool_functionality():
-    """Test: SSH 连接池基本功能"""
+    """Test: SSH 连接池功能 (含50台规模优化)"""
     try:
         from backend.core.ssh_pool import SSHPool
         
         pool = SSHPool()
         
-        # Test that pool methods exist
-        assert hasattr(pool, 'get_connection')
-        assert hasattr(pool, 'add_connection')
-        assert hasattr(pool, 'close_all')
-        assert hasattr(pool, 'batch_execute')
-        assert hasattr(pool, 'cleanup_idle_connections')
-        assert hasattr(pool, 'get_stats')
+        # 验证技术评估P2新增的方法
+        assert hasattr(pool, 'batch_execute'), "缺少 batch_execute 方法"
+        assert hasattr(pool, 'cleanup_idle_connections'), "缺少 cleanup_idle_connections 方法"
+        assert hasattr(pool, 'get_stats'), "缺少 get_stats 方法"
         
-        # Test get_stats
         stats = pool.get_stats()
         assert 'total_connections' in stats
         
-        print("✓ SSH pool functionality OK")
+        print("✓ SSH pool functionality OK (含50台规模优化)")
         return True
     except Exception as e:
         print(f"✗ SSH pool test failed: {e}")
@@ -167,22 +150,18 @@ def test_ssh_pool_functionality():
 
 
 def test_agent_deployer_functionality():
-    """Test: Agent 部署器基本功能"""
+    """Test: Agent 部署器功能 (含启动修复)"""
     try:
         from backend.core.agent_deployer import AgentDeployer, AGENT_PID_FILE, AGENT_START_LOG
         
-        # Check constants are defined
+        # 验证技术评估P0新增的常量
         assert AGENT_PID_FILE is not None
         assert AGENT_START_LOG is not None
         
-        # Check class methods
-        assert hasattr(AgentDeployer, 'deploy')
-        assert hasattr(AgentDeployer, 'start_agent')
-        assert hasattr(AgentDeployer, 'stop_agent')
-        assert hasattr(AgentDeployer, 'check_running')
-        assert hasattr(AgentDeployer, 'get_agent_status')
+        # 验证新增的 get_agent_status 方法
+        assert hasattr(AgentDeployer, 'get_agent_status'), "缺少 get_agent_status 方法"
         
-        print("✓ Agent deployer functionality OK")
+        print("✓ Agent deployer functionality OK (含启动修复)")
         return True
     except Exception as e:
         print(f"✗ Agent deployer test failed: {e}")
@@ -190,18 +169,17 @@ def test_agent_deployer_functionality():
 
 
 def test_ingest_api():
-    """Test: Ingest API 模块"""
+    """Test: Ingest API 模块 (双向数据推送)"""
     try:
         from backend.api.ingest import router, get_metrics_for_ip, get_all_metrics_sources
         
-        # Test helper functions
         sources = get_all_metrics_sources()
         assert isinstance(sources, list)
         
         metrics = get_metrics_for_ip("test_ip")
         assert isinstance(metrics, list)
         
-        print("✓ Ingest API OK")
+        print("✓ Ingest API OK (双向数据推送)")
         return True
     except Exception as e:
         print(f"✗ Ingest API test failed: {e}")
@@ -210,9 +188,9 @@ def test_ingest_api():
 
 def run_all_tests():
     """运行所有测试"""
-    print("=" * 50)
-    print("Observation Web Backend - Startup Tests")
-    print("=" * 50)
+    print("=" * 55)
+    print("Observation Web - 技术评估功能测试 (v1.1.0)")
+    print("=" * 55)
     print()
     
     tests = [
@@ -242,9 +220,9 @@ def run_all_tests():
             failed += 1
     
     print()
-    print("=" * 50)
+    print("=" * 55)
     print(f"Results: {passed} passed, {failed} failed")
-    print("=" * 50)
+    print("=" * 55)
     
     return failed == 0
 

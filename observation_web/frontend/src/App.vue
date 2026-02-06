@@ -37,14 +37,6 @@
               <el-icon><Warning /></el-icon>
               <span>系统告警</span>
             </el-menu-item>
-            <el-menu-item index="/data">
-              <el-icon><Files /></el-icon>
-              <span>数据管理</span>
-            </el-menu-item>
-            <el-menu-item index="/tasks">
-              <el-icon><Timer /></el-icon>
-              <span>定时任务</span>
-            </el-menu-item>
           </el-menu>
         </el-aside>
 
@@ -90,7 +82,7 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRoute } from 'vue-router'
 import zhCn from 'element-plus/dist/locale/zh-cn.mjs'
-import { Monitor, Odometer, Cpu, Bell, Search, Setting, User, Warning, Files, Timer } from '@element-plus/icons-vue'
+import { Monitor, Odometer, Cpu, Bell, Search, Setting, User, Warning } from '@element-plus/icons-vue'
 import { useAlertStore } from './stores/alerts'
 
 const route = useRoute()
@@ -105,8 +97,6 @@ const currentRoute = computed(() => {
     '/query': '自定义查询',
     '/settings': '系统设置',
     '/system-alerts': '系统告警',
-    '/data': '数据管理',
-    '/tasks': '定时任务',
   }
   return routes[route.path] || ''
 })

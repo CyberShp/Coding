@@ -36,16 +36,6 @@ const routes = [
     name: 'SystemAlerts',
     component: () => import('../views/SystemAlerts.vue'),
   },
-  {
-    path: '/data',
-    name: 'DataManagement',
-    component: () => import('../views/DataManagement.vue'),
-  },
-  {
-    path: '/tasks',
-    name: 'ScheduledTasks',
-    component: () => import('../views/ScheduledTasks.vue'),
-  },
 ]
 
 const router = createRouter({
