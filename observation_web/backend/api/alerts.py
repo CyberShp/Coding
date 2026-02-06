@@ -82,8 +82,10 @@ async def get_recent_alerts(
         offset=0,
     )
     
-    return [
-        {
+    import json as _json
+    result = []
+    for a in alerts:
+        item = {
             "id": a.id,
             "array_id": a.array_id,
             "observer_name": a.observer_name,
@@ -91,8 +93,16 @@ async def get_recent_alerts(
             "message": a.message[:200] if len(a.message) > 200 else a.message,
             "timestamp": a.timestamp.isoformat(),
         }
-        for a in alerts
-    ]
+        # Include parsed details for frontend translator
+        if a.details:
+            try:
+                item["details"] = _json.loads(a.details) if isinstance(a.details, str) else a.details
+            except (ValueError, TypeError):
+                item["details"] = {}
+        else:
+            item["details"] = {}
+        result.append(item)
+    return result
 
 
 @router.get("/summary")

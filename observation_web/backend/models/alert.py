@@ -6,7 +6,9 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel
+import json
+
+from pydantic import BaseModel, field_validator
 from sqlalchemy import Column, Integer, String, DateTime, Text, Index
 from sqlalchemy.sql import func
 
@@ -49,6 +51,16 @@ class AlertBase(BaseModel):
     message: str
     details: Dict[str, Any] = {}
     timestamp: datetime
+
+    @field_validator('details', mode='before')
+    @classmethod
+    def parse_details(cls, v):
+        if isinstance(v, str):
+            try:
+                return json.loads(v)
+            except (json.JSONDecodeError, TypeError):
+                return {}
+        return v if v is not None else {}
 
 
 class AlertCreate(AlertBase):

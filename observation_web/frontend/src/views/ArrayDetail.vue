@@ -158,7 +158,7 @@
         </div>
       </el-card>
 
-      <!-- Recent Alerts (Structured Display) -->
+      <!-- Recent Alerts (Translated + Drawer) -->
       <el-card class="alerts-card">
         <template #header>
           <div class="card-header">
@@ -169,35 +169,33 @@
         
         <div class="alert-timeline" v-if="recentAlerts.length > 0">
           <div 
-            v-for="(alert, index) in recentAlerts" 
+            v-for="(a, index) in recentAlerts" 
             :key="index" 
-            class="alert-timeline-item"
-            :class="`alert-${alert.level}`"
+            class="alert-timeline-item clickable-alert"
+            :class="`alert-${a.level}`"
+            @click="openAlertDrawer(a)"
           >
-            <div class="alert-time">{{ formatDateTime(alert.timestamp) }}</div>
+            <div class="alert-time">{{ formatDateTime(a.timestamp) }}</div>
             <div class="alert-body">
               <div class="alert-header-row">
-                <el-tag :type="getLevelType(alert.level)" size="small">
-                  {{ getLevelText(alert.level) }}
+                <el-tag :type="getLevelType(a.level)" size="small">
+                  {{ getLevelText(a.level) }}
                 </el-tag>
-                <span class="alert-observer">{{ getObserverName(alert.observer_name) }}</span>
-                <el-tag v-if="alert.parsed?.is_history" type="info" size="small">历史告警上报</el-tag>
+                <span class="alert-observer">{{ getObserverLabel(a.observer_name) }}</span>
+                <el-tag v-if="getAlertTranslation(a).parsed?.is_history" type="info" size="small" effect="plain">历史告警上报</el-tag>
+                <el-tag v-else-if="getAlertTranslation(a).parsed?.is_resume" type="success" size="small" effect="plain">已恢复</el-tag>
               </div>
-              <!-- Structured alarm display -->
-              <div v-if="alert.parsed?.alarm_type != null" class="alert-structured">
-                <el-descriptions :column="3" size="small" border>
-                  <el-descriptions-item label="告警类型">{{ alert.parsed.alarm_type }}</el-descriptions-item>
-                  <el-descriptions-item label="告警名称">{{ alert.parsed.alarm_name || '-' }}</el-descriptions-item>
-                  <el-descriptions-item label="告警ID">{{ alert.parsed.alarm_id || '-' }}</el-descriptions-item>
-                </el-descriptions>
-              </div>
-              <div v-else class="alert-message-text">{{ alert.message }}</div>
+              <div class="alert-summary-text">{{ getAlertTranslation(a).summary }}</div>
             </div>
+            <el-icon class="alert-arrow"><ArrowRight /></el-icon>
           </div>
         </div>
         
         <el-empty v-else description="暂无告警，请刷新以同步" />
       </el-card>
+
+      <!-- 告警详情抽屉 -->
+      <AlertDetailDrawer v-model="drawerVisible" :alert="selectedAlert" />
 
       <!-- Log Viewer -->
       <el-card class="log-card" v-if="array.state === 'connected'">
@@ -248,12 +246,14 @@
 import { ref, reactive, computed, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { Refresh } from '@element-plus/icons-vue'
+import { Refresh, ArrowRight } from '@element-plus/icons-vue'
 import { useArrayStore } from '../stores/arrays'
 import api from '../api'
 import LogViewer from '../components/LogViewer.vue'
 import AgentConfig from '../components/AgentConfig.vue'
 import PerformanceMonitor from '../components/PerformanceMonitor.vue'
+import AlertDetailDrawer from '@/components/AlertDetailDrawer.vue'
+import { translateAlert, getObserverName as getObserverLabel, LEVEL_LABELS, LEVEL_TAG_TYPES } from '@/utils/alertTranslator'
 
 const route = useRoute()
 const arrayStore = useArrayStore()
@@ -273,6 +273,8 @@ const connectForm = reactive({
 })
 
 const recentAlerts = ref([])
+const drawerVisible = ref(false)
+const selectedAlert = ref(null)
 
 const observerList = computed(() => {
   if (!array.value?.observer_status) return []
@@ -285,33 +287,20 @@ const observerList = computed(() => {
     }))
 })
 
-function parseAlarmMessage(message) {
-  // Parse structured alarm messages like "alarm type(5) alarm name(disk_fault) alarm id(0x1234)"
-  const parsed = {}
-  const typeMatch = message.match(/alarm\s*type\s*\((\d+)\)/i)
-  const nameMatch = message.match(/alarm\s*name\s*\(([^)]+)\)/i)
-  const idMatch = message.match(/alarm\s*id\s*\(([^)]+)\)/i)
-  
-  if (typeMatch) parsed.alarm_type = typeMatch[1]
-  if (nameMatch) parsed.alarm_name = nameMatch[1]
-  if (idMatch) parsed.alarm_id = idMatch[1]
-  
-  if (message.includes('历史告警') || message.includes('history')) {
-    parsed.is_history = true
-  }
-  
-  return Object.keys(parsed).length > 0 ? parsed : null
+function getAlertTranslation(alert) {
+  return translateAlert(alert)
+}
+
+function openAlertDrawer(alert) {
+  selectedAlert.value = alert
+  drawerVisible.value = true
 }
 
 async function loadRecentAlerts() {
   if (!array.value?.array_id) return
   try {
     const res = await api.getAlerts({ array_id: array.value.array_id, limit: 20 })
-    const alerts = res.data.items || res.data || []
-    recentAlerts.value = alerts.map(a => ({
-      ...a,
-      parsed: parseAlarmMessage(a.message || ''),
-    }))
+    recentAlerts.value = res.data.items || res.data || []
   } catch (error) {
     console.error('Failed to load alerts:', error)
   }
@@ -327,20 +316,9 @@ const operationText = computed(() => {
   return ''
 })
 
-const OBSERVER_NAMES = {
-  error_code: '误码监测',
-  link_status: '链路状态',
-  card_recovery: '卡修复',
-  alarm_type: 'AlarmType',
-  memory_leak: '内存泄漏',
-  cpu_usage: 'CPU利用率',
-  cmd_response: '命令响应',
-  sig_monitor: 'sig信号',
-  sensitive_info: '敏感信息',
-}
-
+// Observer name lookup delegated to alertTranslator.getObserverName
 function getObserverName(name) {
-  return OBSERVER_NAMES[name] || name
+  return getObserverLabel(name)
 }
 
 function getStateType(state) {
@@ -384,23 +362,11 @@ function getObserverStatusText(status) {
 }
 
 function getLevelType(level) {
-  const types = {
-    info: 'info',
-    warning: 'warning',
-    error: 'danger',
-    critical: 'danger',
-  }
-  return types[level] || 'info'
+  return LEVEL_TAG_TYPES[level] || 'info'
 }
 
 function getLevelText(level) {
-  const texts = {
-    info: '信息',
-    warning: '警告',
-    error: '错误',
-    critical: '严重',
-  }
-  return texts[level] || level
+  return LEVEL_LABELS[level] || level
 }
 
 function formatDateTime(timestamp) {
@@ -659,15 +625,26 @@ onMounted(loadArray)
   color: #606266;
 }
 
-.alert-structured {
-  margin-top: 4px;
-}
-
-.alert-message-text {
+.alert-summary-text {
   font-size: 13px;
   color: #303133;
-  word-break: break-all;
-  line-height: 1.5;
+  line-height: 1.6;
+  word-break: break-word;
+}
+
+.clickable-alert {
+  cursor: pointer;
+  transition: background 0.15s;
+  align-items: center;
+}
+
+.clickable-alert:hover {
+  background: #f5f7fa;
+}
+
+.alert-arrow {
+  color: var(--el-text-color-placeholder);
+  flex-shrink: 0;
 }
 
 .alert-error { }

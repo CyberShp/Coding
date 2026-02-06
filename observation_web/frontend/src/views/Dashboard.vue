@@ -148,20 +148,22 @@
           </template>
           <div class="alerts-list">
             <div
-              v-for="alert in alertStore.recentAlerts"
-              :key="alert.id"
-              class="alert-item"
-              :class="`alert-${alert.level}`"
+              v-for="a in alertStore.recentAlerts"
+              :key="a.id"
+              class="alert-item clickable"
+              :class="`alert-${a.level}`"
+              @click="openAlertDrawer(a)"
             >
               <div class="alert-level">
-                <el-tag :type="getLevelType(alert.level)" size="small">
-                  {{ getLevelText(alert.level) }}
+                <el-tag :type="getLevelType(a.level)" size="small">
+                  {{ getLevelText(a.level) }}
                 </el-tag>
+                <span class="alert-observer-tag">{{ getObserverLabel(a.observer_name) }}</span>
               </div>
               <div class="alert-content">
-                <div class="alert-message">{{ alert.message }}</div>
+                <div class="alert-message">{{ getAlertSummary(a) }}</div>
                 <div class="alert-meta">
-                  {{ alert.observer_name }} · {{ formatTime(alert.timestamp) }}
+                  {{ formatTime(a.timestamp) }}
                 </div>
               </div>
             </div>
@@ -170,6 +172,9 @@
         </el-card>
       </el-col>
     </el-row>
+
+    <!-- 告警详情抽屉 -->
+    <AlertDetailDrawer v-model="drawerVisible" :alert="selectedAlert" />
   </div>
 </template>
 
@@ -184,6 +189,8 @@ import { Cpu, CircleCheck, Bell, Warning, Refresh } from '@element-plus/icons-vu
 import { useArrayStore } from '../stores/arrays'
 import { useAlertStore } from '../stores/alerts'
 import api from '../api'
+import AlertDetailDrawer from '@/components/AlertDetailDrawer.vue'
+import { translateAlert, getObserverName, LEVEL_LABELS, LEVEL_TAG_TYPES } from '@/utils/alertTranslator'
 
 use([CanvasRenderer, LineChart, GridComponent, TooltipComponent, LegendComponent])
 
@@ -192,6 +199,8 @@ const alertStore = useAlertStore()
 
 const summary = ref({})
 const stats = ref(null)
+const drawerVisible = ref(false)
+const selectedAlert = ref(null)
 
 const trendChartOption = computed(() => ({
   tooltip: {
@@ -222,20 +231,22 @@ const trendChartOption = computed(() => ({
   }]
 }))
 
-const OBSERVER_DISPLAY_NAMES = {
-  error_code: '误码监测',
-  link_status: '链路状态',
-  card_recovery: '卡修复',
-  alarm_type: 'AlarmType',
-  memory_leak: '内存泄漏',
-  cpu_usage: 'CPU利用率',
-  cmd_response: '命令响应',
-  sig_monitor: 'sig信号',
-  sensitive_info: '敏感信息',
+function getObserverDisplayName(name) {
+  return getObserverName(name)
 }
 
-function getObserverDisplayName(name) {
-  return OBSERVER_DISPLAY_NAMES[name] || name
+function getObserverLabel(name) {
+  return getObserverName(name)
+}
+
+function getAlertSummary(alert) {
+  const result = translateAlert(alert)
+  return result.summary || alert.message
+}
+
+function openAlertDrawer(alert) {
+  selectedAlert.value = alert
+  drawerVisible.value = true
 }
 
 const observerSummary = computed(() => {
@@ -279,23 +290,11 @@ function getStateTagType(state) {
 }
 
 function getLevelType(level) {
-  const types = {
-    info: 'info',
-    warning: 'warning',
-    error: 'danger',
-    critical: 'danger'
-  }
-  return types[level] || 'info'
+  return LEVEL_TAG_TYPES[level] || 'info'
 }
 
 function getLevelText(level) {
-  const texts = {
-    info: '信息',
-    warning: '警告',
-    error: '错误',
-    critical: '严重'
-  }
-  return texts[level] || level
+  return LEVEL_LABELS[level] || level
 }
 
 function formatTime(timestamp) {
@@ -521,6 +520,24 @@ onMounted(loadData)
 
 .alert-level {
   margin-bottom: 4px;
+}
+
+.alert-item.clickable {
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.alert-item.clickable:hover {
+  background: #eef1f6;
+}
+
+.alert-observer-tag {
+  font-size: 11px;
+  color: var(--el-color-primary);
+  background: var(--el-color-primary-light-9);
+  padding: 1px 6px;
+  border-radius: 3px;
+  margin-left: 6px;
 }
 
 .alert-message {

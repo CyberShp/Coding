@@ -61,17 +61,14 @@
       </el-row>
 
       <!-- Alert Table -->
-      <el-table :data="alerts" v-loading="loading" stripe>
-        <el-table-column type="expand">
-          <template #default="{ row }">
-            <div class="alert-detail">
-              <p><strong>完整消息:</strong></p>
-              <pre>{{ row.message }}</pre>
-              <p><strong>详细信息:</strong></p>
-              <pre>{{ JSON.stringify(row.details, null, 2) }}</pre>
-            </div>
-          </template>
-        </el-table-column>
+      <el-table
+        :data="alerts"
+        v-loading="loading"
+        stripe
+        highlight-current-row
+        @row-click="openDrawer"
+        class="clickable-table"
+      >
         <el-table-column label="时间" width="180">
           <template #default="{ row }">
             {{ formatDateTime(row.timestamp) }}
@@ -87,11 +84,23 @@
         <el-table-column label="阵列" width="120" prop="array_id" />
         <el-table-column label="观察点" width="120">
           <template #default="{ row }">
-            {{ OBSERVER_NAMES[row.observer_name] || row.observer_name }}
+            {{ getObserverLabel(row.observer_name) }}
           </template>
         </el-table-column>
-        <el-table-column label="消息" prop="message" show-overflow-tooltip />
+        <el-table-column label="消息摘要" min-width="300">
+          <template #default="{ row }">
+            <span class="translated-msg">{{ getTranslatedSummary(row) }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="" width="50">
+          <template #default>
+            <el-icon class="row-arrow"><ArrowRight /></el-icon>
+          </template>
+        </el-table-column>
       </el-table>
+
+      <!-- 告警详情抽屉 -->
+      <AlertDetailDrawer v-model="drawerVisible" :alert="selectedAlert" />
 
       <!-- Pagination -->
       <el-pagination
@@ -110,14 +119,18 @@
 
 <script setup>
 import { ref, reactive, onMounted } from 'vue'
-import { Search, Download } from '@element-plus/icons-vue'
+import { Search, Download, ArrowRight } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import api from '../api'
+import AlertDetailDrawer from '@/components/AlertDetailDrawer.vue'
+import { translateAlert, getObserverName, OBSERVER_NAMES, LEVEL_LABELS, LEVEL_TAG_TYPES } from '@/utils/alertTranslator'
 
 const loading = ref(false)
 const exporting = ref(false)
 const alerts = ref([])
 const stats = ref(null)
+const drawerVisible = ref(false)
+const selectedAlert = ref(null)
 
 const filters = reactive({
   level: '',
@@ -131,36 +144,26 @@ const pagination = reactive({
   total: 0,
 })
 
-const OBSERVER_NAMES = {
-  error_code: '误码监测',
-  link_status: '链路状态',
-  card_recovery: '卡修复',
-  alarm_type: 'AlarmType',
-  memory_leak: '内存泄漏',
-  cpu_usage: 'CPU利用率',
-  cmd_response: '命令响应',
-  sig_monitor: 'sig信号',
-  sensitive_info: '敏感信息',
-}
-
 function getLevelType(level) {
-  const types = {
-    info: 'info',
-    warning: 'warning',
-    error: 'danger',
-    critical: 'danger',
-  }
-  return types[level] || 'info'
+  return LEVEL_TAG_TYPES[level] || 'info'
 }
 
 function getLevelText(level) {
-  const texts = {
-    info: '信息',
-    warning: '警告',
-    error: '错误',
-    critical: '严重',
-  }
-  return texts[level] || level
+  return LEVEL_LABELS[level] || level
+}
+
+function getObserverLabel(name) {
+  return getObserverName(name)
+}
+
+function getTranslatedSummary(row) {
+  const result = translateAlert(row)
+  return result.summary || row.message
+}
+
+function openDrawer(row) {
+  selectedAlert.value = row
+  drawerVisible.value = true
 }
 
 function formatDateTime(timestamp) {
@@ -277,18 +280,18 @@ onMounted(loadAlerts)
   color: #909399;
 }
 
-.alert-detail {
-  padding: 16px;
-  background: #f5f7fa;
+.clickable-table :deep(tr) {
+  cursor: pointer;
 }
 
-.alert-detail pre {
-  white-space: pre-wrap;
-  word-break: break-all;
-  font-size: 12px;
-  background: #fff;
-  padding: 8px;
-  border-radius: 4px;
+.translated-msg {
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.row-arrow {
+  color: var(--el-text-color-placeholder);
+  font-size: 14px;
 }
 
 .pagination {
