@@ -42,6 +42,11 @@ class QueryTemplateModel(Base):
     expect_match = Column(Boolean, default=True)
     extract_fields = Column(Text, default="[]")  # JSON array
     is_builtin = Column(Boolean, default=False)
+    # Monitoring fields - when enabled, template acts as a custom observer
+    auto_monitor = Column(Boolean, default=False)
+    monitor_interval = Column(Integer, default=300)  # seconds (default 5 min)
+    monitor_arrays = Column(Text, default="[]")  # JSON array of array_ids
+    alert_on_mismatch = Column(Boolean, default=True)  # Generate alert when pattern doesn't match
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
@@ -71,13 +76,20 @@ class QueryTemplateBase(BaseModel):
 
 class QueryTemplateCreate(QueryTemplateBase):
     """Schema for creating query template"""
-    pass
+    auto_monitor: bool = False
+    monitor_interval: int = 300
+    monitor_arrays: List[str] = []
+    alert_on_mismatch: bool = True
 
 
 class QueryTemplateResponse(QueryTemplateBase):
     """Schema for query template response"""
     id: int
     is_builtin: bool
+    auto_monitor: bool = False
+    monitor_interval: int = 300
+    monitor_arrays: List[str] = []
+    alert_on_mismatch: bool = True
     created_at: datetime
     updated_at: datetime
     
@@ -89,6 +101,10 @@ class QueryTemplate(QueryTemplateBase):
     """Full query template model"""
     id: int
     is_builtin: bool = False
+    auto_monitor: bool = False
+    monitor_interval: int = 300
+    monitor_arrays: List[str] = []
+    alert_on_mismatch: bool = True
     
     class Config:
         orm_mode = True

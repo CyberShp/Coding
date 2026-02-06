@@ -92,6 +92,25 @@
               </el-radio-group>
             </el-form-item>
 
+            <!-- Auto Monitor -->
+            <el-divider content-position="left">定时监测 (可选)</el-divider>
+            <el-form-item label="启用监测">
+              <el-switch v-model="queryTask.auto_monitor" />
+              <span class="monitor-hint" v-if="queryTask.auto_monitor">
+                保存后将自动按间隔定期执行，异常时触发告警
+              </span>
+            </el-form-item>
+            <el-form-item label="监测间隔" v-if="queryTask.auto_monitor">
+              <el-select v-model="queryTask.monitor_interval" style="width: 200px">
+                <el-option :value="60" label="1 分钟" />
+                <el-option :value="120" label="2 分钟" />
+                <el-option :value="300" label="5 分钟" />
+                <el-option :value="600" label="10 分钟" />
+                <el-option :value="1800" label="30 分钟" />
+                <el-option :value="3600" label="1 小时" />
+              </el-select>
+            </el-form-item>
+
             <!-- Extract Fields -->
             <el-form-item label="提取字段" v-if="queryTask.rule.rule_type === 'regex_extract'">
               <div class="extract-fields">
@@ -177,6 +196,7 @@
                 <div class="template-name">
                   {{ template.name }}
                   <el-tag v-if="template.is_builtin" type="info" size="small">内置</el-tag>
+                  <el-tag v-if="template.auto_monitor" type="success" size="small">监测中</el-tag>
                 </div>
                 <div class="template-desc">{{ template.description }}</div>
               </div>
@@ -252,6 +272,8 @@ const queryTask = reactive({
     expect_match: true,
     extract_fields: [],
   },
+  auto_monitor: false,
+  monitor_interval: 300,
 })
 
 const connectedArrays = computed(() => 
@@ -350,6 +372,10 @@ async function saveAsTemplate() {
       description: '',
       commands: queryTask.commands.filter(c => c.trim()),
       rule: queryTask.rule,
+      auto_monitor: queryTask.auto_monitor,
+      monitor_interval: queryTask.monitor_interval,
+      monitor_arrays: queryTask.target_arrays,
+      alert_on_mismatch: true,
     })
     ElMessage.success('模板保存成功')
     await loadTemplates()
@@ -502,5 +528,11 @@ onMounted(async () => {
 .error-text {
   color: #f56c6c;
   font-size: 13px;
+}
+
+.monitor-hint {
+  margin-left: 12px;
+  font-size: 12px;
+  color: #67c23a;
 }
 </style>

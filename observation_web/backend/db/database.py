@@ -54,7 +54,7 @@ def init_db():
 
 async def create_tables():
     """Create all tables"""
-    from ..models import array, alert, query  # Import models to register them
+    from ..models import array, alert, query, lifecycle, scheduler  # Import models to register them
     
     async with _async_engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)

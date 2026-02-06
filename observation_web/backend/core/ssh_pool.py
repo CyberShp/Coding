@@ -2,11 +2,14 @@
 SSH Connection Pool Management.
 
 Manages SSH connections to multiple storage arrays.
+Supports auto-reconnect, idle timeout, and async command execution.
 """
 
 import asyncio
 import logging
 import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -25,11 +28,15 @@ except ImportError:
     PARAMIKO_AVAILABLE = False
     logger.warning("paramiko not installed, SSH functionality disabled")
 
+# Thread pool for async SSH operations
+_executor = ThreadPoolExecutor(max_workers=20, thread_name_prefix="ssh-worker")
+
 
 class SSHConnection:
-    """Single SSH connection wrapper with auto-reconnect"""
+    """Single SSH connection wrapper with auto-reconnect and idle timeout"""
     
     MAX_RECONNECT_ATTEMPTS = 3
+    IDLE_TIMEOUT = 600  # 10 minutes idle timeout
     
     def __init__(
         self,
@@ -53,6 +60,8 @@ class SSHConnection:
         self._last_error = ""
         self._lock = threading.RLock()
         self._reconnect_attempts = 0
+        self._last_activity = time.time()
+        self._connected_at: Optional[float] = None
     
     @property
     def state(self) -> ConnectionState:
@@ -61,6 +70,18 @@ class SSHConnection:
     @property
     def last_error(self) -> str:
         return self._last_error
+    
+    @property
+    def idle_seconds(self) -> float:
+        """Seconds since last activity"""
+        return time.time() - self._last_activity
+    
+    @property
+    def uptime_seconds(self) -> float:
+        """Seconds since connection was established"""
+        if self._connected_at is None:
+            return 0
+        return time.time() - self._connected_at
     
     def is_connected(self) -> bool:
         """Check if connection is active, auto-reconnect if needed"""
@@ -142,6 +163,8 @@ class SSHConnection:
                 
                 self._state = ConnectionState.CONNECTED
                 self._last_error = ""
+                self._last_activity = time.time()
+                self._connected_at = time.time()
                 logger.info(f"SSH connected to {self.host}:{self.port}")
                 return True
                 
@@ -187,6 +210,8 @@ class SSHConnection:
         if not self.is_connected():
             return (-1, "", "Not connected")
         
+        self._last_activity = time.time()
+        
         try:
             stdin, stdout, stderr = self._client.exec_command(command, timeout=timeout)
             exit_code = stdout.channel.recv_exit_status()
@@ -196,6 +221,14 @@ class SSHConnection:
         except Exception as e:
             logger.error(f"Command execution failed: {e}")
             return (-1, "", str(e))
+    
+    async def execute_async(self, command: str, timeout: int = 30) -> Tuple[int, str, str]:
+        """
+        Execute command asynchronously using thread pool.
+        Use this from async code to avoid blocking the event loop.
+        """
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(_executor, self.execute, command, timeout)
     
     def read_file(self, remote_path: str) -> Optional[str]:
         """Read remote file content via SSH exec (avoids SFTP permission issues)"""
@@ -330,6 +363,64 @@ class SSHPool:
             array_id: conn.state
             for array_id, conn in self._connections.items()
         }
+    
+    def get_stats(self) -> Dict[str, Any]:
+        """Get connection pool statistics"""
+        total = len(self._connections)
+        connected = sum(1 for c in self._connections.values() if c.state == ConnectionState.CONNECTED)
+        return {
+            "total_connections": total,
+            "connected": connected,
+            "disconnected": total - connected,
+            "connections": {
+                aid: {
+                    "state": conn.state.value if hasattr(conn.state, 'value') else str(conn.state),
+                    "host": conn.host,
+                    "idle_seconds": round(conn.idle_seconds, 1),
+                    "uptime_seconds": round(conn.uptime_seconds, 1),
+                }
+                for aid, conn in self._connections.items()
+            }
+        }
+    
+    def cleanup_idle_connections(self, max_idle_seconds: int = 600):
+        """
+        Disconnect idle connections to free resources.
+        Called periodically by the background task.
+        """
+        with self._lock:
+            for array_id, conn in list(self._connections.items()):
+                if conn.state == ConnectionState.CONNECTED and conn.idle_seconds > max_idle_seconds:
+                    logger.info(f"Disconnecting idle connection: {array_id} ({conn.host}), idle {conn.idle_seconds:.0f}s")
+                    conn.disconnect()
+    
+    async def batch_execute(self, command: str, array_ids: Optional[List[str]] = None, timeout: int = 30) -> Dict[str, Tuple[int, str, str]]:
+        """
+        Execute a command on multiple arrays concurrently.
+        
+        Args:
+            command: Command to execute
+            array_ids: List of array IDs (None = all connected)
+            timeout: Command timeout
+            
+        Returns:
+            Dict of array_id -> (exit_code, stdout, stderr)
+        """
+        if array_ids is None:
+            array_ids = [
+                aid for aid, conn in self._connections.items()
+                if conn.state == ConnectionState.CONNECTED
+            ]
+        
+        async def _exec_one(aid: str) -> Tuple[str, Tuple[int, str, str]]:
+            conn = self.get_connection(aid)
+            if conn and conn.is_connected():
+                result = await conn.execute_async(command, timeout)
+                return (aid, result)
+            return (aid, (-1, "", "Not connected"))
+        
+        results = await asyncio.gather(*[_exec_one(aid) for aid in array_ids])
+        return dict(results)
     
     def close_all(self):
         """Close all connections"""

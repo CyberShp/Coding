@@ -54,29 +54,46 @@
         </el-descriptions>
       </el-card>
 
-      <!-- Observer Status -->
+      <!-- Observer Status (Card Layout) -->
       <el-card class="observer-card">
         <template #header>
-          <span>观察点状态</span>
+          <div class="card-header">
+            <span>观察点状态</span>
+            <el-tag type="info" size="small">{{ observerList.length }} 个观察点</el-tag>
+          </div>
         </template>
         
-        <el-table :data="observerList" stripe>
-          <el-table-column label="观察点" prop="name" width="150">
-            <template #default="{ row }">
-              {{ getObserverName(row.name) }}
-            </template>
-          </el-table-column>
-          <el-table-column label="状态" width="100">
-            <template #default="{ row }">
-              <el-tag :type="getObserverStatusType(row.status)">
-                {{ getObserverStatusText(row.status) }}
+        <div class="observer-grid" v-if="observerList.length > 0">
+          <div 
+            v-for="obs in observerList" 
+            :key="obs.name" 
+            class="observer-item"
+            :class="`observer-${obs.status}`"
+          >
+            <div class="observer-header">
+              <span class="observer-name">{{ getObserverName(obs.name) }}</span>
+              <el-tag :type="getObserverStatusType(obs.status)" size="small">
+                {{ getObserverStatusText(obs.status) }}
               </el-tag>
-            </template>
-          </el-table-column>
-          <el-table-column label="说明" prop="message" />
-        </el-table>
+            </div>
+            <div class="observer-message" v-if="obs.message">{{ obs.message }}</div>
+            <div class="observer-id">{{ obs.name }}</div>
+          </div>
+        </div>
         
-        <el-empty v-if="observerList.length === 0" description="暂无数据" />
+        <el-empty v-else description="暂无数据，请刷新" />
+      </el-card>
+
+      <!-- Performance Monitor Tab -->
+      <el-card class="perf-card" v-if="array.state === 'connected'">
+        <template #header>
+          <div class="card-header">
+            <span>性能监控</span>
+            <el-tag type="success" size="small">实时</el-tag>
+          </div>
+        </template>
+        
+        <PerformanceMonitor :array-id="array.array_id" />
       </el-card>
 
       <!-- Agent Controls -->
@@ -141,34 +158,69 @@
         </div>
       </el-card>
 
-      <!-- Recent Alerts -->
+      <!-- Recent Alerts (Structured Display) -->
       <el-card class="alerts-card">
         <template #header>
-          <span>最近告警</span>
+          <div class="card-header">
+            <span>最近告警</span>
+            <el-button size="small" @click="$router.push('/alerts')">查看全部</el-button>
+          </div>
         </template>
         
-        <el-table :data="array.recent_alerts || []" stripe max-height="400">
-          <el-table-column label="时间" width="180">
-            <template #default="{ row }">
-              {{ formatDateTime(row.timestamp) }}
-            </template>
-          </el-table-column>
-          <el-table-column label="级别" width="80">
-            <template #default="{ row }">
-              <el-tag :type="getLevelType(row.level)" size="small">
-                {{ getLevelText(row.level) }}
-              </el-tag>
-            </template>
-          </el-table-column>
-          <el-table-column label="观察点" width="120">
-            <template #default="{ row }">
-              {{ getObserverName(row.observer_name) }}
-            </template>
-          </el-table-column>
-          <el-table-column label="消息" prop="message" show-overflow-tooltip />
-        </el-table>
+        <div class="alert-timeline" v-if="recentAlerts.length > 0">
+          <div 
+            v-for="(alert, index) in recentAlerts" 
+            :key="index" 
+            class="alert-timeline-item"
+            :class="`alert-${alert.level}`"
+          >
+            <div class="alert-time">{{ formatDateTime(alert.timestamp) }}</div>
+            <div class="alert-body">
+              <div class="alert-header-row">
+                <el-tag :type="getLevelType(alert.level)" size="small">
+                  {{ getLevelText(alert.level) }}
+                </el-tag>
+                <span class="alert-observer">{{ getObserverName(alert.observer_name) }}</span>
+                <el-tag v-if="alert.parsed?.is_history" type="info" size="small">历史告警上报</el-tag>
+              </div>
+              <!-- Structured alarm display -->
+              <div v-if="alert.parsed?.alarm_type != null" class="alert-structured">
+                <el-descriptions :column="3" size="small" border>
+                  <el-descriptions-item label="告警类型">{{ alert.parsed.alarm_type }}</el-descriptions-item>
+                  <el-descriptions-item label="告警名称">{{ alert.parsed.alarm_name || '-' }}</el-descriptions-item>
+                  <el-descriptions-item label="告警ID">{{ alert.parsed.alarm_id || '-' }}</el-descriptions-item>
+                </el-descriptions>
+              </div>
+              <div v-else class="alert-message-text">{{ alert.message }}</div>
+            </div>
+          </div>
+        </div>
         
-        <el-empty v-if="!array.recent_alerts?.length" description="暂无告警" />
+        <el-empty v-else description="暂无告警，请刷新以同步" />
+      </el-card>
+
+      <!-- Log Viewer -->
+      <el-card class="log-card" v-if="array.state === 'connected'">
+        <template #header>
+          <div class="card-header">
+            <span>在线日志查看器</span>
+            <el-tag type="success" size="small">实时</el-tag>
+          </div>
+        </template>
+        
+        <LogViewer :array-id="array.array_id" />
+      </el-card>
+
+      <!-- Agent Config -->
+      <el-card class="config-card" v-if="array.state === 'connected' && array.agent_deployed">
+        <template #header>
+          <div class="card-header">
+            <span>Agent 配置</span>
+            <el-tag type="info" size="small">远程同步</el-tag>
+          </div>
+        </template>
+        
+        <AgentConfig :array-id="array.array_id" />
       </el-card>
     </div>
 
@@ -199,6 +251,9 @@ import { ElMessage } from 'element-plus'
 import { Refresh } from '@element-plus/icons-vue'
 import { useArrayStore } from '../stores/arrays'
 import api from '../api'
+import LogViewer from '../components/LogViewer.vue'
+import AgentConfig from '../components/AgentConfig.vue'
+import PerformanceMonitor from '../components/PerformanceMonitor.vue'
 
 const route = useRoute()
 const arrayStore = useArrayStore()
@@ -217,6 +272,8 @@ const connectForm = reactive({
   password: '',
 })
 
+const recentAlerts = ref([])
+
 const observerList = computed(() => {
   if (!array.value?.observer_status) return []
   return Object.entries(array.value.observer_status)
@@ -227,6 +284,38 @@ const observerList = computed(() => {
       message: info.message,
     }))
 })
+
+function parseAlarmMessage(message) {
+  // Parse structured alarm messages like "alarm type(5) alarm name(disk_fault) alarm id(0x1234)"
+  const parsed = {}
+  const typeMatch = message.match(/alarm\s*type\s*\((\d+)\)/i)
+  const nameMatch = message.match(/alarm\s*name\s*\(([^)]+)\)/i)
+  const idMatch = message.match(/alarm\s*id\s*\(([^)]+)\)/i)
+  
+  if (typeMatch) parsed.alarm_type = typeMatch[1]
+  if (nameMatch) parsed.alarm_name = nameMatch[1]
+  if (idMatch) parsed.alarm_id = idMatch[1]
+  
+  if (message.includes('历史告警') || message.includes('history')) {
+    parsed.is_history = true
+  }
+  
+  return Object.keys(parsed).length > 0 ? parsed : null
+}
+
+async function loadRecentAlerts() {
+  if (!array.value?.array_id) return
+  try {
+    const res = await api.getAlerts({ array_id: array.value.array_id, limit: 20 })
+    const alerts = res.data.items || res.data || []
+    recentAlerts.value = alerts.map(a => ({
+      ...a,
+      parsed: parseAlarmMessage(a.message || ''),
+    }))
+  } catch (error) {
+    console.error('Failed to load alerts:', error)
+  }
+}
 
 const isOperating = computed(() => deploying.value || starting.value || stopping.value || restarting.value)
 
@@ -325,6 +414,8 @@ async function loadArray() {
     const arrayId = route.params.id
     const response = await api.getArrayStatus(arrayId)
     array.value = response.data
+    // Load alerts from database instead of embedded in status
+    await loadRecentAlerts()
   } catch (error) {
     ElMessage.error('加载失败')
   } finally {
@@ -449,7 +540,8 @@ onMounted(loadArray)
 .info-card,
 .observer-card,
 .agent-card,
-.alerts-card {
+.alerts-card,
+.perf-card {
   margin-bottom: 20px;
 }
 
@@ -473,5 +565,134 @@ onMounted(loadArray)
 .agent-buttons {
   display: flex;
   gap: 8px;
+}
+
+/* Observer card grid */
+.observer-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 12px;
+}
+
+.observer-item {
+  padding: 12px 16px;
+  border-radius: 8px;
+  border-left: 4px solid #dcdfe6;
+  background: #fafafa;
+  transition: all 0.2s;
+}
+
+.observer-item:hover {
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+}
+
+.observer-ok { border-left-color: #67c23a; background: #f0f9eb; }
+.observer-warning { border-left-color: #e6a23c; background: #fdf6ec; }
+.observer-error { border-left-color: #f56c6c; background: #fef0f0; }
+
+.observer-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 6px;
+}
+
+.observer-name {
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.observer-message {
+  font-size: 12px;
+  color: #606266;
+  line-height: 1.4;
+  word-break: break-all;
+}
+
+.observer-id {
+  font-size: 11px;
+  color: #c0c4cc;
+  margin-top: 4px;
+  font-family: monospace;
+}
+
+/* Alert timeline */
+.alert-timeline {
+  max-height: 500px;
+  overflow-y: auto;
+}
+
+.alert-timeline-item {
+  display: flex;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid #f0f0f0;
+}
+
+.alert-timeline-item:last-child {
+  border-bottom: none;
+}
+
+.alert-time {
+  flex-shrink: 0;
+  width: 140px;
+  font-size: 12px;
+  color: #909399;
+  padding-top: 2px;
+}
+
+.alert-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.alert-header-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.alert-observer {
+  font-size: 13px;
+  font-weight: 500;
+  color: #606266;
+}
+
+.alert-structured {
+  margin-top: 4px;
+}
+
+.alert-message-text {
+  font-size: 13px;
+  color: #303133;
+  word-break: break-all;
+  line-height: 1.5;
+}
+
+.alert-error { }
+.alert-warning { }
+.alert-critical .alert-body { color: #f56c6c; }
+
+/* Performance card */
+.perf-card {
+  margin-bottom: 20px;
+}
+
+.log-card {
+  margin-bottom: 20px;
+}
+
+.log-card :deep(.el-card__body) {
+  height: 500px;
+  padding: 0;
+}
+
+.config-card {
+  margin-bottom: 20px;
+}
+
+.config-card :deep(.el-card__body) {
+  padding: 0;
 }
 </style>

@@ -64,12 +64,24 @@ export default {
   startAgent: (id) => httpLong.post(`/arrays/${id}/start-agent`),
   stopAgent: (id) => httpLong.post(`/arrays/${id}/stop-agent`),
   restartAgent: (id) => httpLong.post(`/arrays/${id}/restart-agent`),
+  // Log Viewer
+  getArrayLogs: (id, params) => http.get(`/arrays/${id}/logs`, { params }),
+  listLogFiles: (id, directory = '/var/log') => http.get(`/arrays/${id}/log-files`, { params: { directory } }),
+  // Batch Operations
+  batchAction: (action, arrayIds, password = null) => httpLong.post(`/arrays/batch/${action}`, { array_ids: arrayIds, password }),
+  // Agent Config
+  getAgentConfig: (id) => http.get(`/arrays/${id}/agent-config`),
+  updateAgentConfig: (id, config, restartAgent = false) => http.put(`/arrays/${id}/agent-config`, { ...config, restart_agent: restartAgent }),
+  restoreAgentConfig: (id) => http.post(`/arrays/${id}/agent-config/restore`),
+  // Metrics
+  getArrayMetrics: (id, minutes = 60) => http.get(`/arrays/${id}/metrics`, { params: { minutes } }),
 
   // Alerts
   getAlerts: (params) => http.get('/alerts', { params }),
   getRecentAlerts: (limit = 20) => http.get('/alerts/recent', { params: { limit } }),
   getAlertStats: (hours = 24) => http.get('/alerts/stats', { params: { hours } }),
   getAlertSummary: () => http.get('/alerts/summary'),
+  exportAlerts: (params) => http.get('/alerts/export', { params, responseType: 'blob' }),
 
   // Query
   executeQuery: (task) => http.post('/query/execute', task),
@@ -84,4 +96,24 @@ export default {
   getSystemAlertStats: () => http.get('/system-alerts/stats'),
   clearSystemAlerts: () => http.delete('/system-alerts'),
   getSystemDebugInfo: () => http.get('/system-alerts/debug'),
+
+  // Data Lifecycle
+  getSyncState: (arrayId) => http.get(`/data/sync-state/${arrayId}`),
+  getLogFiles: (arrayId) => http.get(`/data/log-files/${arrayId}`),
+  importHistory: (arrayId, data) => httpLong.post(`/data/import/${arrayId}`, data),
+  getArchiveConfig: () => http.get('/data/archive/config'),
+  updateArchiveConfig: (config) => http.put('/data/archive/config', config),
+  runArchive: () => httpLong.post('/data/archive/run'),
+  getArchiveStats: () => http.get('/data/archive/stats'),
+  queryArchive: (params) => http.get('/data/archive/query', { params }),
+
+  // Scheduled Tasks
+  getTasks: (enabledOnly = false) => http.get('/tasks', { params: { enabled_only: enabledOnly } }),
+  createTask: (data) => http.post('/tasks', data),
+  getTask: (id) => http.get(`/tasks/${id}`),
+  updateTask: (id, data) => http.put(`/tasks/${id}`, data),
+  deleteTask: (id) => http.delete(`/tasks/${id}`),
+  runTask: (id) => httpLong.post(`/tasks/${id}/run`),
+  getTaskResults: (id, limit = 20) => http.get(`/tasks/${id}/results`, { params: { limit } }),
+  getRecentTaskResults: (limit = 50) => http.get('/tasks/results/recent', { params: { limit } }),
 }

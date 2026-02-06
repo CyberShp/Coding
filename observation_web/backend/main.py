@@ -19,7 +19,11 @@ from .core.system_alert import sys_error, sys_warning
 from .db.database import init_db, create_tables
 from .api import arrays_router, alerts_router, query_router, ws_router
 from .api.system_alerts import router as system_alerts_router
+from .api.data_lifecycle import router as data_lifecycle_router
+from .api.scheduler import router as scheduler_router
+from .api.ingest import router as ingest_router
 from .core.ssh_pool import get_ssh_pool
+from .core.scheduler import get_scheduler
 
 # Configure logging
 logging.basicConfig(
@@ -28,6 +32,19 @@ logging.basicConfig(
     datefmt='%Y-%m-%d %H:%M:%S',
 )
 logger = logging.getLogger(__name__)
+
+
+async def _idle_connection_cleaner():
+    """Background task to clean up idle SSH connections"""
+    while True:
+        try:
+            await asyncio.sleep(120)  # Check every 2 minutes
+            ssh_pool = get_ssh_pool()
+            ssh_pool.cleanup_idle_connections(max_idle_seconds=600)  # 10 min idle timeout
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logger.warning(f"Idle connection cleanup error: {e}")
 
 
 @asynccontextmanager
@@ -45,10 +62,31 @@ async def lifespan(app: FastAPI):
     get_ssh_pool()
     logger.info("SSH pool initialized")
     
+    # Start task scheduler
+    scheduler = get_scheduler()
+    await scheduler.start()
+    logger.info("Task scheduler started")
+    
+    # Start background idle connection cleaner
+    cleanup_task = asyncio.create_task(_idle_connection_cleaner())
+    logger.info("Idle connection cleaner started")
+    
     yield
     
     # Shutdown
     logger.info("Shutting down...")
+    
+    # Stop background tasks
+    cleanup_task.cancel()
+    try:
+        await cleanup_task
+    except asyncio.CancelledError:
+        pass
+    
+    # Stop scheduler
+    scheduler = get_scheduler()
+    scheduler.stop()
+    logger.info("Task scheduler stopped")
     
     # Close all SSH connections
     ssh_pool = get_ssh_pool()
@@ -130,6 +168,9 @@ def create_app() -> FastAPI:
     app.include_router(alerts_router, prefix="/api")
     app.include_router(query_router, prefix="/api")
     app.include_router(system_alerts_router, prefix="/api")
+    app.include_router(data_lifecycle_router, prefix="/api")
+    app.include_router(scheduler_router, prefix="/api")
+    app.include_router(ingest_router, prefix="/api")
     app.include_router(ws_router)
     
     # Health check endpoint
@@ -142,15 +183,18 @@ def create_app() -> FastAPI:
     async def api_info():
         return {
             "name": "Observation Web API",
-            "version": "1.0.0",
-            "endpoints": {
-                "arrays": "/api/arrays",
-                "alerts": "/api/alerts",
-                "query": "/api/query",
-                "system_alerts": "/api/system-alerts",
-                "websocket_alerts": "/ws/alerts",
-                "websocket_status": "/ws/status",
-            }
+        "version": "2.0.0",
+        "endpoints": {
+            "arrays": "/api/arrays",
+            "alerts": "/api/alerts",
+            "query": "/api/query",
+            "system_alerts": "/api/system-alerts",
+            "data_lifecycle": "/api/data",
+            "tasks": "/api/tasks",
+            "ingest": "/api/ingest",
+            "websocket_alerts": "/ws/alerts",
+            "websocket_status": "/ws/status",
+        }
         }
     
     return app

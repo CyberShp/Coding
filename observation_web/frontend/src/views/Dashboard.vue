@@ -58,28 +58,49 @@
 
     <!-- Main Content -->
     <el-row :gutter="20">
-      <!-- Array Status Matrix -->
+      <!-- Array Health Matrix + Trends -->
       <el-col :span="16">
+        <!-- Health Matrix -->
         <el-card class="content-card">
           <template #header>
             <div class="card-header">
-              <span>阵列状态</span>
+              <span>阵列健康矩阵</span>
               <el-button text @click="loadArrays">
                 <el-icon><Refresh /></el-icon>
               </el-button>
             </div>
           </template>
-          <div class="array-grid" v-if="arrayStore.arrays.length > 0">
+          <div class="health-matrix" v-if="arrayStore.arrays.length > 0">
             <div
               v-for="arr in arrayStore.arrays"
               :key="arr.array_id"
-              class="array-card"
+              class="health-tile"
               :class="getArrayStatusClass(arr)"
               @click="$router.push(`/arrays/${arr.array_id}`)"
             >
-              <div class="array-status-dot" :class="getArrayStatusClass(arr)"></div>
-              <div class="array-name">{{ arr.name }}</div>
-              <div class="array-host">{{ arr.host }}</div>
+              <div class="tile-status-bar" :class="getArrayStatusClass(arr)"></div>
+              <div class="tile-content">
+                <div class="tile-name">{{ arr.name }}</div>
+                <div class="tile-host">{{ arr.host }}</div>
+                <div class="tile-meta">
+                  <el-tag :type="getStateTagType(arr.state)" size="small" effect="plain">
+                    {{ arr.state === 'connected' ? '在线' : '离线' }}
+                  </el-tag>
+                  <span v-if="arr.agent_running" class="tile-agent-badge">
+                    <el-icon color="#67c23a"><CircleCheck /></el-icon>
+                    Agent
+                  </span>
+                </div>
+                <div class="tile-observers" v-if="arr.observer_status && Object.keys(arr.observer_status).length > 0">
+                  <span 
+                    v-for="(obs, name) in arr.observer_status" 
+                    :key="name"
+                    class="obs-dot"
+                    :class="`obs-${obs.status}`"
+                    :title="`${name}: ${obs.status}`"
+                  ></span>
+                </div>
+              </div>
             </div>
           </div>
           <el-empty v-else description="暂无阵列">
@@ -87,7 +108,25 @@
           </el-empty>
         </el-card>
 
-        <!-- Alert Trend Chart -->
+        <!-- Observer Summary -->
+        <el-card class="content-card" v-if="observerSummary.length > 0">
+          <template #header>
+            <span>观察点概览</span>
+          </template>
+          <div class="observer-summary">
+            <div v-for="obs in observerSummary" :key="obs.name" class="obs-summary-item">
+              <span class="obs-name">{{ getObserverDisplayName(obs.name) }}</span>
+              <div class="obs-bar">
+                <div class="obs-bar-ok" :style="{ width: obs.okPercent + '%' }"></div>
+                <div class="obs-bar-warn" :style="{ width: obs.warnPercent + '%' }"></div>
+                <div class="obs-bar-error" :style="{ width: obs.errorPercent + '%' }"></div>
+              </div>
+              <span class="obs-count">{{ obs.ok }}/{{ obs.total }}</span>
+            </div>
+          </div>
+        </el-card>
+
+        <!-- Alert Trend Chart (multi-line by level) -->
         <el-card class="content-card chart-card">
           <template #header>
             <span>24小时告警趋势</span>
@@ -96,12 +135,12 @@
         </el-card>
       </el-col>
 
-      <!-- Recent Alerts -->
+      <!-- Recent Alerts Stream -->
       <el-col :span="8">
         <el-card class="content-card alerts-card">
           <template #header>
             <div class="card-header">
-              <span>实时告警</span>
+              <span>实时告警流</span>
               <el-badge :value="alertStore.wsConnected ? 'LIVE' : 'OFFLINE'" 
                         :type="alertStore.wsConnected ? 'success' : 'danger'"
                         class="ws-badge" />
@@ -183,6 +222,47 @@ const trendChartOption = computed(() => ({
   }]
 }))
 
+const OBSERVER_DISPLAY_NAMES = {
+  error_code: '误码监测',
+  link_status: '链路状态',
+  card_recovery: '卡修复',
+  alarm_type: 'AlarmType',
+  memory_leak: '内存泄漏',
+  cpu_usage: 'CPU利用率',
+  cmd_response: '命令响应',
+  sig_monitor: 'sig信号',
+  sensitive_info: '敏感信息',
+}
+
+function getObserverDisplayName(name) {
+  return OBSERVER_DISPLAY_NAMES[name] || name
+}
+
+const observerSummary = computed(() => {
+  const summaryMap = {}
+  
+  for (const arr of arrayStore.arrays) {
+    if (!arr.observer_status) continue
+    for (const [name, info] of Object.entries(arr.observer_status)) {
+      if (name === '_meta') continue
+      if (!summaryMap[name]) {
+        summaryMap[name] = { name, ok: 0, warning: 0, error: 0, total: 0 }
+      }
+      summaryMap[name].total++
+      if (info.status === 'ok') summaryMap[name].ok++
+      else if (info.status === 'warning') summaryMap[name].warning++
+      else if (info.status === 'error') summaryMap[name].error++
+    }
+  }
+  
+  return Object.values(summaryMap).map(s => ({
+    ...s,
+    okPercent: s.total > 0 ? (s.ok / s.total * 100) : 0,
+    warnPercent: s.total > 0 ? (s.warning / s.total * 100) : 0,
+    errorPercent: s.total > 0 ? (s.error / s.total * 100) : 0,
+  }))
+})
+
 function getArrayStatusClass(arr) {
   if (arr.state !== 'connected') return 'status-offline'
   if (arr.observer_status) {
@@ -192,6 +272,10 @@ function getArrayStatusClass(arr) {
     if (hasWarning) return 'status-warning'
   }
   return 'status-ok'
+}
+
+function getStateTagType(state) {
+  return state === 'connected' ? 'success' : 'info'
 }
 
 function getLevelType(level) {
@@ -294,48 +378,122 @@ onMounted(loadData)
   align-items: center;
 }
 
-.array-grid {
+/* Health Matrix */
+.health-matrix {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
-  gap: 16px;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 12px;
 }
 
-.array-card {
-  padding: 16px;
+.health-tile {
   border-radius: 8px;
-  background: #f5f7fa;
+  background: #fff;
+  border: 1px solid #e4e7ed;
   cursor: pointer;
-  transition: all 0.3s;
-  position: relative;
+  transition: all 0.2s;
+  overflow: hidden;
 }
 
-.array-card:hover {
+.health-tile:hover {
   transform: translateY(-2px);
-  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.1);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
 }
 
-.array-status-dot {
-  position: absolute;
-  top: 12px;
-  right: 12px;
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
+.tile-status-bar {
+  height: 4px;
+  width: 100%;
 }
 
-.status-ok .array-status-dot { background: #67c23a; }
-.status-warning .array-status-dot { background: #e6a23c; }
-.status-error .array-status-dot { background: #f56c6c; }
-.status-offline .array-status-dot { background: #909399; }
+.tile-status-bar.status-ok { background: #67c23a; }
+.tile-status-bar.status-warning { background: #e6a23c; }
+.tile-status-bar.status-error { background: #f56c6c; }
+.tile-status-bar.status-offline { background: #dcdfe6; }
 
-.array-name {
-  font-weight: 500;
-  margin-bottom: 4px;
+.tile-content {
+  padding: 12px 14px;
 }
 
-.array-host {
+.tile-name {
+  font-weight: 600;
+  font-size: 14px;
+  margin-bottom: 2px;
+}
+
+.tile-host {
   font-size: 12px;
   color: #909399;
+  margin-bottom: 8px;
+}
+
+.tile-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.tile-agent-badge {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  font-size: 11px;
+  color: #67c23a;
+}
+
+.tile-observers {
+  display: flex;
+  gap: 4px;
+  margin-top: 8px;
+}
+
+.obs-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #dcdfe6;
+}
+
+.obs-ok { background: #67c23a; }
+.obs-warning { background: #e6a23c; }
+.obs-error { background: #f56c6c; }
+
+/* Observer Summary */
+.observer-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.obs-summary-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.obs-name {
+  width: 80px;
+  font-size: 13px;
+  color: #606266;
+  flex-shrink: 0;
+}
+
+.obs-bar {
+  flex: 1;
+  height: 8px;
+  background: #f0f0f0;
+  border-radius: 4px;
+  display: flex;
+  overflow: hidden;
+}
+
+.obs-bar-ok { background: #67c23a; }
+.obs-bar-warn { background: #e6a23c; }
+.obs-bar-error { background: #f56c6c; }
+
+.obs-count {
+  width: 40px;
+  font-size: 12px;
+  color: #909399;
+  text-align: right;
 }
 
 .alerts-card {

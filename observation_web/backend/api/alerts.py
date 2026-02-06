@@ -2,11 +2,14 @@
 Alert management API endpoints.
 """
 
+import csv
+import io
 import logging
 from datetime import datetime, timedelta
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..core.alert_store import get_alert_store, AlertStore
@@ -124,6 +127,69 @@ async def get_alert_summary(
         "error_count": error_count + critical_count,
         "warning_count": total_24h - error_count - critical_count,
     }
+
+
+@router.get("/export")
+async def export_alerts(
+    format: str = Query("csv", description="Export format: csv"),
+    array_id: Optional[str] = Query(None, description="Filter by array ID"),
+    observer_name: Optional[str] = Query(None, description="Filter by observer"),
+    level: Optional[str] = Query(None, description="Filter by level"),
+    hours: int = Query(24, description="Time range in hours"),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Export alerts to CSV file.
+    
+    Returns a downloadable CSV file with alerts data.
+    """
+    store = get_alert_store()
+    
+    start_time = datetime.now() - timedelta(hours=hours)
+    
+    alerts = await store.get_alerts(
+        db,
+        array_id=array_id,
+        observer_name=observer_name,
+        level=level,
+        start_time=start_time,
+        limit=10000,  # Max export limit
+        offset=0,
+    )
+    
+    # Generate CSV
+    output = io.StringIO()
+    writer = csv.writer(output)
+    
+    # Header
+    writer.writerow([
+        '时间', '级别', '阵列ID', '观察点', '消息', '详情'
+    ])
+    
+    # Data rows
+    for alert in alerts:
+        writer.writerow([
+            alert.timestamp.strftime('%Y-%m-%d %H:%M:%S') if alert.timestamp else '',
+            alert.level,
+            alert.array_id,
+            alert.observer_name,
+            alert.message,
+            alert.details if alert.details else '',
+        ])
+    
+    output.seek(0)
+    
+    # Generate filename with timestamp
+    filename = f"alerts_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+    
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": f"attachment; filename={filename}",
+            "Content-Type": "text/csv; charset=utf-8-sig",
+        }
+    )
 
 
 @router.delete("/cleanup")

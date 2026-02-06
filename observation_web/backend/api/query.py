@@ -177,6 +177,10 @@ async def create_template(
         expect_match=template.rule.expect_match,
         extract_fields=json.dumps([f.dict() for f in template.rule.extract_fields]),
         is_builtin=False,
+        auto_monitor=template.auto_monitor,
+        monitor_interval=template.monitor_interval,
+        monitor_arrays=json.dumps(template.monitor_arrays),
+        alert_on_mismatch=template.alert_on_mismatch,
     )
     
     db.add(db_template)
@@ -190,6 +194,10 @@ async def create_template(
         commands=json.loads(db_template.commands),
         rule=template.rule,
         is_builtin=False,
+        auto_monitor=db_template.auto_monitor,
+        monitor_interval=db_template.monitor_interval,
+        monitor_arrays=json.loads(db_template.monitor_arrays or "[]"),
+        alert_on_mismatch=db_template.alert_on_mismatch,
         created_at=db_template.created_at,
         updated_at=db_template.updated_at,
     )

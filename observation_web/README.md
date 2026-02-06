@@ -1,353 +1,206 @@
-# 观察点监控平台 - Web 版
+# Observation Web Advance v2.0
 
-基于 FastAPI + Vue 3 的存储阵列监控平台 Web 服务，用于集中管理和监控多台存储阵列的健康状态。
+**观察点监控平台 - Web 增强版 v2.0**
 
-## 功能特性
+基于 FastAPI + Vue 3 的存储阵列观察点监控系统增强版，提供完善的告警管理、性能监控、数据生命周期、定时任务等功能。
 
-### 核心功能
-- **多阵列管理**: 集中管理多台存储阵列，支持 SSH 密码和密钥认证
-- **实时监控**: WebSocket 实时推送告警，无需手动刷新
-- **Agent 部署**: 一键部署和管理远程观察点 Agent
-- **告警同步**: 自动同步远程阵列的告警到本地数据库
-- **自定义查询**: 灵活的 SSH 命令执行和正则匹配
+## v2.0 新增功能
 
-### 监控能力
-- 误码监测 (error_code)
-- 链路状态 (link_status)
-- 卡修复监测 (card_recovery)
-- AlarmType 告警 (alarm_type)
-- 内存泄漏检测 (memory_leak)
-- CPU 利用率 (cpu_usage)
-- 命令响应 (cmd_response)
-- 信号监测 (sig_monitor)
-- 敏感信息检测 (sensitive_info)
+### 1. Agent 启动修复 (P0)
+- 使用 PID 文件跟踪 Agent 进程，替代不可靠的 `nohup`
+- 启动后验证进程存活（2 秒超时检测）
+- 启动失败时返回详细错误日志（从 `/tmp/observation_points_start.log` 读取）
+- 使用 `disown` 确保 SSH 断开后进程不被杀死
 
-### 系统功能
-- **系统告警**: 后端错误追踪和调试信息展示
-- **自动重连**: SSH 连接断开后自动尝试重连（最多3次）
-- **告警统计**: 24小时告警趋势图、按级别/观察点统计
+### 2. alerts.log 性能优化 (P0)
+- **增量拉取**: 使用 `wc -l` + `tail -n` 只读取新增行，避免全量传输
+- **位置记录**: 服务端追踪每个阵列的同步位置，支持断点续传
+- **响应瘦身**: 刷新接口不再返回完整 `recent_alerts`，改为数据库分页查询
+- **去重优化**: 从 O(n) DB 比对改为基于内容 hash 的内存去重
 
-## 技术栈
+### 3. 双向数据推送 (P1)
+- **Agent HTTP 推送**: Agent 可主动将告警推送到 Web 后端 `/api/ingest` 端点
+- **指标推送**: CPU/内存等指标数据也可通过 HTTP 推送
+- **异步推送**: 使用后台线程推送，不阻塞观察点检查
+- **混合模式**: 推送和 SSH 拉取可并存，推送优先
 
-### 后端
-- **FastAPI**: 高性能异步 Web 框架
-- **SQLite + SQLAlchemy**: 轻量级数据库
-- **Paramiko**: SSH 连接管理
-- **WebSocket**: 实时通信
+### 4. CPU/内存性能曲线图 (P1)
+- **Agent 指标采集**: CPU/内存观察点每次 check 都记录到 `metrics.jsonl`
+- **指标 API**: 新增 `/api/arrays/{id}/metrics` 端点，支持时间范围查询
+- **ECharts 可视化**: 阵列详情页新增"性能监控"卡片
+  - CPU0 利用率折线图 + 90% 告警线
+  - 内存使用量折线图
+  - 支持 30分钟/1小时/6小时/24小时时间范围
+  - 自动刷新（15 秒间隔）
+  - 数据缩放（鼠标滚轮）
 
-### 前端
-- **Vue 3 + Vite**: 现代化前端构建
-- **Element Plus**: UI 组件库
-- **ECharts**: 图表可视化
-- **Pinia**: 状态管理
-- **Axios**: HTTP 请求
+### 5. 界面功能化增强 (P1)
+- **仪表盘健康矩阵**: 阵列卡片显示状态栏 + Agent 徽章 + 观察点状态点
+- **观察点概览**: 按观察点维度统计正常/告警/错误比例
+- **观察点卡片化**: 阵列详情中观察点从表格改为彩色卡片，直观展示状态
+- **告警结构化展示**: AlarmType 告警解析为结构化表格（类型/名称/ID）
+- **告警时间线**: 最近告警以时间线形式展示，支持历史告警标签
+
+### 6. 50+ 台阵列规模优化 (P2)
+- **异步 SSH 执行**: 新增 `execute_async` 方法，使用线程池避免阻塞事件循环
+- **批量并发执行**: `SSHPool.batch_execute()` 支持在多台阵列上并发执行命令
+- **空闲连接回收**: 后台任务每 2 分钟检测空闲超 10 分钟的连接并断开
+- **连接统计**: `SSHPool.get_stats()` 提供连接池状态监控
+
+### 7. 自定义监测固化 (P2)
+- 查询模板新增"定时监测"开关
+- 配置监测间隔（1分钟~1小时）
+- 保存后自动注册为定时观察点
+- 异常时自动生成告警并推送
+
+### 8. 一键启动脚本 (P3)
+- `start.sh` (Linux/Mac) 和 `start.bat` (Windows)
+- 同时启动后端和前端服务
+- 自动检测依赖并安装
+- Ctrl+C 优雅停止所有服务
+
+## 保留功能（v1.x）
+
+- **数据导出**: 告警数据导出为 CSV 文件
+- **数据生命周期管理**: 历史导入、归档转存、可配置保留期
+- **在线日志查看器**: 远程日志实时查看、关键字搜索
+- **批量操作**: 多选阵列批量连接/刷新/Agent 管理
+- **定时任务**: Cron 调度查询任务
+- **Agent 配置远程同步**: Web 端编辑远程 Agent 配置
+
+## 快速开始
+
+### 方式一：一键启动（推荐）
+
+```bash
+chmod +x start.sh
+./start.sh
+```
+
+Windows:
+```cmd
+start.bat
+```
+
+### 方式二：手动启动
+
+```bash
+# 后端
+pip install -r requirements.txt
+python3 -m uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload
+
+# 前端（另一个终端）
+cd frontend
+npm install
+npm run dev
+```
+
+### 离线安装
+
+参见 [offline_packages/INSTALL.md](offline_packages/INSTALL.md)
 
 ## 目录结构
 
 ```
-observation_web/
-├── backend/                # FastAPI 后端
-│   ├── main.py            # 应用入口、中间件
-│   ├── config.py          # 配置管理
-│   ├── api/               # API 路由
-│   │   ├── arrays.py      # 阵列管理 API
-│   │   ├── alerts.py      # 告警查询 API
-│   │   ├── query.py       # 自定义查询 API
-│   │   ├── websocket.py   # WebSocket 端点
-│   │   └── system_alerts.py # 系统告警 API
-│   ├── core/              # 核心逻辑
-│   │   ├── ssh_pool.py    # SSH 连接池
-│   │   ├── agent_deployer.py # Agent 部署
-│   │   ├── alert_store.py # 告警存储
-│   │   └── system_alert.py # 系统告警
-│   ├── models/            # 数据模型
-│   └── db/                # 数据库
-├── frontend/              # Vue 3 前端
+observation_web_advance/
+├── backend/                    # FastAPI 后端
+│   ├── api/
+│   │   ├── arrays.py           # 阵列管理 + 批量操作 + 日志 + 指标
+│   │   ├── alerts.py           # 告警管理 + 导出
+│   │   ├── ingest.py           # 数据接收（Agent 推送）
+│   │   ├── data_lifecycle.py   # 数据生命周期
+│   │   ├── scheduler.py        # 定时任务
+│   │   ├── websocket.py        # WebSocket 实时推送
+│   │   └── system_alerts.py    # 系统告警
+│   ├── core/
+│   │   ├── agent_deployer.py   # Agent 部署（含 PID 管理）
+│   │   ├── ssh_pool.py         # SSH 连接池（异步+回收）
+│   │   ├── data_lifecycle.py   # 历史导入/归档
+│   │   ├── scheduler.py        # APScheduler 任务调度
+│   │   └── system_alert.py     # 系统告警存储
+│   ├── models/                 # SQLAlchemy + Pydantic 模型
+│   └── main.py                 # 入口 + 中间件 + 生命周期
+├── frontend/                   # Vue 3 前端
 │   ├── src/
-│   │   ├── views/        # 页面组件
-│   │   ├── api/          # API 封装
-│   │   ├── stores/       # 状态管理
-│   │   └── router/       # 路由配置
-│   ├── package.json
-│   └── vite.config.js
-├── offline_packages/      # 离线安装包
-├── config.json            # 配置文件
-└── requirements.txt       # Python 依赖
+│   │   ├── views/
+│   │   │   ├── Dashboard.vue          # 仪表盘（健康矩阵+观察点概览）
+│   │   │   ├── ArrayDetail.vue        # 阵列详情（卡片+性能+结构化告警）
+│   │   │   ├── CustomQuery.vue        # 自定义查询（含定时监测）
+│   │   │   ├── DataManagement.vue     # 数据管理
+│   │   │   ├── ScheduledTasks.vue     # 定时任务
+│   │   │   └── ...
+│   │   ├── components/
+│   │   │   ├── PerformanceMonitor.vue # 性能监控（ECharts 曲线图）
+│   │   │   ├── LogViewer.vue          # 日志查看器
+│   │   │   └── AgentConfig.vue        # Agent 配置编辑器
+│   │   └── api/index.js               # API 客户端
+│   └── ...
+├── start.sh                    # Linux/Mac 一键启动
+├── start.bat                   # Windows 一键启动
+├── offline_packages/           # 离线安装包
+└── requirements.txt            # Python 依赖
 ```
 
-## 快速开始
+## API 端点
 
-### 环境要求
-- Python 3.7+ (推荐 3.9+)
-- Node.js 18+ (前端开发)
-- SSH 访问目标阵列的权限
+| 端点 | 方法 | 说明 |
+|------|------|------|
+| `/api/arrays` | GET/POST | 阵列管理 |
+| `/api/arrays/statuses` | GET | 阵列状态（含连接状态） |
+| `/api/arrays/batch/{action}` | POST | 批量操作 |
+| `/api/arrays/{id}/refresh` | POST | 增量刷新（含 full_sync 参数） |
+| `/api/arrays/{id}/metrics` | GET | 性能指标（CPU/内存曲线） |
+| `/api/arrays/{id}/logs` | GET | 远程日志查看 |
+| `/api/arrays/{id}/agent-config` | GET/PUT | Agent 配置管理 |
+| `/api/alerts` | GET | 告警查询 |
+| `/api/alerts/export` | GET | 告警导出 (CSV) |
+| `/api/ingest` | POST | 接收 Agent 推送数据 |
+| `/api/ingest/batch` | POST | 批量接收推送数据 |
+| `/api/data/*` | * | 数据生命周期 |
+| `/api/tasks` | * | 定时任务 CRUD |
+| `/api/system-alerts` | * | 系统告警 |
+| `/ws/alerts` | WS | WebSocket 实时告警 |
+| `/ws/status` | WS | WebSocket 状态更新 |
 
-### 1. 安装后端依赖
+## Agent 配置（推送模式）
 
-```bash
-cd observation_web
-pip install -r requirements.txt
-```
-
-**离线安装**（参见 `offline_packages/INSTALL.md`）：
-```bash
-pip install --no-index --find-links=offline_packages *.whl
-```
-
-### 2. 安装前端依赖
-
-```bash
-cd frontend
-npm install
-```
-
-### 3. 配置
-
-编辑 `config.json`：
+在阵列端的 `config.json` 中添加推送配置:
 
 ```json
 {
-  "server": {
-    "host": "0.0.0.0",
-    "port": 8000,
-    "debug": false,
-    "cors_origins": ["*"]
-  },
-  "ssh": {
-    "default_port": 22,
-    "timeout": 10,
-    "keepalive_interval": 30
-  },
-  "database": {
-    "path": "observation_web.db",
-    "echo": false
-  },
-  "remote": {
-    "agent_deploy_path": "/home/permitdir/observation_points",
-    "agent_log_path": "/var/log/observation-points/alerts.log",
-    "python_cmd": "python3"
+  "reporter": {
+    "output": "file",
+    "file_path": "/var/log/observation-points/alerts.log",
+    "push_enabled": true,
+    "push_url": "http://192.168.1.100:8000/api/ingest",
+    "push_timeout": 5,
+    "metrics_enabled": true
   }
 }
 ```
 
-### 4. 启动服务
+## 技术栈
 
-**后端**：
-```bash
-cd observation_web
-uvicorn backend.main:app --reload --host 0.0.0.0 --port 8000
-```
+**后端:**
+- FastAPI + Uvicorn
+- SQLAlchemy + aiosqlite
+- Paramiko (SSH) + ThreadPoolExecutor
+- APScheduler (定时任务)
+- WebSocket (实时推送)
 
-**前端开发服务器**：
-```bash
-cd frontend
-npm run dev
-```
+**前端:**
+- Vue 3 + Vite
+- Element Plus (UI 组件)
+- ECharts + vue-echarts (数据可视化)
+- Pinia (状态管理)
+- Vue Router
 
-**生产环境**（构建静态文件）：
-```bash
-cd frontend
-npm run build
-# dist 目录可部署到 Nginx
-```
+## 系统要求
 
-### 5. 访问
-
-- 前端: http://localhost:5173 (开发) 或 http://localhost:3000 (生产)
-- API 文档: http://localhost:8000/docs
-
-## API 参考
-
-### 阵列管理
-
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| GET | `/api/arrays` | 获取阵列列表（仅数据库记录） |
-| GET | `/api/arrays/statuses` | 获取阵列状态（含连接状态） |
-| POST | `/api/arrays` | 添加阵列 |
-| GET | `/api/arrays/{id}` | 获取单个阵列 |
-| PUT | `/api/arrays/{id}` | 更新阵列 |
-| DELETE | `/api/arrays/{id}` | 删除阵列 |
-| POST | `/api/arrays/{id}/connect` | 连接阵列 |
-| POST | `/api/arrays/{id}/disconnect` | 断开连接 |
-| POST | `/api/arrays/{id}/refresh` | 刷新状态并同步告警 |
-| GET | `/api/arrays/{id}/status` | 获取阵列详细状态 |
-
-### Agent 管理
-
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| POST | `/api/arrays/{id}/deploy-agent` | 部署 Agent |
-| POST | `/api/arrays/{id}/start-agent` | 启动 Agent |
-| POST | `/api/arrays/{id}/stop-agent` | 停止 Agent |
-| POST | `/api/arrays/{id}/restart-agent` | 重启 Agent |
-
-### 告警管理
-
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| GET | `/api/alerts` | 获取告警列表（支持过滤） |
-| GET | `/api/alerts/recent` | 获取最近告警 |
-| GET | `/api/alerts/stats` | 告警统计 |
-| GET | `/api/alerts/summary` | 告警摘要 |
-
-### 系统告警
-
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| GET | `/api/system-alerts` | 获取系统告警 |
-| GET | `/api/system-alerts/stats` | 系统告警统计 |
-| GET | `/api/system-alerts/debug` | 调试信息（SSH状态、缓存等） |
-| DELETE | `/api/system-alerts` | 清空系统告警 |
-
-### WebSocket
-
-- `/ws/alerts` - 实时告警推送
-- `/ws/status` - 阵列状态更新
-
-## 功能说明
-
-### AlarmType 告警处理
-
-- `alarm type(0)`: 历史告警上报，仅通知，不加入活跃告警列表
-- `alarm type(1)`: 事件生成
-- `send alarm`: 告警上报（加入活跃告警）
-- `resume alarm`: 告警恢复（从活跃告警移除）
-
-### 自定义查询
-
-支持三种匹配模式：
-
-1. **有效值匹配**: 匹配到指定模式表示正常
-2. **无效值匹配**: 匹配到指定模式表示异常
-3. **正则提取**: 从输出中提取指定字段
-
-示例：
-```
-命令: cat /proc/meminfo | grep MemFree
-模式: MemFree:\s+(\d+)
-类型: 正则提取
-结果: 提取内存空闲值
-```
-
-### 系统调试
-
-系统告警页面提供调试功能，可查看：
-- SSH 连接状态
-- 阵列状态缓存
-- 告警统计
-- 系统信息
-
-## 测试用例
-
-### 用例 1: 阵列管理
-
-| 步骤 | 操作 | 预期结果 |
-|------|------|----------|
-| 1 | 访问"阵列管理"页面 | 显示阵列列表（可能为空） |
-| 2 | 点击"添加阵列"，填写表单 | 弹出添加对话框 |
-| 3 | 输入有效的阵列信息，点击确定 | 阵列添加成功，列表更新 |
-| 4 | 点击"连接"按钮，输入密码 | 连接成功，状态变为"已连接" |
-| 5 | 点击"详情"查看阵列详情 | 显示阵列详细信息和观察点状态 |
-| 6 | 点击"断开"按钮 | 断开成功，状态变为"未连接" |
-| 7 | 点击"删除"按钮并确认 | 阵列删除成功 |
-
-### 用例 2: Agent 部署
-
-| 步骤 | 操作 | 预期结果 |
-|------|------|----------|
-| 1 | 连接到阵列 | 连接成功 |
-| 2 | 进入阵列详情页 | 显示 Agent 状态为"未部署" |
-| 3 | 点击"部署 Agent" | 显示进度，部署完成后状态变为"已部署" |
-| 4 | 点击"启动 Agent" | Agent 状态变为"运行中" |
-| 5 | 点击"刷新" | 显示观察点状态和最近告警 |
-| 6 | 点击"停止 Agent" | Agent 状态变为"已部署" |
-| 7 | 点击"重启 Agent" | Agent 重新启动 |
-
-### 用例 3: 告警查看
-
-| 步骤 | 操作 | 预期结果 |
-|------|------|----------|
-| 1 | 连接阵列并确保 Agent 运行 | 连接成功，Agent 运行中 |
-| 2 | 点击阵列详情页"刷新" | 同步告警到本地数据库 |
-| 3 | 访问"告警中心"页面 | 显示告警列表和统计 |
-| 4 | 使用筛选器按级别过滤 | 只显示对应级别的告警 |
-| 5 | 展开告警查看详情 | 显示告警详细信息 |
-| 6 | 访问仪表盘 | 显示24小时告警趋势图 |
-
-### 用例 4: 系统告警
-
-| 步骤 | 操作 | 预期结果 |
-|------|------|----------|
-| 1 | 访问"系统告警"页面 | 显示系统告警列表 |
-| 2 | 展开调试信息 | 显示 SSH 连接状态、缓存信息 |
-| 3 | 触发一个错误（如连接失败） | 系统告警列表新增错误记录 |
-| 4 | 查看错误详情 | 显示错误堆栈和详细信息 |
-| 5 | 点击"清空"按钮 | 清空所有系统告警 |
-
-### 用例 5: 连接稳定性
-
-| 步骤 | 操作 | 预期结果 |
-|------|------|----------|
-| 1 | 连接到阵列 | 连接成功 |
-| 2 | 等待一段时间（如5分钟） | 连接保持 |
-| 3 | 返回阵列管理页面 | 阵列显示为"已连接" |
-| 4 | 强制断开网络后恢复 | 自动重连（最多3次） |
-| 5 | 检查系统告警 | 如有重连，显示相关告警 |
-
-### 用例 6: 自定义查询
-
-| 步骤 | 操作 | 预期结果 |
-|------|------|----------|
-| 1 | 连接到阵列 | 连接成功 |
-| 2 | 访问"自定义查询"页面 | 显示查询界面 |
-| 3 | 输入命令 `hostname` | 执行成功，返回主机名 |
-| 4 | 添加正则模式进行匹配 | 根据模式显示匹配结果 |
-| 5 | 保存为查询模板 | 模板保存成功 |
-| 6 | 选择保存的模板执行 | 使用模板参数执行查询 |
-
-## 故障排查
-
-### 问题: 连接阵列失败
-- 检查网络连通性: `ping <array_ip>`
-- 检查 SSH 端口: `telnet <array_ip> 22`
-- 检查用户名密码是否正确
-- 查看系统告警页面的错误详情
-
-### 问题: 告警不同步
-- 确保 Agent 已部署并运行
-- 点击阵列详情页的"刷新"按钮手动同步
-- 检查 `agent_log_path` 配置是否正确
-- 查看系统告警中是否有读取文件的错误
-
-### 问题: 页面卡住
-- 检查后端服务是否正常运行
-- 检查浏览器控制台是否有错误
-- 尝试刷新页面
-- 查看系统告警中的慢请求记录
-
-### 问题: 阵列重启后数据丢失
-- 数据库文件路径为相对路径，确保从固定目录启动服务
-- 或在 `config.json` 中使用绝对路径配置数据库
-
-## 更新日志
-
-### v1.1.0
-- 新增系统告警模块，支持错误追踪和调试
-- 修复 `/api/arrays/statuses` 404 问题
-- 修复数据库路径问题，使用绝对路径
-- 优化告警同步，自动保存到数据库并 WebSocket 广播
-- 优化 alarm type(0) 处理，标记为"历史告警上报"
-- 添加 SSH 自动重连机制
-- 优化前端请求超时处理
-- 添加全局异常追踪中间件
-
-### v1.0.0
-- 初始版本
-- 多阵列管理
-- Agent 部署和管理
-- 实时告警推送
-- 自定义查询
+- Python 3.8+
+- Node.js 16+
+- 目标阵列支持 SSH 访问
+- 阵列与 PC 之间网络可达（推送模式需要阵列能访问 PC 的 8000 端口）
 
 ## 许可证
 

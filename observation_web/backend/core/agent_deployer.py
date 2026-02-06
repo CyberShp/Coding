@@ -7,6 +7,7 @@ import os
 import posixpath
 import tarfile
 import tempfile
+import time
 from pathlib import Path
 from typing import Any, Dict, Iterable, Tuple
 
@@ -15,6 +16,10 @@ from .ssh_pool import SSHConnection
 from .system_alert import sys_error, sys_warning, sys_info
 
 logger = logging.getLogger(__name__)
+
+# PID file path on remote array
+AGENT_PID_FILE = "/var/run/observation-points.pid"
+AGENT_START_LOG = "/tmp/observation_points_start.log"
 
 
 class AgentDeployer:
@@ -32,7 +37,6 @@ class AgentDeployer:
         try:
             local_package = self._build_package()
             deploy_path = self.config.remote.agent_deploy_path
-            # Use posixpath for remote Linux paths (avoid Windows backslash issue)
             deploy_parent = posixpath.dirname(deploy_path)
             remote_package = posixpath.join(deploy_parent, "observation_points.tar.gz")
 
@@ -74,42 +78,88 @@ class AgentDeployer:
                     pass
 
     def start_agent(self) -> Dict[str, Any]:
+        """Start the agent with PID tracking and startup verification."""
         if not self.conn.is_connected():
             return {"ok": False, "error": "Not connected"}
 
         deploy_path = self.config.remote.agent_deploy_path
         log_path = self.config.remote.agent_log_path
         python_cmd = self.config.remote.python_cmd
-        # Use posixpath for remote Linux paths
         log_parent = posixpath.dirname(log_path)
 
-        commands = [
-            f"mkdir -p {log_parent}",
-            f"cd {deploy_path} && nohup {python_cmd} -m observation_points "
+        # Step 1: Stop any existing agent first
+        self.stop_agent()
+        time.sleep(1)
+
+        # Step 2: Start agent with shell wrapper that captures PID and startup errors
+        start_script = (
+            f"mkdir -p {log_parent} && "
+            f"cd {deploy_path} && "
+            f"{python_cmd} -m observation_points "
             f"-c /etc/observation-points/config.json "
-            f"--log-file {log_path} >/dev/null 2>&1 &",
-        ]
+            f"--log-file {log_path} "
+            f"> {AGENT_START_LOG} 2>&1 & "
+            f"AGENT_PID=$! && "
+            f"echo $AGENT_PID > {AGENT_PID_FILE} && "
+            f"echo $AGENT_PID"
+        )
 
-        ok, error = self._run_commands(commands)
-        if not ok:
-            return {"ok": False, "error": error}
+        exit_code, pid_str, err = self.conn.execute(start_script, timeout=15)
+        if exit_code != 0:
+            # Read startup log for details
+            _, start_log, _ = self.conn.execute(f"cat {AGENT_START_LOG} 2>/dev/null")
+            error_detail = start_log.strip() if start_log and start_log.strip() else (err or "Unknown error")
+            sys_error("agent_deployer", f"Agent start command failed on {self.conn.host}",
+                      {"exit_code": exit_code, "error": error_detail})
+            return {"ok": False, "error": f"启动命令失败: {error_detail}"}
 
-        return {"ok": True, "message": "Agent started"}
+        pid = pid_str.strip()
+        if not pid or not pid.isdigit():
+            return {"ok": False, "error": f"未能获取进程 PID (got: {pid_str.strip()})"}
+
+        # Step 3: Wait and verify process is alive
+        time.sleep(2)
+        exit_code, out, _ = self.conn.execute(f"kill -0 {pid} 2>/dev/null && echo 'alive'")
+
+        if "alive" not in (out or ""):
+            # Process died, read startup log for error details
+            _, start_log, _ = self.conn.execute(f"cat {AGENT_START_LOG} 2>/dev/null")
+            error_detail = start_log.strip() if start_log and start_log.strip() else "进程启动后立即退出，无日志"
+            sys_error("agent_deployer", f"Agent process died after start on {self.conn.host}",
+                      {"pid": pid, "start_log": error_detail[:500]})
+            return {"ok": False, "error": f"Agent 进程启动后退出 (PID {pid}): {error_detail[:300]}"}
+
+        # Step 4: Use disown to detach from SSH session
+        self.conn.execute(f"disown {pid} 2>/dev/null || true")
+
+        sys_info("agent_deployer", f"Agent started on {self.conn.host}", {"pid": pid})
+        return {"ok": True, "message": f"Agent started (PID: {pid})", "pid": int(pid)}
 
     def stop_agent(self) -> Dict[str, Any]:
+        """Stop agent using PID file, falling back to pkill."""
         if not self.conn.is_connected():
             return {"ok": False, "error": "Not connected"}
 
-        exit_code, _, err = self.conn.execute("pkill -f 'python.*observation_points'")
-        if exit_code not in (0, 1):
-            return {"ok": False, "error": err or "Failed to stop agent"}
+        # Try PID file first
+        exit_code, pid_str, _ = self.conn.execute(f"cat {AGENT_PID_FILE} 2>/dev/null")
+        if exit_code == 0 and pid_str.strip().isdigit():
+            pid = pid_str.strip()
+            self.conn.execute(f"kill {pid} 2>/dev/null")
+            time.sleep(0.5)
+            # Force kill if still alive
+            self.conn.execute(f"kill -9 {pid} 2>/dev/null")
+            self.conn.execute(f"rm -f {AGENT_PID_FILE}")
+        
+        # Also pkill as fallback to catch orphaned processes
+        self.conn.execute("pkill -f 'python.*observation_points' 2>/dev/null")
+        time.sleep(0.5)
+        self.conn.execute("pkill -9 -f 'python.*observation_points' 2>/dev/null")
 
         return {"ok": True, "message": "Agent stopped"}
 
     def restart_agent(self) -> Dict[str, Any]:
-        stop_result = self.stop_agent()
-        if not stop_result["ok"]:
-            return stop_result
+        self.stop_agent()
+        time.sleep(1)
         return self.start_agent()
 
     def check_deployed(self) -> bool:
@@ -118,8 +168,36 @@ class AgentDeployer:
         return exit_code == 0 and "deployed" in out
 
     def check_running(self) -> bool:
-        exit_code, out, _ = self.conn.execute("pgrep -f 'python.*observation_points'")
+        """Check if agent is running using PID file, falling back to pgrep."""
+        # Try PID file first
+        exit_code, pid_str, _ = self.conn.execute(f"cat {AGENT_PID_FILE} 2>/dev/null")
+        if exit_code == 0 and pid_str.strip().isdigit():
+            pid = pid_str.strip()
+            exit_code, out, _ = self.conn.execute(f"kill -0 {pid} 2>/dev/null && echo 'running'")
+            if "running" in (out or ""):
+                return True
+        
+        # Fallback to pgrep
+        exit_code, out, _ = self.conn.execute("pgrep -f 'python.*observation_points' 2>/dev/null")
         return exit_code == 0 and out.strip() != ""
+
+    def get_agent_status(self) -> Dict[str, Any]:
+        """Get detailed agent status including PID and uptime."""
+        info = {"deployed": self.check_deployed(), "running": False, "pid": None}
+        
+        exit_code, pid_str, _ = self.conn.execute(f"cat {AGENT_PID_FILE} 2>/dev/null")
+        if exit_code == 0 and pid_str.strip().isdigit():
+            pid = pid_str.strip()
+            exit_code, out, _ = self.conn.execute(f"kill -0 {pid} 2>/dev/null && echo 'running'")
+            if "running" in (out or ""):
+                info["running"] = True
+                info["pid"] = int(pid)
+                # Get uptime
+                _, elapsed, _ = self.conn.execute(f"ps -p {pid} -o etimes= 2>/dev/null")
+                if elapsed and elapsed.strip().isdigit():
+                    info["uptime_seconds"] = int(elapsed.strip())
+        
+        return info
 
     def _build_package(self) -> str:
         base_dir = Path(__file__).resolve().parents[2]

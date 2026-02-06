@@ -24,6 +24,10 @@
               <el-icon><Search /></el-icon>
               查询
             </el-button>
+            <el-button type="success" @click="exportAlerts" :loading="exporting">
+              <el-icon><Download /></el-icon>
+              导出
+            </el-button>
           </div>
         </div>
       </template>
@@ -106,10 +110,12 @@
 
 <script setup>
 import { ref, reactive, onMounted } from 'vue'
-import { Search } from '@element-plus/icons-vue'
+import { Search, Download } from '@element-plus/icons-vue'
+import { ElMessage } from 'element-plus'
 import api from '../api'
 
 const loading = ref(false)
+const exporting = ref(false)
 const alerts = ref([])
 const stats = ref(null)
 
@@ -182,6 +188,37 @@ async function loadAlerts() {
     pagination.total = statsResponse.data.total
   } finally {
     loading.value = false
+  }
+}
+
+async function exportAlerts() {
+  exporting.value = true
+  try {
+    const params = {
+      hours: filters.hours,
+      format: 'csv',
+    }
+    if (filters.level) params.level = filters.level
+    if (filters.observer) params.observer_name = filters.observer
+
+    const response = await api.exportAlerts(params)
+    
+    // Create download link
+    const blob = new Blob([response.data], { type: 'text/csv;charset=utf-8' })
+    const url = window.URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `alerts_${new Date().toISOString().slice(0, 10)}.csv`
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+    window.URL.revokeObjectURL(url)
+    
+    ElMessage.success('导出成功')
+  } catch (error) {
+    ElMessage.error('导出失败')
+  } finally {
+    exporting.value = false
   }
 }
 

@@ -4,14 +4,54 @@
       <template #header>
         <div class="card-header">
           <span>阵列管理</span>
-          <el-button type="primary" @click="showAddDialog">
-            <el-icon><Plus /></el-icon>
-            添加阵列
-          </el-button>
+          <div class="header-actions">
+            <!-- Batch Actions -->
+            <el-dropdown v-if="selectedArrays.length > 0" @command="handleBatchAction" trigger="click">
+              <el-button>
+                批量操作 ({{ selectedArrays.length }})
+                <el-icon class="el-icon--right"><ArrowDown /></el-icon>
+              </el-button>
+              <template #dropdown>
+                <el-dropdown-menu>
+                  <el-dropdown-item command="connect">
+                    <el-icon><Link /></el-icon> 批量连接
+                  </el-dropdown-item>
+                  <el-dropdown-item command="disconnect">
+                    <el-icon><SwitchButton /></el-icon> 批量断开
+                  </el-dropdown-item>
+                  <el-dropdown-item command="refresh" divided>
+                    <el-icon><Refresh /></el-icon> 批量刷新
+                  </el-dropdown-item>
+                  <el-dropdown-item command="deploy-agent" divided>
+                    <el-icon><Upload /></el-icon> 部署 Agent
+                  </el-dropdown-item>
+                  <el-dropdown-item command="start-agent">
+                    <el-icon><VideoPlay /></el-icon> 启动 Agent
+                  </el-dropdown-item>
+                  <el-dropdown-item command="stop-agent">
+                    <el-icon><VideoPause /></el-icon> 停止 Agent
+                  </el-dropdown-item>
+                  <el-dropdown-item command="restart-agent">
+                    <el-icon><RefreshRight /></el-icon> 重启 Agent
+                  </el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
+            <el-button type="primary" @click="showAddDialog">
+              <el-icon><Plus /></el-icon>
+              添加阵列
+            </el-button>
+          </div>
         </div>
       </template>
 
-      <el-table :data="arrayStore.arrays" v-loading="arrayStore.loading" stripe>
+      <el-table 
+        :data="arrayStore.arrays" 
+        v-loading="arrayStore.loading" 
+        stripe
+        @selection-change="handleSelectionChange"
+      >
+        <el-table-column type="selection" width="55" />
         <el-table-column label="状态" width="80">
           <template #default="{ row }">
             <el-tag :type="getStateType(row.state)" size="small">
@@ -116,23 +156,81 @@
         <el-button type="primary" @click="doConnect" :loading="connecting">连接</el-button>
       </template>
     </el-dialog>
+
+    <!-- Batch Connect Dialog -->
+    <el-dialog v-model="batchConnectDialogVisible" title="批量连接" width="400px">
+      <p class="batch-info">将连接 {{ selectedArrays.length }} 个阵列</p>
+      <el-form :model="batchConnectForm">
+        <el-form-item label="统一密码">
+          <el-input 
+            v-model="batchConnectForm.password" 
+            type="password" 
+            show-password 
+            placeholder="所有阵列使用相同的 SSH 密码" 
+          />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="batchConnectDialogVisible = false">取消</el-button>
+        <el-button type="primary" @click="doBatchConnect" :loading="batchOperating">连接</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- Batch Result Dialog -->
+    <el-dialog v-model="batchResultDialogVisible" title="批量操作结果" width="500px">
+      <div class="batch-summary">
+        <el-tag type="success" size="large">成功: {{ batchResult.success_count }}</el-tag>
+        <el-tag type="danger" size="large">失败: {{ batchResult.total - batchResult.success_count }}</el-tag>
+      </div>
+      <el-table :data="batchResult.results" max-height="300" class="batch-results">
+        <el-table-column label="阵列" width="150">
+          <template #default="{ row }">
+            {{ getArrayName(row.array_id) }}
+          </template>
+        </el-table-column>
+        <el-table-column label="状态" width="80">
+          <template #default="{ row }">
+            <el-tag :type="row.success ? 'success' : 'danger'" size="small">
+              {{ row.success ? '成功' : '失败' }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="消息" prop="message" show-overflow-tooltip>
+          <template #default="{ row }">
+            {{ row.message || row.error || '-' }}
+          </template>
+        </el-table-column>
+      </el-table>
+      <template #footer>
+        <el-button type="primary" @click="batchResultDialogVisible = false">确定</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup>
 import { ref, reactive, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Plus } from '@element-plus/icons-vue'
+import { 
+  Plus, ArrowDown, Link, SwitchButton, Refresh, Upload, 
+  VideoPlay, VideoPause, RefreshRight 
+} from '@element-plus/icons-vue'
 import { useArrayStore } from '../stores/arrays'
+import api from '../api'
 
 const arrayStore = useArrayStore()
 
 const dialogVisible = ref(false)
 const connectDialogVisible = ref(false)
+const batchConnectDialogVisible = ref(false)
+const batchResultDialogVisible = ref(false)
 const submitting = ref(false)
 const connecting = ref(false)
+const batchOperating = ref(false)
 const formRef = ref(null)
 const currentArray = ref(null)
+const selectedArrays = ref([])
+const batchResult = ref({ total: 0, success_count: 0, results: [] })
 
 const form = reactive({
   name: '',
@@ -145,6 +243,10 @@ const form = reactive({
 })
 
 const connectForm = reactive({
+  password: '',
+})
+
+const batchConnectForm = reactive({
   password: '',
 })
 
@@ -245,6 +347,84 @@ async function handleDelete(row) {
   }
 }
 
+// Batch operations
+function handleSelectionChange(selection) {
+  selectedArrays.value = selection
+}
+
+function getArrayName(arrayId) {
+  const array = arrayStore.arrays.find(a => a.array_id === arrayId)
+  return array?.name || arrayId
+}
+
+async function handleBatchAction(action) {
+  if (selectedArrays.value.length === 0) {
+    ElMessage.warning('请先选择阵列')
+    return
+  }
+
+  if (action === 'connect') {
+    batchConnectForm.password = ''
+    batchConnectDialogVisible.value = true
+    return
+  }
+
+  // Confirm other batch actions
+  const actionNames = {
+    'disconnect': '断开',
+    'refresh': '刷新',
+    'deploy-agent': '部署 Agent',
+    'start-agent': '启动 Agent',
+    'stop-agent': '停止 Agent',
+    'restart-agent': '重启 Agent',
+  }
+
+  await ElMessageBox.confirm(
+    `确定要对 ${selectedArrays.value.length} 个阵列执行"${actionNames[action]}"操作吗？`,
+    '确认批量操作',
+    { type: 'warning' }
+  )
+
+  await executeBatchAction(action)
+}
+
+async function doBatchConnect() {
+  batchOperating.value = true
+  try {
+    await executeBatchAction('connect', batchConnectForm.password)
+    batchConnectDialogVisible.value = false
+  } finally {
+    batchOperating.value = false
+  }
+}
+
+async function executeBatchAction(action, password = null) {
+  batchOperating.value = true
+  
+  try {
+    const arrayIds = selectedArrays.value.map(a => a.array_id)
+    const res = await api.batchAction(action, arrayIds, password)
+    
+    batchResult.value = res.data
+    batchResultDialogVisible.value = true
+    
+    // Refresh array list
+    await arrayStore.fetchArrays()
+    
+    if (res.data.success_count === res.data.total) {
+      ElMessage.success(`批量操作完成：全部成功`)
+    } else if (res.data.success_count > 0) {
+      ElMessage.warning(`批量操作完成：${res.data.success_count}/${res.data.total} 成功`)
+    } else {
+      ElMessage.error(`批量操作失败`)
+    }
+  } catch (error) {
+    ElMessage.error(error.response?.data?.detail || '批量操作失败')
+  } finally {
+    batchOperating.value = false
+  }
+}
+
 onMounted(() => {
   arrayStore.fetchArrays()
 })
@@ -259,5 +439,25 @@ onMounted(() => {
   display: flex;
   justify-content: space-between;
   align-items: center;
+}
+
+.header-actions {
+  display: flex;
+  gap: 10px;
+}
+
+.batch-info {
+  margin-bottom: 15px;
+  color: #606266;
+}
+
+.batch-summary {
+  display: flex;
+  gap: 20px;
+  margin-bottom: 15px;
+}
+
+.batch-results {
+  margin-top: 10px;
 }
 </style>
