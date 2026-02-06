@@ -46,7 +46,7 @@ class CpuUsageObserver(BaseObserver):
         # 是否已触发告警（sticky状态）
         self._alert_triggered = False
     
-    def check(self) -> ObserverResult:
+    def check(self, reporter=None) -> ObserverResult:
         """检查 CPU0 利用率"""
         # 获取当前 CPU0 利用率
         cpu_usage = self._get_cpu0_usage()
@@ -57,6 +57,13 @@ class CpuUsageObserver(BaseObserver):
                 message="无法获取 CPU0 利用率",
                 details={'error': '读取 /proc/stat 失败'},
             )
+        
+        # 记录指标数据（每次都记录，无论是否告警）
+        if reporter and hasattr(reporter, 'record_metrics'):
+            reporter.record_metrics({
+                'cpu0': round(cpu_usage, 1),
+                'observer': self.name,
+            })
         
         # 记录当前值
         timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')

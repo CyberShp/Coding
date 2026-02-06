@@ -1,18 +1,20 @@
 """
 告警与上报模块
 
-支持多种输出方式：文件、syslog、控制台。
+支持多种输出方式：文件、syslog、控制台、HTTP 推送。
 包含告警冷却、去重、脱敏功能。
+支持指标数据记录（CPU/内存等时序数据）。
 """
 
 import json
 import logging
 import re
 import syslog
+import threading
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from .base import ObserverResult, AlertLevel
 
@@ -37,6 +39,16 @@ class Alert:
             'timestamp': self.timestamp.isoformat(),
             'details': self.details,
         }, ensure_ascii=False)
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """转换为字典"""
+        return {
+            'observer_name': self.observer_name,
+            'level': self.level.value,
+            'message': self.message,
+            'timestamp': self.timestamp.isoformat(),
+            'details': self.details,
+        }
 
 
 class Reporter:
@@ -45,8 +57,10 @@ class Reporter:
     
     功能：
     - 多输出方式：文件、syslog、控制台
+    - HTTP 推送：主动将告警推送到 Web 后端
     - 告警冷却：同一观察点的相同告警在冷却期内不重复上报
     - 脱敏：自动对敏感信息进行脱敏处理
+    - 指标记录：记录 CPU/内存等时序数据到 metrics.jsonl
     """
     
     # 默认脱敏规则
@@ -66,6 +80,9 @@ class Reporter:
         AlertLevel.ERROR: 2,
         AlertLevel.CRITICAL: 3,
     }
+    
+    # 最大指标文件大小 (10MB), 超过后轮转
+    MAX_METRICS_FILE_SIZE = 10 * 1024 * 1024
     
     def __init__(self, config: Dict[str, Any], dry_run: bool = False, min_level: str = 'INFO'):
         """
@@ -92,6 +109,16 @@ class Reporter:
         self.file_path = Path(config.get('file_path', '/var/log/observation-points/alerts.log'))
         self.syslog_facility = config.get('syslog_facility', 'local0')
         self.cooldown_seconds = config.get('cooldown_seconds', 300)
+        
+        # HTTP push configuration
+        self.push_enabled = config.get('push_enabled', False)
+        self.push_url = config.get('push_url', '')  # e.g., "http://192.168.1.100:8000/api/ingest"
+        self.push_timeout = config.get('push_timeout', 5)
+        
+        # Metrics recording
+        self.metrics_enabled = config.get('metrics_enabled', True)
+        metrics_dir = self.file_path.parent if self.file_path else Path('/var/log/observation-points')
+        self.metrics_path = metrics_dir / 'metrics.jsonl'
         
         # 告警冷却记录
         self._cooldown_cache = {}  # type: Dict[str, Dict[str, datetime]]
@@ -270,6 +297,99 @@ class Reporter:
             except Exception as e:
                 logger.error(f"写入 syslog 失败: {e}")
         
+        # HTTP 推送（异步，不阻塞主流程）
+        if self.push_enabled and self.push_url:
+            self._push_to_web(alert)
+        
         # 简洁的日志输出
         level_tag = alert.level.value.upper()
         logger.info(f"[{level_tag}] {alert.observer_name}: {alert.message}")
+    
+    def _push_to_web(self, alert: Alert):
+        """异步推送告警到 Web 后端"""
+        def _do_push():
+            try:
+                import urllib.request
+                data = json.dumps({
+                    'type': 'alert',
+                    **alert.to_dict(),
+                }).encode('utf-8')
+                req = urllib.request.Request(
+                    self.push_url,
+                    data=data,
+                    headers={'Content-Type': 'application/json'},
+                )
+                urllib.request.urlopen(req, timeout=self.push_timeout)
+                logger.debug(f"推送告警成功: {alert.observer_name}")
+            except Exception as e:
+                logger.debug(f"推送告警失败 (非致命): {e}")
+        
+        # 使用线程避免阻塞
+        t = threading.Thread(target=_do_push, daemon=True)
+        t.start()
+    
+    def record_metrics(self, metrics: Dict[str, Any]):
+        """
+        记录指标数据到 metrics.jsonl 文件。
+        
+        Args:
+            metrics: 指标字典，例如 {"cpu0": 45.2, "mem_used_mb": 3200}
+        """
+        if not self.metrics_enabled:
+            return
+        
+        try:
+            # 确保目录存在
+            self.metrics_path.parent.mkdir(parents=True, exist_ok=True)
+            
+            # 轮转检查
+            if self.metrics_path.exists() and self.metrics_path.stat().st_size > self.MAX_METRICS_FILE_SIZE:
+                self._rotate_metrics()
+            
+            # 添加时间戳
+            record = {
+                'ts': datetime.now().isoformat(),
+                **metrics,
+            }
+            
+            with open(self.metrics_path, 'a', encoding='utf-8') as f:
+                f.write(json.dumps(record, ensure_ascii=False) + '\n')
+            
+            # 也推送指标到 Web 后端（如果启用）
+            if self.push_enabled and self.push_url:
+                self._push_metrics_to_web(record)
+                
+        except Exception as e:
+            logger.error(f"写入指标文件失败: {e}")
+    
+    def _push_metrics_to_web(self, record: Dict[str, Any]):
+        """异步推送指标到 Web 后端"""
+        def _do_push():
+            try:
+                import urllib.request
+                data = json.dumps({
+                    'type': 'metrics',
+                    **record,
+                }).encode('utf-8')
+                req = urllib.request.Request(
+                    self.push_url,
+                    data=data,
+                    headers={'Content-Type': 'application/json'},
+                )
+                urllib.request.urlopen(req, timeout=self.push_timeout)
+            except Exception:
+                pass  # 指标推送失败不记录，避免日志膨胀
+        
+        t = threading.Thread(target=_do_push, daemon=True)
+        t.start()
+    
+    def _rotate_metrics(self):
+        """轮转指标文件"""
+        try:
+            rotated = self.metrics_path.with_suffix('.jsonl.1')
+            if rotated.exists():
+                rotated.unlink()
+            self.metrics_path.rename(rotated)
+            logger.info("指标文件已轮转")
+        except Exception as e:
+            logger.error(f"指标文件轮转失败: {e}")

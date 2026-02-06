@@ -117,7 +117,12 @@ class Scheduler:
                 if now >= next_run:
                     # 执行检查
                     try:
-                        result = observer.check()
+                        # Pass reporter to observers that support metrics recording
+                        try:
+                            result = observer.check(reporter=self.reporter)
+                        except TypeError:
+                            # Fallback for observers that don't accept reporter
+                            result = observer.check()
                         
                         if result.has_alert:
                             self.reporter.report(result)

@@ -38,10 +38,11 @@ class MemoryLeakObserver(BaseObserver):
         # 是否已触发告警（sticky状态）
         self._alert_triggered = False
     
-    def check(self) -> ObserverResult:
+    def check(self, reporter=None) -> ObserverResult:
         """检查内存使用情况"""
         # 获取当前内存使用量
         used_mb = self._get_memory_used()
+        total_mb = self._get_memory_total()
         
         if used_mb is None:
             return self.create_result(
@@ -49,6 +50,14 @@ class MemoryLeakObserver(BaseObserver):
                 message="无法获取内存信息",
                 details={'error': '执行 free -m 失败'},
             )
+        
+        # 记录指标数据（每次都记录，无论是否告警）
+        if reporter and hasattr(reporter, 'record_metrics'):
+            reporter.record_metrics({
+                'mem_used_mb': used_mb,
+                'mem_total_mb': total_mb or 0,
+                'observer': self.name,
+            })
         
         # 记录当前值
         timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -108,18 +117,30 @@ class MemoryLeakObserver(BaseObserver):
             logger.error(f"执行 free -m 失败: {stderr}")
             return None
         
-        # 解析输出
-        # 示例:
-        #               total        used        free      shared  buff/cache   available
-        # Mem:          15879        3842        8234         421        3802       11292
-        # Swap:          2047           0        2047
-        
         for line in stdout.split('\n'):
             if line.startswith('Mem:'):
                 parts = line.split()
                 if len(parts) >= 3:
                     try:
                         return int(parts[2])  # used 列
+                    except ValueError:
+                        pass
+        
+        return None
+    
+    def _get_memory_total(self) -> Optional[int]:
+        """获取总内存（MB）"""
+        ret, stdout, stderr = run_command('free -m', shell=True, timeout=5)
+        
+        if ret != 0:
+            return None
+        
+        for line in stdout.split('\n'):
+            if line.startswith('Mem:'):
+                parts = line.split()
+                if len(parts) >= 2:
+                    try:
+                        return int(parts[1])  # total 列
                     except ValueError:
                         pass
         
