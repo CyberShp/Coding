@@ -5,15 +5,16 @@ Database configuration and session management.
 import os
 from pathlib import Path
 
-from sqlalchemy import create_engine
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy import event
+from sqlalchemy.orm import DeclarativeBase, sessionmaker
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from typing import AsyncGenerator
 
 from ..config import get_config
 
-Base = declarative_base()
+
+class Base(DeclarativeBase):
+    pass
 
 # Async engine for SQLite
 _async_engine = None
@@ -44,7 +45,14 @@ def init_db():
         database_url,
         echo=config.database.echo,
     )
-    
+
+    @event.listens_for(_async_engine.sync_engine, "connect")
+    def set_sqlite_pragma(dbapi_conn, connection_record):
+        cursor = dbapi_conn.cursor()
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute("PRAGMA busy_timeout=5000")
+        cursor.close()
+
     AsyncSessionLocal = sessionmaker(
         _async_engine,
         class_=AsyncSession,

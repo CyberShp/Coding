@@ -5,7 +5,7 @@ Scheduler models for scheduled tasks.
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from sqlalchemy import Column, Integer, String, DateTime, Text, Boolean, JSON
 from sqlalchemy.sql import func
 
@@ -87,8 +87,7 @@ class ScheduledTaskResponse(BaseModel):
     last_run_at: Optional[datetime] = None
     next_run_at: Optional[datetime] = None
     
-    class Config:
-        orm_mode = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class TaskResultResponse(BaseModel):
@@ -104,5 +103,4 @@ class TaskResultResponse(BaseModel):
     finished_at: Optional[datetime] = None
     executed_at: Optional[datetime] = None
     
-    class Config:
-        orm_mode = True
+    model_config = ConfigDict(from_attributes=True)

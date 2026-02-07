@@ -103,13 +103,15 @@ async def websocket_alerts(websocket: WebSocket):
         })
         
         # Keep connection alive and handle messages
+        missed_heartbeats = 0
         while True:
             try:
                 # Wait for client messages (heartbeat, etc.)
                 data = await asyncio.wait_for(
                     websocket.receive_json(),
-                    timeout=60.0  # 1 minute timeout
+                    timeout=30.0  # 30-second heartbeat interval
                 )
+                missed_heartbeats = 0  # Reset on any client message
                 
                 # Handle client messages
                 if data.get('type') == 'ping':
@@ -119,11 +121,19 @@ async def websocket_alerts(websocket: WebSocket):
                     })
                     
             except asyncio.TimeoutError:
+                missed_heartbeats += 1
+                # Tolerate up to 3 consecutive missed heartbeats (90s total)
+                if missed_heartbeats >= 3:
+                    logger.warning("WebSocket alerts: client unresponsive after 90s, disconnecting")
+                    break
                 # Send heartbeat
-                await manager.send_personal(websocket, {
-                    'type': 'heartbeat',
-                    'timestamp': datetime.now().isoformat(),
-                })
+                try:
+                    await manager.send_personal(websocket, {
+                        'type': 'heartbeat',
+                        'timestamp': datetime.now().isoformat(),
+                    })
+                except Exception:
+                    break
                 
     except WebSocketDisconnect:
         pass
@@ -145,12 +155,14 @@ async def websocket_status(websocket: WebSocket):
             'timestamp': datetime.now().isoformat(),
         })
         
+        missed_heartbeats = 0
         while True:
             try:
                 data = await asyncio.wait_for(
                     websocket.receive_json(),
-                    timeout=60.0
+                    timeout=30.0  # 30-second heartbeat interval
                 )
+                missed_heartbeats = 0
                 
                 if data.get('type') == 'ping':
                     await manager.send_personal(websocket, {
@@ -159,10 +171,17 @@ async def websocket_status(websocket: WebSocket):
                     })
                     
             except asyncio.TimeoutError:
-                await manager.send_personal(websocket, {
-                    'type': 'heartbeat',
-                    'timestamp': datetime.now().isoformat(),
-                })
+                missed_heartbeats += 1
+                if missed_heartbeats >= 3:
+                    logger.warning("WebSocket status: client unresponsive after 90s, disconnecting")
+                    break
+                try:
+                    await manager.send_personal(websocket, {
+                        'type': 'heartbeat',
+                        'timestamp': datetime.now().isoformat(),
+                    })
+                except Exception:
+                    break
                 
     except WebSocketDisconnect:
         pass

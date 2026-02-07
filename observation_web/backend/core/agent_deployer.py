@@ -117,8 +117,8 @@ class AgentDeployer:
         if not pid or not pid.isdigit():
             return {"ok": False, "error": f"未能获取进程 PID (got: {pid_str.strip()})"}
 
-        # Step 3: Wait and verify process is alive
-        time.sleep(2)
+        # Step 3: Wait and verify process is alive (3s for reliability)
+        time.sleep(3)
         exit_code, out, _ = self.conn.execute(f"kill -0 {pid} 2>/dev/null && echo 'alive'")
 
         if "alive" not in (out or ""):

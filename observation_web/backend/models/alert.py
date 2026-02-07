@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Optional
 
 import json
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, ConfigDict, field_validator
 from sqlalchemy import Column, Integer, String, DateTime, Text, Index
 from sqlalchemy.sql import func
 
@@ -40,6 +40,7 @@ class AlertModel(Base):
     __table_args__ = (
         Index('ix_alerts_array_timestamp', 'array_id', 'timestamp'),
         Index('ix_alerts_level_timestamp', 'level', 'timestamp'),
+        Index('ix_alerts_array_observer_ts', 'array_id', 'observer_name', 'timestamp'),
     )
 
 
@@ -75,8 +76,7 @@ class AlertResponse(AlertBase):
     array_name: Optional[str] = None
     created_at: datetime
     
-    class Config:
-        orm_mode = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class AlertStats(BaseModel):
@@ -94,5 +94,4 @@ class Alert(AlertBase):
     array_id: str
     array_name: Optional[str] = None
     
-    class Config:
-        orm_mode = True
+    model_config = ConfigDict(from_attributes=True)

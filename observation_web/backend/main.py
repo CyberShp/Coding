@@ -35,12 +35,36 @@ logger = logging.getLogger(__name__)
 
 
 async def _idle_connection_cleaner():
-    """Background task to clean up idle SSH connections"""
+    """Background task to clean up idle SSH connections and check agent health"""
+    from .core.agent_deployer import AgentDeployer
+    check_count = 0
     while True:
         try:
             await asyncio.sleep(120)  # Check every 2 minutes
             ssh_pool = get_ssh_pool()
             ssh_pool.cleanup_idle_connections(max_idle_seconds=600)  # 10 min idle timeout
+
+            # Every 5 minutes (3rd iteration), check agent health on connected arrays
+            check_count += 1
+            if check_count % 3 == 0:  # 120s * 3 = ~360s ≈ 5 minutes
+                config = get_config()
+                from .api.arrays import _array_status_cache
+                for array_id, status_obj in list(_array_status_cache.items()):
+                    try:
+                        conn = ssh_pool.get_connection(array_id)
+                        if conn and conn.is_connected() and status_obj.agent_running:
+                            deployer = AgentDeployer(conn, config)
+                            still_running = deployer.check_running()
+                            if not still_running:
+                                status_obj.agent_running = False
+                                logger.warning(f"Agent on {array_id} is no longer running")
+                                sys_warning(
+                                    "health_check",
+                                    f"Agent stopped unexpectedly on {array_id}",
+                                    {"array_id": array_id, "host": status_obj.host}
+                                )
+                    except Exception as e:
+                        logger.debug(f"Agent health check failed for {array_id}: {e}")
         except asyncio.CancelledError:
             break
         except Exception as e:

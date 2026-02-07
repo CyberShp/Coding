@@ -214,7 +214,9 @@ class SSHConnection:
         
         try:
             stdin, stdout, stderr = self._client.exec_command(command, timeout=timeout)
-            exit_code = stdout.channel.recv_exit_status()
+            channel = stdout.channel
+            channel.settimeout(timeout)  # Channel-level timeout for read operations
+            exit_code = channel.recv_exit_status()
             out = stdout.read().decode('utf-8', errors='replace')
             err = stderr.read().decode('utf-8', errors='replace')
             return (exit_code, out, err)
@@ -226,9 +228,19 @@ class SSHConnection:
         """
         Execute command asynchronously using thread pool.
         Use this from async code to avoid blocking the event loop.
+        Wraps with asyncio.wait_for to prevent thread pool stalls.
         """
         loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(_executor, self.execute, command, timeout)
+        # Add extra buffer (2x) for asyncio timeout to allow the SSH-level timeout to fire first
+        async_timeout = timeout * 2
+        try:
+            return await asyncio.wait_for(
+                loop.run_in_executor(_executor, self.execute, command, timeout),
+                timeout=async_timeout
+            )
+        except asyncio.TimeoutError:
+            logger.error(f"Async execute timed out after {async_timeout}s for command: {command[:80]}")
+            return (-1, "", f"Async timeout after {async_timeout}s")
     
     def read_file(self, remote_path: str) -> Optional[str]:
         """Read remote file content via SSH exec (avoids SFTP permission issues)"""

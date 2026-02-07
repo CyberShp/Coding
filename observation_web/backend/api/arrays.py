@@ -40,6 +40,20 @@ _array_status_cache: Dict[str, ArrayStatus] = {}
 _sync_positions: Dict[str, int] = {}
 
 
+async def _get_array_or_404(array_id: str, db: AsyncSession) -> ArrayModel:
+    """Verify array exists in DB, raise 404 if not found."""
+    result = await db.execute(
+        select(ArrayModel).where(ArrayModel.array_id == array_id)
+    )
+    arr = result.scalar_one_or_none()
+    if not arr:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Array {array_id} not found"
+        )
+    return arr
+
+
 def _get_array_status(array_id: str) -> ArrayStatus:
     """Get or create array status"""
     if array_id not in _array_status_cache:
@@ -501,9 +515,11 @@ async def connect_array(
 @router.post("/{array_id}/disconnect")
 async def disconnect_array(
     array_id: str,
+    db: AsyncSession = Depends(get_db),
     ssh_pool: SSHPool = Depends(get_ssh_pool),
 ):
     """Disconnect from array"""
+    await _get_array_or_404(array_id, db)
     ssh_pool.disconnect(array_id)
     
     # Update status
@@ -526,6 +542,7 @@ async def refresh_array(
     Uses tail-based incremental sync to avoid reading the entire alerts.log file.
     Only new lines since last sync are fetched and parsed.
     """
+    await _get_array_or_404(array_id, db)
     from ..core.alert_store import get_alert_store
     from ..models.alert import AlertCreate, AlertLevel
     from .websocket import broadcast_alert
@@ -761,9 +778,11 @@ async def get_array_metrics(
 @router.post("/{array_id}/deploy-agent")
 async def deploy_agent(
     array_id: str,
+    db: AsyncSession = Depends(get_db),
     ssh_pool: SSHPool = Depends(get_ssh_pool),
 ):
     """Deploy observation_points agent to array"""
+    await _get_array_or_404(array_id, db)
     conn = ssh_pool.get_connection(array_id)
     if not conn or not conn.is_connected():
         raise HTTPException(
@@ -796,9 +815,11 @@ async def deploy_agent(
 @router.post("/{array_id}/start-agent")
 async def start_agent(
     array_id: str,
+    db: AsyncSession = Depends(get_db),
     ssh_pool: SSHPool = Depends(get_ssh_pool),
 ):
     """Start observation_points agent on array"""
+    await _get_array_or_404(array_id, db)
     conn = ssh_pool.get_connection(array_id)
     if not conn or not conn.is_connected():
         raise HTTPException(
@@ -831,9 +852,11 @@ async def start_agent(
 @router.post("/{array_id}/stop-agent")
 async def stop_agent(
     array_id: str,
+    db: AsyncSession = Depends(get_db),
     ssh_pool: SSHPool = Depends(get_ssh_pool),
 ):
     """Stop observation_points agent on array"""
+    await _get_array_or_404(array_id, db)
     conn = ssh_pool.get_connection(array_id)
     if not conn or not conn.is_connected():
         raise HTTPException(
@@ -866,9 +889,11 @@ async def stop_agent(
 @router.post("/{array_id}/restart-agent")
 async def restart_agent(
     array_id: str,
+    db: AsyncSession = Depends(get_db),
     ssh_pool: SSHPool = Depends(get_ssh_pool),
 ):
     """Restart observation_points agent on array"""
+    await _get_array_or_404(array_id, db)
     conn = ssh_pool.get_connection(array_id)
     if not conn or not conn.is_connected():
         raise HTTPException(

@@ -5,7 +5,7 @@ Data lifecycle models for sync state, archive, and configuration.
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from sqlalchemy import Column, Integer, String, DateTime, Text, Boolean, LargeBinary
 from sqlalchemy.sql import func
 
@@ -61,8 +61,7 @@ class SyncState(BaseModel):
     last_sync_at: Optional[datetime] = None
     total_imported: int
     
-    class Config:
-        orm_mode = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class LogFileInfo(BaseModel):
@@ -95,8 +94,7 @@ class ArchiveConfig(BaseModel):
     archive_enabled: bool = True
     auto_cleanup: bool = True
     
-    class Config:
-        orm_mode = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class ArchiveStats(BaseModel):

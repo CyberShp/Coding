@@ -2,15 +2,18 @@
 System alert module for backend error tracking.
 
 Provides centralized error logging and retrieval for debugging.
+Supports file-based archiving when memory buffer reaches capacity.
 """
 
 import json
 import logging
+import os
 import threading
 import traceback
 from collections import deque
 from datetime import datetime
 from enum import Enum
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
@@ -66,13 +69,17 @@ class SystemAlertStore:
     In-memory store for system alerts.
     
     Keeps last N alerts for debugging purposes.
+    Automatically archives older alerts to file when capacity reaches 80%.
     """
     
-    MAX_ALERTS = 500
+    MAX_ALERTS = 2000
+    ARCHIVE_THRESHOLD = 0.8  # Archive when 80% full
+    KEEP_IN_MEMORY = 500     # Keep latest 500 in memory after archiving
     
     def __init__(self):
         self._alerts: deque = deque(maxlen=self.MAX_ALERTS)
         self._lock = threading.RLock()
+        self._archive_path = Path(__file__).parent.parent.parent / "system_alerts.jsonl"
     
     def add(
         self,
@@ -87,6 +94,9 @@ class SystemAlertStore:
         
         with self._lock:
             self._alerts.append(alert)
+            # Auto-archive when reaching capacity threshold
+            if len(self._alerts) >= int(self.MAX_ALERTS * self.ARCHIVE_THRESHOLD):
+                self._archive_to_file()
         
         # Also log to standard logger
         log_msg = f"[{module}] {message}"
@@ -105,6 +115,34 @@ class SystemAlertStore:
             logger.critical(log_msg, exc_info=exception is not None)
         
         return alert
+    
+    def _archive_to_file(self):
+        """
+        Archive older alerts to file, keeping only the latest KEEP_IN_MEMORY in memory.
+        Must be called while holding self._lock.
+        """
+        try:
+            alerts_list = list(self._alerts)
+            if len(alerts_list) <= self.KEEP_IN_MEMORY:
+                return
+            
+            # Alerts to archive (older ones)
+            to_archive = alerts_list[:-self.KEEP_IN_MEMORY]
+            to_keep = alerts_list[-self.KEEP_IN_MEMORY:]
+            
+            # Write to JSONL file
+            with open(self._archive_path, 'a', encoding='utf-8') as f:
+                for alert in to_archive:
+                    f.write(json.dumps(alert.to_dict(), ensure_ascii=False) + '\n')
+            
+            # Reset in-memory store with only recent alerts
+            self._alerts.clear()
+            for alert in to_keep:
+                self._alerts.append(alert)
+            
+            logger.info(f"Archived {len(to_archive)} system alerts to {self._archive_path}")
+        except Exception as e:
+            logger.error(f"Failed to archive system alerts: {e}")
     
     def get_all(
         self,

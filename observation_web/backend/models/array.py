@@ -6,7 +6,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, field_validator
 from sqlalchemy import Column, Integer, String, DateTime, Boolean, Text
 from sqlalchemy.sql import func
 
@@ -53,6 +53,20 @@ class ArrayCreate(ArrayBase):
     """Schema for creating array"""
     password: str = ""  # Not stored, only used for connection
 
+    @field_validator('port')
+    @classmethod
+    def validate_port(cls, v):
+        if not (1 <= v <= 65535):
+            raise ValueError('Port must be between 1 and 65535')
+        return v
+
+    @field_validator('name')
+    @classmethod
+    def validate_name(cls, v):
+        if not v or not v.strip():
+            raise ValueError('Name cannot be empty')
+        return v.strip()
+
 
 class ArrayUpdate(BaseModel):
     """Schema for updating array"""
@@ -71,8 +85,7 @@ class ArrayResponse(ArrayBase):
     created_at: datetime
     updated_at: datetime
     
-    class Config:
-        orm_mode = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class ArrayStatus(BaseModel):
@@ -100,5 +113,4 @@ class Array(ArrayBase):
     last_refresh: Optional[datetime] = None
     observer_status: Dict[str, Dict[str, str]] = {}
     
-    class Config:
-        orm_mode = True
+    model_config = ConfigDict(from_attributes=True)

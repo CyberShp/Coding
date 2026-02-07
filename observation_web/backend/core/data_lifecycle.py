@@ -133,7 +133,7 @@ class DataLifecycleManager:
     def _compute_message_hash(self, timestamp: str, observer: str, message: str) -> str:
         """Compute hash for deduplication"""
         content = f"{timestamp}|{observer}|{message}"
-        return hashlib.md5(content.encode()).hexdigest()[:16]
+        return hashlib.md5(content.encode()).hexdigest()
     
     async def _get_existing_hashes(
         self,

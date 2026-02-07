@@ -196,7 +196,7 @@ class QueryEngine:
             (is_valid, error_message)
         """
         if not pattern:
-            return (True, "")
+            return (False, "Pattern cannot be empty")
         
         try:
             re.compile(pattern)
