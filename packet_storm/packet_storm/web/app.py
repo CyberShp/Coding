@@ -54,12 +54,16 @@ def create_app(
     from .api.anomaly import router as anomaly_router
     from .api.monitor import router as monitor_router
     from .api.dpdk import router as dpdk_router
+    from .api.batch import router as batch_router
+    from .api.scheduler import router as scheduler_router
 
     app.include_router(config_router, prefix="/api/config", tags=["Configuration"])
     app.include_router(session_router, prefix="/api/session", tags=["Session"])
     app.include_router(anomaly_router, prefix="/api/anomaly", tags=["Anomaly"])
     app.include_router(monitor_router, prefix="/api/monitor", tags=["Monitor"])
     app.include_router(dpdk_router, prefix="/api/dpdk", tags=["DPDK"])
+    app.include_router(batch_router, prefix="/api/batch", tags=["Batch"])
+    app.include_router(scheduler_router, prefix="/api/scheduler", tags=["Scheduler"])
 
     # WebSocket
     from .ws import setup_websocket

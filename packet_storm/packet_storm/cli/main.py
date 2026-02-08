@@ -53,12 +53,18 @@ from .commands.config_cmd import config_group
 from .commands.list_cmd import list_group
 from .commands.monitor import monitor_group
 from .commands.dpdk import dpdk_group
+from .commands.batch_cmd import batch_group
+from .commands.schedule_cmd import schedule_group
+from .commands.stability_cmd import stability_group
 
 cli.add_command(run_group, "run")
 cli.add_command(config_group, "config")
 cli.add_command(list_group, "list")
 cli.add_command(monitor_group, "monitor")
 cli.add_command(dpdk_group, "dpdk")
+cli.add_command(batch_group, "batch")
+cli.add_command(schedule_group, "schedule")
+cli.add_command(stability_group, "stability")
 
 
 if __name__ == "__main__":

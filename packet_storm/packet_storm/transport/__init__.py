@@ -3,6 +3,7 @@
 from .base import TransportBackend, TransportError, TransportStats
 from .raw_socket import RawSocketTransport
 from .scapy_send import ScapyTransport
+from .reconnect import ReconnectingTransport, ReconnectConfig, RetryPolicy
 from ..core.registry import transport_registry
 
 # Register built-in transport backends
@@ -15,4 +16,7 @@ __all__ = [
     "TransportStats",
     "RawSocketTransport",
     "ScapyTransport",
+    "ReconnectingTransport",
+    "ReconnectConfig",
+    "RetryPolicy",
 ]

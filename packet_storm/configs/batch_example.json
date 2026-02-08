@@ -1,0 +1,104 @@
+{
+    "batch_name": "iSCSI 综合异常测试",
+    "description": "iSCSI 协议异常报文全面测试套件",
+    "scenarios": [
+        {
+            "name": "Login Opcode Fuzz",
+            "description": "篡改 iSCSI Login 请求的 opcode 字段",
+            "config_overrides": {
+                "protocol.type": "iscsi",
+                "network.dst_ip": "192.168.1.200"
+            },
+            "anomalies": [
+                {
+                    "type": "field_tamper",
+                    "enabled": true,
+                    "target_layer": "iscsi",
+                    "target_field": "opcode",
+                    "mode": "random",
+                    "count": 100
+                }
+            ],
+            "execution": {
+                "repeat": 1,
+                "interval_ms": 50
+            }
+        },
+        {
+            "name": "Truncated PDU",
+            "description": "发送截断的 iSCSI PDU",
+            "config_overrides": {
+                "protocol.type": "iscsi"
+            },
+            "anomalies": [
+                {
+                    "type": "truncation",
+                    "enabled": true,
+                    "mode": "random",
+                    "count": 50
+                }
+            ],
+            "execution": {
+                "repeat": 1,
+                "interval_ms": 100
+            }
+        },
+        {
+            "name": "Checksum Corruption",
+            "description": "IP/TCP 校验和错误",
+            "config_overrides": {
+                "protocol.type": "iscsi"
+            },
+            "anomalies": [
+                {
+                    "type": "checksum",
+                    "enabled": true,
+                    "target": "all",
+                    "count": 80
+                }
+            ],
+            "execution": {
+                "repeat": 1,
+                "interval_ms": 50
+            }
+        },
+        {
+            "name": "Oversized Padding",
+            "description": "添加超大填充数据",
+            "config_overrides": {
+                "protocol.type": "iscsi"
+            },
+            "anomalies": [
+                {
+                    "type": "padding",
+                    "enabled": true,
+                    "mode": "overflow",
+                    "count": 30
+                }
+            ],
+            "execution": {
+                "repeat": 1,
+                "interval_ms": 100
+            }
+        },
+        {
+            "name": "Malformed Headers",
+            "description": "畸形报文头部",
+            "config_overrides": {
+                "protocol.type": "iscsi"
+            },
+            "anomalies": [
+                {
+                    "type": "malformed",
+                    "enabled": true,
+                    "mode": "invalid_version",
+                    "count": 40
+                }
+            ],
+            "execution": {
+                "repeat": 1,
+                "interval_ms": 100
+            }
+        }
+    ]
+}
