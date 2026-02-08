@@ -54,7 +54,7 @@
         </el-descriptions>
       </el-card>
 
-      <!-- Observer Status (Card Layout) -->
+      <!-- Observer Status (Grouped Card Layout) -->
       <el-card class="observer-card">
         <template #header>
           <div class="card-header">
@@ -63,21 +63,26 @@
           </div>
         </template>
         
-        <div class="observer-grid" v-if="observerList.length > 0">
-          <div 
-            v-for="obs in observerList" 
-            :key="obs.name" 
-            class="observer-item"
-            :class="`observer-${obs.status}`"
-          >
-            <div class="observer-header">
-              <span class="observer-name">{{ getObserverName(obs.name) }}</span>
-              <el-tag :type="getObserverStatusType(obs.status)" size="small">
-                {{ getObserverStatusText(obs.status) }}
-              </el-tag>
+        <div v-if="observerList.length > 0">
+          <div v-for="group in groupedObservers" :key="group.key" class="observer-group">
+            <div class="group-title">{{ group.label }}</div>
+            <div class="observer-grid">
+              <div 
+                v-for="obs in group.items" 
+                :key="obs.name" 
+                class="observer-item"
+                :class="`observer-${obs.status}`"
+              >
+                <div class="observer-header">
+                  <span class="observer-name">{{ getObserverName(obs.name) }}</span>
+                  <el-tag :type="getObserverStatusType(obs.status)" size="small">
+                    {{ getObserverStatusText(obs.status) }}
+                  </el-tag>
+                </div>
+                <div class="observer-message" v-if="obs.message">{{ obs.message }}</div>
+                <div class="observer-id">{{ obs.name }}</div>
+              </div>
             </div>
-            <div class="observer-message" v-if="obs.message">{{ obs.message }}</div>
-            <div class="observer-id">{{ obs.name }}</div>
           </div>
         </div>
         
@@ -94,6 +99,42 @@
         </template>
         
         <PerformanceMonitor :array-id="array.array_id" />
+      </el-card>
+
+      <!-- Port Traffic Chart (always show if array exists) -->
+      <el-card class="traffic-card">
+        <template #header>
+          <div class="card-header">
+            <span>端口流量监控</span>
+            <el-tag type="success" size="small">最近2小时</el-tag>
+          </div>
+        </template>
+        
+        <PortTrafficChart :array-id="array.array_id" />
+      </el-card>
+
+      <!-- Event Timeline -->
+      <el-card class="timeline-card">
+        <template #header>
+          <div class="card-header">
+            <span>事件时间线</span>
+            <el-tag type="info" size="small">跨观察点</el-tag>
+          </div>
+        </template>
+        
+        <EventTimeline :array-id="array.array_id" />
+      </el-card>
+
+      <!-- Snapshot & Diff -->
+      <el-card class="snapshot-card">
+        <template #header>
+          <div class="card-header">
+            <span>状态快照与对比</span>
+            <el-tag type="info" size="small">测试前后对比</el-tag>
+          </div>
+        </template>
+        
+        <SnapshotDiff :array-id="array.array_id" />
       </el-card>
 
       <!-- Agent Controls -->
@@ -252,8 +293,11 @@ import api from '../api'
 import LogViewer from '../components/LogViewer.vue'
 import AgentConfig from '../components/AgentConfig.vue'
 import PerformanceMonitor from '../components/PerformanceMonitor.vue'
+import PortTrafficChart from '../components/PortTrafficChart.vue'
+import EventTimeline from '../components/EventTimeline.vue'
+import SnapshotDiff from '../components/SnapshotDiff.vue'
 import AlertDetailDrawer from '@/components/AlertDetailDrawer.vue'
-import { translateAlert, getObserverName as getObserverLabel, LEVEL_LABELS, LEVEL_TAG_TYPES } from '@/utils/alertTranslator'
+import { translateAlert, getObserverName as getObserverLabel, getObserverGroup, OBSERVER_GROUPS, LEVEL_LABELS, LEVEL_TAG_TYPES } from '@/utils/alertTranslator'
 
 const route = useRoute()
 const arrayStore = useArrayStore()
@@ -285,6 +329,24 @@ const observerList = computed(() => {
       status: info.status,
       message: info.message,
     }))
+})
+
+const groupedObservers = computed(() => {
+  const list = observerList.value
+  if (list.length === 0) return []
+
+  const groups = {}
+  for (const obs of list) {
+    const { key, label } = getObserverGroup(obs.name)
+    if (!groups[key]) {
+      groups[key] = { key, label, items: [] }
+    }
+    groups[key].items.push(obs)
+  }
+
+  // Sort: port -> card -> system
+  const order = ['port', 'card', 'system']
+  return order.map(k => groups[k]).filter(Boolean)
 })
 
 function getAlertTranslation(alert) {
@@ -533,6 +595,25 @@ onMounted(loadArray)
   gap: 8px;
 }
 
+/* Observer group */
+.observer-group {
+  margin-bottom: 16px;
+}
+
+.observer-group:last-child {
+  margin-bottom: 0;
+}
+
+.group-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #606266;
+  margin-bottom: 8px;
+  padding-left: 4px;
+  border-left: 3px solid #409eff;
+  padding-left: 8px;
+}
+
 /* Observer card grid */
 .observer-grid {
   display: grid;
@@ -651,8 +732,9 @@ onMounted(loadArray)
 .alert-warning { }
 .alert-critical .alert-body { color: #f56c6c; }
 
-/* Performance card */
-.perf-card {
+/* Performance & Traffic card */
+.perf-card,
+.traffic-card {
   margin-bottom: 20px;
 }
 

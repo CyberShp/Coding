@@ -1,6 +1,8 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import api from '../api'
+import { isCriticalAlert } from '../utils/alertTranslator'
+import { sendDesktopNotification, playAlertSound, requestNotificationPermission } from '../utils/notification'
 
 export const useAlertStore = defineStore('alerts', () => {
   // State
@@ -11,12 +13,17 @@ export const useAlertStore = defineStore('alerts', () => {
   const ws = ref(null)
   const wsConnected = ref(false)
 
+  // Critical event banner state
+  const criticalEvents = ref([])  // unacknowledged critical events
+
   // Getters
   const recentCount = computed(() => {
     return recentAlerts.value.filter(a => 
       a.level === 'error' || a.level === 'critical'
     ).length
   })
+
+  const hasCriticalEvents = computed(() => criticalEvents.value.length > 0)
 
   // Actions
   async function fetchAlerts(params = {}) {
@@ -48,8 +55,44 @@ export const useAlertStore = defineStore('alerts', () => {
     }
   }
 
+  function acknowledgeCritical(id) {
+    criticalEvents.value = criticalEvents.value.filter(e => e.id !== id)
+  }
+
+  function acknowledgeAllCritical() {
+    criticalEvents.value = []
+  }
+
+  function handleNewAlert(data) {
+    // Add to recent list
+    recentAlerts.value.unshift(data)
+    if (recentAlerts.value.length > 20) {
+      recentAlerts.value.pop()
+    }
+
+    // Check if critical
+    if (isCriticalAlert(data)) {
+      criticalEvents.value.unshift(data)
+      // Keep max 50 critical events
+      if (criticalEvents.value.length > 50) {
+        criticalEvents.value = criticalEvents.value.slice(0, 50)
+      }
+
+      // Desktop notification
+      const title = `关键事件：${data.observer_name || '未知'}`
+      const body = (data.message || '').substring(0, 120)
+      sendDesktopNotification(title, body, { tag: `critical-${data.id || Date.now()}` })
+
+      // Sound
+      playAlertSound()
+    }
+  }
+
   function connectWebSocket() {
     if (ws.value) return
+
+    // Request notification permission on first connect
+    requestNotificationPermission()
 
     const wsUrl = `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/ws/alerts`
     
@@ -66,12 +109,7 @@ export const useAlertStore = defineStore('alerts', () => {
           const data = JSON.parse(event.data)
           
           if (data.type === 'alert') {
-            // Add new alert to recent list
-            recentAlerts.value.unshift(data.data)
-            // Keep only last 20
-            if (recentAlerts.value.length > 20) {
-              recentAlerts.value.pop()
-            }
+            handleNewAlert(data.data)
           }
         } catch (e) {
           console.error('Failed to parse WebSocket message:', e)
@@ -81,7 +119,6 @@ export const useAlertStore = defineStore('alerts', () => {
       ws.value.onclose = () => {
         wsConnected.value = false
         ws.value = null
-        // Reconnect after 5 seconds
         setTimeout(connectWebSocket, 5000)
       }
 
@@ -89,7 +126,7 @@ export const useAlertStore = defineStore('alerts', () => {
         console.error('WebSocket error:', error)
       }
 
-      // Send heartbeat every 30 seconds
+      // Heartbeat every 30 seconds
       setInterval(() => {
         if (ws.value && ws.value.readyState === WebSocket.OPEN) {
           ws.value.send(JSON.stringify({ type: 'ping' }))
@@ -115,13 +152,17 @@ export const useAlertStore = defineStore('alerts', () => {
     stats,
     loading,
     wsConnected,
+    criticalEvents,
     // Getters
     recentCount,
+    hasCriticalEvents,
     // Actions
     fetchAlerts,
     fetchRecentAlerts,
     fetchStats,
     connectWebSocket,
     disconnectWebSocket,
+    acknowledgeCritical,
+    acknowledgeAllCritical,
   }
 })

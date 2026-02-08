@@ -28,6 +28,13 @@
               <el-icon><Download /></el-icon>
               导出
             </el-button>
+            <el-switch
+              v-model="aggregateMode"
+              active-text="聚合"
+              inactive-text="平铺"
+              @change="loadAlerts"
+              style="margin-left: 8px"
+            />
           </div>
         </div>
       </template>
@@ -60,8 +67,9 @@
         </el-col>
       </el-row>
 
-      <!-- Alert Table -->
+      <!-- Alert Table (flat mode) -->
       <el-table
+        v-if="!aggregateMode"
         :data="alerts"
         v-loading="loading"
         stripe
@@ -99,6 +107,37 @@
         </el-table-column>
       </el-table>
 
+      <!-- Aggregated view -->
+      <div v-else v-loading="loading" class="aggregated-list">
+        <div
+          v-for="(item, idx) in alerts"
+          :key="idx"
+          class="agg-item"
+          :class="{ 'is-group': item.is_aggregated }"
+          @click="openDrawer(item)"
+        >
+          <template v-if="item.is_aggregated">
+            <div class="agg-header">
+              <el-tag :type="getLevelType(item.group.worst_level)" size="small" effect="dark">
+                {{ item.group.group_type === 'storm' ? '风暴' : (item.group.group_type === 'root_cause' ? '关联' : '聚合') }}
+              </el-tag>
+              <span class="agg-label">{{ item.group.label }}</span>
+              <el-tag size="small" type="info" effect="plain">{{ item.group.count }} 条</el-tag>
+              <span class="agg-time">{{ formatDateTime(item.group.latest) }}</span>
+            </div>
+          </template>
+          <template v-else>
+            <div class="agg-header">
+              <el-tag :type="getLevelType(item.level)" size="small">{{ getLevelText(item.level) }}</el-tag>
+              <span class="agg-obs">{{ getObserverLabel(item.observer_name) }}</span>
+              <span class="agg-msg">{{ getTranslatedSummary(item) }}</span>
+              <span class="agg-time">{{ formatDateTime(item.timestamp) }}</span>
+            </div>
+          </template>
+        </div>
+        <el-empty v-if="!loading && alerts.length === 0" description="暂无告警" />
+      </div>
+
       <!-- 告警详情抽屉 -->
       <AlertDetailDrawer v-model="drawerVisible" :alert="selectedAlert" />
 
@@ -119,18 +158,21 @@
 
 <script setup>
 import { ref, reactive, onMounted } from 'vue'
+import { useRoute } from 'vue-router'
 import { Search, Download, ArrowRight } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import api from '../api'
 import AlertDetailDrawer from '@/components/AlertDetailDrawer.vue'
 import { translateAlert, getObserverName, OBSERVER_NAMES, LEVEL_LABELS, LEVEL_TAG_TYPES } from '@/utils/alertTranslator'
 
+const route = useRoute()
 const loading = ref(false)
 const exporting = ref(false)
 const alerts = ref([])
 const stats = ref(null)
 const drawerVisible = ref(false)
 const selectedAlert = ref(null)
+const aggregateMode = ref(false)
 
 const filters = reactive({
   level: '',
@@ -174,16 +216,24 @@ function formatDateTime(timestamp) {
 async function loadAlerts() {
   loading.value = true
   try {
-    const params = {
-      hours: filters.hours,
-      limit: pagination.size,
-      offset: (pagination.page - 1) * pagination.size,
+    if (aggregateMode.value) {
+      // Aggregated mode
+      const params = { hours: filters.hours, limit: 200 }
+      if (filters.level) params.level = filters.level
+      const response = await api.getAggregatedAlerts(params)
+      alerts.value = response.data || []
+    } else {
+      // Flat mode
+      const params = {
+        hours: filters.hours,
+        limit: pagination.size,
+        offset: (pagination.page - 1) * pagination.size,
+      }
+      if (filters.level) params.level = filters.level
+      if (filters.observer) params.observer_name = filters.observer
+      const response = await api.getAlerts(params)
+      alerts.value = response.data
     }
-    if (filters.level) params.level = filters.level
-    if (filters.observer) params.observer_name = filters.observer
-
-    const response = await api.getAlerts(params)
-    alerts.value = response.data
     
     // Load stats
     const statsResponse = await api.getAlertStats(filters.hours)
@@ -225,7 +275,16 @@ async function exportAlerts() {
   }
 }
 
-onMounted(loadAlerts)
+onMounted(() => {
+  // Apply filter from URL query params (e.g. ?level=error)
+  if (route.query.level) {
+    filters.level = route.query.level
+  }
+  if (route.query.observer) {
+    filters.observer = route.query.observer
+  }
+  loadAlerts()
+})
 </script>
 
 <style scoped>
@@ -297,5 +356,57 @@ onMounted(loadAlerts)
 .pagination {
   margin-top: 20px;
   justify-content: flex-end;
+}
+
+/* Aggregated view styles */
+.aggregated-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 12px;
+}
+.agg-item {
+  padding: 10px 16px;
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.agg-item:hover {
+  background: var(--el-fill-color-light);
+}
+.agg-item.is-group {
+  border-left: 3px solid var(--el-color-warning);
+  background: var(--el-color-warning-light-9);
+}
+.agg-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.agg-label {
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--el-text-color-primary);
+}
+.agg-obs {
+  font-weight: 500;
+  font-size: 13px;
+  color: var(--el-color-primary);
+}
+.agg-msg {
+  flex: 1;
+  font-size: 13px;
+  color: var(--el-text-color-regular);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.agg-time {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  white-space: nowrap;
 }
 </style>

@@ -3,7 +3,7 @@
     <!-- Stats Cards -->
     <el-row :gutter="20" class="stats-row">
       <el-col :span="6">
-        <el-card class="stat-card">
+        <el-card class="stat-card clickable" @click="$router.push('/arrays')">
           <div class="stat-content">
             <div class="stat-icon" style="background: #409eff">
               <el-icon size="28"><Cpu /></el-icon>
@@ -16,7 +16,7 @@
         </el-card>
       </el-col>
       <el-col :span="6">
-        <el-card class="stat-card">
+        <el-card class="stat-card clickable" @click="$router.push('/arrays')">
           <div class="stat-content">
             <div class="stat-icon" style="background: #67c23a">
               <el-icon size="28"><CircleCheck /></el-icon>
@@ -29,7 +29,7 @@
         </el-card>
       </el-col>
       <el-col :span="6">
-        <el-card class="stat-card">
+        <el-card class="stat-card clickable" @click="$router.push('/alerts')">
           <div class="stat-content">
             <div class="stat-icon" style="background: #e6a23c">
               <el-icon size="28"><Bell /></el-icon>
@@ -42,7 +42,7 @@
         </el-card>
       </el-col>
       <el-col :span="6">
-        <el-card class="stat-card">
+        <el-card class="stat-card clickable" @click="$router.push({ path: '/alerts', query: { level: 'error' } })">
           <div class="stat-content">
             <div class="stat-icon" style="background: #f56c6c">
               <el-icon size="28"><Warning /></el-icon>
@@ -55,6 +55,17 @@
         </el-card>
       </el-col>
     </el-row>
+
+    <!-- Active Test Task Banner -->
+    <el-card v-if="activeTask" class="active-task-banner">
+      <div class="task-banner-content">
+        <el-tag type="success" effect="dark" size="small">进行中</el-tag>
+        <span class="task-name">{{ activeTask.name }}</span>
+        <el-tag size="small" effect="plain">{{ activeTask.task_type_label || activeTask.task_type }}</el-tag>
+        <span class="task-duration">已运行 {{ taskDuration }}</span>
+        <el-button size="small" type="warning" plain @click="$router.push('/test-tasks')">管理</el-button>
+      </div>
+    </el-card>
 
     <!-- Main Content -->
     <el-row :gutter="20">
@@ -106,24 +117,6 @@
           <el-empty v-else description="暂无阵列">
             <el-button type="primary" @click="$router.push('/arrays')">添加阵列</el-button>
           </el-empty>
-        </el-card>
-
-        <!-- Observer Summary -->
-        <el-card class="content-card" v-if="observerSummary.length > 0">
-          <template #header>
-            <span>观察点概览</span>
-          </template>
-          <div class="observer-summary">
-            <div v-for="obs in observerSummary" :key="obs.name" class="obs-summary-item">
-              <span class="obs-name">{{ getObserverDisplayName(obs.name) }}</span>
-              <div class="obs-bar">
-                <div class="obs-bar-ok" :style="{ width: obs.okPercent + '%' }"></div>
-                <div class="obs-bar-warn" :style="{ width: obs.warnPercent + '%' }"></div>
-                <div class="obs-bar-error" :style="{ width: obs.errorPercent + '%' }"></div>
-              </div>
-              <span class="obs-count">{{ obs.ok }}/{{ obs.total }}</span>
-            </div>
-          </div>
         </el-card>
 
         <!-- Alert Trend Chart (multi-line by level) -->
@@ -199,6 +192,8 @@ const alertStore = useAlertStore()
 
 const summary = ref({})
 const stats = ref(null)
+const activeTask = ref(null)
+const taskDuration = ref('')
 const drawerVisible = ref(false)
 const selectedAlert = ref(null)
 
@@ -231,10 +226,6 @@ const trendChartOption = computed(() => ({
   }]
 }))
 
-function getObserverDisplayName(name) {
-  return getObserverName(name)
-}
-
 function getObserverLabel(name) {
   return getObserverName(name)
 }
@@ -249,30 +240,8 @@ function openAlertDrawer(alert) {
   drawerVisible.value = true
 }
 
-const observerSummary = computed(() => {
-  const summaryMap = {}
-  
-  for (const arr of arrayStore.arrays) {
-    if (!arr.observer_status) continue
-    for (const [name, info] of Object.entries(arr.observer_status)) {
-      if (name === '_meta') continue
-      if (!summaryMap[name]) {
-        summaryMap[name] = { name, ok: 0, warning: 0, error: 0, total: 0 }
-      }
-      summaryMap[name].total++
-      if (info.status === 'ok') summaryMap[name].ok++
-      else if (info.status === 'warning') summaryMap[name].warning++
-      else if (info.status === 'error') summaryMap[name].error++
-    }
-  }
-  
-  return Object.values(summaryMap).map(s => ({
-    ...s,
-    okPercent: s.total > 0 ? (s.ok / s.total * 100) : 0,
-    warnPercent: s.total > 0 ? (s.warning / s.total * 100) : 0,
-    errorPercent: s.total > 0 ? (s.error / s.total * 100) : 0,
-  }))
-})
+
+
 
 function getArrayStatusClass(arr) {
   if (arr.state !== 'connected') return 'status-offline'
@@ -311,14 +280,28 @@ async function loadArrays() {
   }
 }
 
+async function loadActiveTask() {
+  try {
+    const res = await api.getTestTasks({ status: 'running', limit: 1 })
+    const running = (res.data || [])[0]
+    activeTask.value = running || null
+    if (running && running.started_at) {
+      const sec = (Date.now() - new Date(running.started_at).getTime()) / 1000
+      if (sec < 60) taskDuration.value = `${Math.round(sec)}s`
+      else if (sec < 3600) taskDuration.value = `${Math.floor(sec / 60)}m`
+      else taskDuration.value = `${Math.floor(sec / 3600)}h ${Math.floor((sec % 3600) / 60)}m`
+    }
+  } catch (_) {}
+}
+
 async function loadData() {
   // Load data in parallel with individual error handling
-  // so one failure doesn't block others
   const tasks = [
     loadArrays().catch(e => console.error('Load arrays failed:', e)),
     alertStore.fetchRecentAlerts().catch(e => console.error('Load alerts failed:', e)),
     api.getAlertSummary().then(res => summary.value = res.data).catch(e => console.error('Load summary failed:', e)),
     api.getAlertStats().then(res => stats.value = res.data).catch(e => console.error('Load stats failed:', e)),
+    loadActiveTask(),
   ]
   
   await Promise.all(tasks)
@@ -332,12 +315,42 @@ onMounted(loadData)
   padding: 20px;
 }
 
+/* Active test task banner */
+.active-task-banner {
+  margin-bottom: 16px;
+  border-left: 3px solid #67c23a;
+}
+.task-banner-content {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.task-name {
+  font-weight: 600;
+  font-size: 15px;
+}
+.task-duration {
+  color: var(--el-text-color-secondary);
+  font-size: 13px;
+  margin-left: auto;
+}
+
 .stats-row {
   margin-bottom: 20px;
 }
 
 .stat-card {
   border-radius: 8px;
+}
+
+.stat-card.clickable {
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.stat-card.clickable:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
 }
 
 .stat-content {
@@ -455,45 +468,6 @@ onMounted(loadData)
 .obs-warning { background: #e6a23c; }
 .obs-error { background: #f56c6c; }
 
-/* Observer Summary */
-.observer-summary {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.obs-summary-item {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.obs-name {
-  width: 80px;
-  font-size: 13px;
-  color: #606266;
-  flex-shrink: 0;
-}
-
-.obs-bar {
-  flex: 1;
-  height: 8px;
-  background: #f0f0f0;
-  border-radius: 4px;
-  display: flex;
-  overflow: hidden;
-}
-
-.obs-bar-ok { background: #67c23a; }
-.obs-bar-warn { background: #e6a23c; }
-.obs-bar-error { background: #f56c6c; }
-
-.obs-count {
-  width: 40px;
-  font-size: 12px;
-  color: #909399;
-  text-align: right;
-}
 
 .alerts-card {
   height: calc(100vh - 280px);

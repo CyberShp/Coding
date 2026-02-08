@@ -81,6 +81,55 @@ class ConfigLoader:
                 'enabled': False,
                 'commands': [],
             },
+            'port_fec': {
+                'enabled': True,
+                'interval': 60,
+                'ports': [],
+            },
+            'port_speed': {
+                'enabled': True,
+                'interval': 60,
+                'ports': [],
+            },
+            'pcie_bandwidth': {
+                'enabled': True,
+                'interval': 120,
+                'device_filter': [],
+            },
+            'card_info': {
+                'enabled': True,
+                'interval': 120,
+                'command': '',
+                'running_state_expect': 'RUNNING',
+                'health_state_expect': 'NORMAL',
+            },
+            'port_traffic': {
+                'enabled': True,
+                'interval': 30,
+                'output_path': '/var/log/observation-points/traffic.jsonl',
+                'retention_hours': 2,
+                'ports': [],
+            },
+            'controller_state': {
+                'enabled': True,
+                'interval': 60,
+                'command': '',
+            },
+            'disk_state': {
+                'enabled': True,
+                'interval': 60,
+                'command': '',
+            },
+            'process_crash': {
+                'enabled': True,
+                'interval': 30,
+                'log_paths': ['/var/log/messages', '/var/log/syslog'],
+            },
+            'io_timeout': {
+                'enabled': True,
+                'interval': 30,
+                'log_paths': ['/var/log/messages', '/var/log/syslog'],
+            },
         },
     }
 

@@ -81,6 +81,8 @@ async def list_array_statuses(
     ssh_pool: SSHPool = Depends(get_ssh_pool),
 ):
     """Get all array statuses with connection state"""
+    from ..models.alert import AlertModel
+
     result = await db.execute(select(ArrayModel))
     arrays = result.scalars().all()
     
@@ -94,6 +96,33 @@ async def list_array_statuses(
         if conn:
             status_obj.state = conn.state
             status_obj.last_error = conn.last_error
+        
+        # Derive observer_status from DB alerts if cache is empty
+        if not status_obj.observer_status:
+            stmt = (
+                select(AlertModel.observer_name, AlertModel.level, AlertModel.message)
+                .where(AlertModel.array_id == array.array_id)
+                .order_by(AlertModel.timestamp.desc())
+            )
+            alert_rows = await db.execute(stmt)
+            _level_rank = {'critical': 4, 'error': 3, 'warning': 2, 'info': 1}
+            _obs_best = {}
+            for row in alert_rows.all():
+                obs_name = row.observer_name
+                rank = _level_rank.get(row.level, 0)
+                prev = _obs_best.get(obs_name)
+                if prev is None or rank > prev[0]:
+                    _obs_best[obs_name] = (rank, row.level, row.message or '')
+            for obs_name, (rank, level, msg) in _obs_best.items():
+                obs_status = 'ok'
+                if level in ('error', 'critical'):
+                    obs_status = 'error'
+                elif level == 'warning':
+                    obs_status = 'warning'
+                status_obj.observer_status[obs_name] = {
+                    'status': obs_status,
+                    'message': msg[:100],
+                }
         
         statuses.append(status_obj)
     
@@ -438,6 +467,35 @@ async def get_array_status(
         status_obj.state = conn.state
         status_obj.last_error = conn.last_error
     
+    # If observer_status is empty, derive it from DB alerts
+    if not status_obj.observer_status:
+        from ..models.alert import AlertModel
+        stmt = (
+            select(AlertModel.observer_name, AlertModel.level, AlertModel.message)
+            .where(AlertModel.array_id == array_id)
+            .order_by(AlertModel.timestamp.desc())
+        )
+        alert_rows = await db.execute(stmt)
+        _level_rank = {'critical': 4, 'error': 3, 'warning': 2, 'info': 1}
+        _obs_best = {}  # track highest severity per observer
+        for row in alert_rows.all():
+            obs_name = row.observer_name
+            level = row.level
+            rank = _level_rank.get(level, 0)
+            prev = _obs_best.get(obs_name)
+            if prev is None or rank > prev[0]:
+                _obs_best[obs_name] = (rank, level, row.message or '')
+        for obs_name, (rank, level, msg) in _obs_best.items():
+            obs_status = 'ok'
+            if level in ('error', 'critical'):
+                obs_status = 'error'
+            elif level == 'warning':
+                obs_status = 'warning'
+            status_obj.observer_status[obs_name] = {
+                'status': obs_status,
+                'message': msg[:100],
+            }
+    
     return status_obj
 
 
@@ -692,6 +750,29 @@ async def refresh_array(
     except Exception as e:
         sys_error("arrays", f"Refresh failed for {array_id}", {"error": str(e)})
     
+    # Also sync traffic data
+    try:
+        from ..core.traffic_store import get_traffic_store
+        traffic_path = config.remote.agent_log_path.replace('alerts.log', 'traffic.jsonl')
+        exit_code_t, traffic_content, _ = conn.execute(
+            f"tail -n 200 {traffic_path} 2>/dev/null", timeout=10
+        )
+        if exit_code_t == 0 and traffic_content and traffic_content.strip():
+            traffic_records = []
+            for line in traffic_content.strip().split('\n'):
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    traffic_records.append(json.loads(line))
+                except Exception:
+                    pass
+            if traffic_records:
+                traffic_store = get_traffic_store()
+                await traffic_store.ingest(db, array_id, traffic_records)
+    except Exception as e:
+        logger.debug(f"Traffic sync during refresh: {e}")
+
     status_obj.last_refresh = datetime.now()
     
     # Return slim response (no recent_alerts blob)

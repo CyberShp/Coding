@@ -76,12 +76,35 @@ export default {
   // Metrics
   getArrayMetrics: (id, minutes = 60) => http.get(`/arrays/${id}/metrics`, { params: { minutes } }),
 
+  // Port Traffic
+  getTrafficPorts: (arrayId) => http.get(`/traffic/${arrayId}/ports`),
+  getTrafficData: (arrayId, port, minutes = 30) => http.get(`/traffic/${arrayId}/data`, { params: { port, minutes } }),
+  syncTraffic: (arrayId) => httpLong.post(`/traffic/${arrayId}/sync`),
+
   // Alerts
   getAlerts: (params) => http.get('/alerts', { params }),
   getRecentAlerts: (limit = 20) => http.get('/alerts/recent', { params: { limit } }),
   getAlertStats: (hours = 24) => http.get('/alerts/stats', { params: { hours } }),
   getAlertSummary: () => http.get('/alerts/summary'),
+  getAggregatedAlerts: (params) => http.get('/alerts/aggregated', { params }),
   exportAlerts: (params) => http.get('/alerts/export', { params, responseType: 'blob' }),
+
+  // Test Tasks
+  getTestTasks: (params) => http.get('/test-tasks', { params }),
+  createTestTask: (data) => http.post('/test-tasks', data),
+  getTestTask: (id) => http.get(`/test-tasks/${id}`),
+  startTestTask: (id) => http.post(`/test-tasks/${id}/start`),
+  stopTestTask: (id) => http.post(`/test-tasks/${id}/stop`),
+  deleteTestTask: (id) => http.delete(`/test-tasks/${id}`),
+  getTestTaskSummary: (id) => http.get(`/test-tasks/${id}/summary`),
+
+  // Snapshots
+  createSnapshot: (arrayId) => httpLong.post(`/snapshots/${arrayId}`),
+  getSnapshots: (arrayId) => http.get(`/snapshots/${arrayId}`),
+  diffSnapshots: (id1, id2) => http.get(`/snapshots/diff`, { params: { id1, id2 } }),
+
+  // Timeline
+  getTimeline: (arrayId, params) => http.get(`/timeline/${arrayId}`, { params }),
 
   // Query
   executeQuery: (task) => http.post('/query/execute', task),

@@ -105,6 +105,47 @@ async def get_recent_alerts(
     return result
 
 
+@router.get("/aggregated")
+async def get_aggregated_alerts(
+    array_id: Optional[str] = Query(None),
+    hours: int = Query(24, ge=1, le=168),
+    limit: int = Query(200, ge=1, le=1000),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Get alerts with aggregation (time-window, root-cause, storm detection).
+    Returns a mix of individual and grouped alerts.
+    """
+    from ..core.alert_aggregator import aggregate_alerts
+    store = get_alert_store()
+    start_time = datetime.now() - timedelta(hours=hours)
+
+    alerts = await store.get_alerts(
+        db, array_id=array_id, start_time=start_time, limit=limit,
+    )
+
+    # Convert to dicts for aggregation
+    alert_dicts = []
+    for a in alerts:
+        d = {
+            'id': a.id,
+            'array_id': a.array_id,
+            'observer_name': a.observer_name,
+            'level': a.level,
+            'message': a.message,
+            'timestamp': a.timestamp.isoformat() if a.timestamp else '',
+        }
+        try:
+            import json as _json
+            d['details'] = _json.loads(a.details) if isinstance(a.details, str) else (a.details or {})
+        except Exception:
+            d['details'] = {}
+        alert_dicts.append(d)
+
+    result = aggregate_alerts(alert_dicts, array_id or '')
+    return result
+
+
 @router.get("/summary")
 async def get_alert_summary(
     db: AsyncSession = Depends(get_db),

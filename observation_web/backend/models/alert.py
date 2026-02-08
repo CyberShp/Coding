@@ -35,6 +35,7 @@ class AlertModel(Base):
     message = Column(Text, nullable=False)
     details = Column(Text, default="{}")  # JSON string
     timestamp = Column(DateTime, index=True, nullable=False)
+    task_id = Column(Integer, nullable=True, index=True)  # Link to test task session
     created_at = Column(DateTime, server_default=func.now())
     
     __table_args__ = (

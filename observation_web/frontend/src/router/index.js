@@ -46,6 +46,11 @@ const routes = [
     name: 'ScheduledTasks',
     component: () => import('../views/ScheduledTasks.vue'),
   },
+  {
+    path: '/test-tasks',
+    name: 'TestTasks',
+    component: () => import('../views/TestTasks.vue'),
+  },
 ]
 
 const router = createRouter({

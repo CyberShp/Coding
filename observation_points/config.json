@@ -90,6 +90,64 @@
       "default_timeout": 10,
       "allowed_paths": ["/opt/", "/usr/local/bin/", "/OSM/"],
       "commands": []
+    },
+    "port_fec": {
+      "enabled": true,
+      "interval": 60,
+      "ports": [],
+      "_comment": "内置通用命令：自动通过 ethtool --show-fec 逐端口查询。如需自定义，添加 command 字段覆盖"
+    },
+    "port_speed": {
+      "enabled": true,
+      "interval": 60,
+      "ports": [],
+      "_comment": "内置通用命令：自动通过 /sys/class/net/*/speed 或 ethtool 查询。如需自定义，添加 command 字段覆盖"
+    },
+    "pcie_bandwidth": {
+      "enabled": true,
+      "interval": 120,
+      "device_filter": [],
+      "_comment": "内置通用命令：自动通过 lspci -vvv 解析 LnkCap/LnkSta。device_filter 可填 ['Ethernet', 'Non-Volatile'] 只监测特定设备"
+    },
+    "card_info": {
+      "enabled": true,
+      "interval": 120,
+      "command": "",
+      "running_state_expect": "RUNNING",
+      "health_state_expect": "NORMAL",
+      "_comment": "需要手动填写 command。回显格式: No001 字段: 值，卡件之间用 --- 分隔"
+    },
+    "port_traffic": {
+      "enabled": true,
+      "interval": 30,
+      "output_path": "/var/log/observation-points/traffic.jsonl",
+      "retention_hours": 2,
+      "ports": [],
+      "_comment": "内置通用方式：自动通过 /sys/class/net/*/statistics/ 读取 TX/RX 字节数并计算速率"
+    },
+    "controller_state": {
+      "enabled": true,
+      "interval": 60,
+      "command": "",
+      "_comment": "需要手动填写 command，例如 show controller status。用于监控控制器在线/离线/降级状态"
+    },
+    "disk_state": {
+      "enabled": true,
+      "interval": 60,
+      "command": "",
+      "_comment": "需要手动填写 command，例如 show disk status。用于监控磁盘在线/离线/重建状态"
+    },
+    "process_crash": {
+      "enabled": true,
+      "interval": 30,
+      "log_paths": ["/var/log/messages", "/var/log/syslog"],
+      "_comment": "内置关键字匹配：自动扫描 segfault/core dump/OOM 等崩溃事件"
+    },
+    "io_timeout": {
+      "enabled": true,
+      "interval": 30,
+      "log_paths": ["/var/log/messages", "/var/log/syslog"],
+      "_comment": "内置关键字匹配：自动扫描 IO timeout/IO error/SCSI error 等事件"
     }
   }
 }

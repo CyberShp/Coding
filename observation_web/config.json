@@ -1,9 +1,11 @@
 {
   "server": {
     "host": "0.0.0.0",
-    "port": 8000,
-    "debug": true,
-    "cors_origins": ["*"]
+    "port": 9999,
+    "debug": false,
+    "cors_origins": [
+      "*"
+    ]
   },
   "ssh": {
     "default_port": 22,

@@ -75,6 +75,15 @@ class Scheduler:
         from ..observers.cpu_usage import CpuUsageObserver
         from ..observers.cmd_response import CmdResponseObserver
         from ..observers.sig_monitor import SigMonitorObserver
+        from ..observers.port_fec import PortFecObserver
+        from ..observers.port_speed import PortSpeedObserver
+        from ..observers.pcie_bandwidth import PcieBandwidthObserver
+        from ..observers.card_info import CardInfoObserver
+        from ..observers.port_traffic import PortTrafficObserver
+        from ..observers.controller_state import ControllerStateObserver
+        from ..observers.disk_state import DiskStateObserver
+        from ..observers.process_crash import ProcessCrashObserver
+        from ..observers.io_timeout import IoTimeoutObserver
         
         return {
             'error_code': ErrorCodeObserver,
@@ -87,6 +96,15 @@ class Scheduler:
             'cpu_usage': CpuUsageObserver,
             'cmd_response': CmdResponseObserver,
             'sig_monitor': SigMonitorObserver,
+            'port_fec': PortFecObserver,
+            'port_speed': PortSpeedObserver,
+            'pcie_bandwidth': PcieBandwidthObserver,
+            'card_info': CardInfoObserver,
+            'port_traffic': PortTrafficObserver,
+            'controller_state': ControllerStateObserver,
+            'disk_state': DiskStateObserver,
+            'process_crash': ProcessCrashObserver,
+            'io_timeout': IoTimeoutObserver,
         }
     
     def register(self, observer: BaseObserver):

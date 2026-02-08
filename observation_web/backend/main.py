@@ -22,6 +22,10 @@ from .api.system_alerts import router as system_alerts_router
 from .api.data_lifecycle import router as data_lifecycle_router
 from .api.scheduler import router as scheduler_router
 from .api.ingest import router as ingest_router
+from .api.traffic import router as traffic_router
+from .api.task_session import router as task_session_router
+from .api.timeline import router as timeline_router
+from .api.snapshot import router as snapshot_router
 from .core.ssh_pool import get_ssh_pool
 from .core.scheduler import get_scheduler
 
@@ -43,6 +47,17 @@ async def _idle_connection_cleaner():
             await asyncio.sleep(120)  # Check every 2 minutes
             ssh_pool = get_ssh_pool()
             ssh_pool.cleanup_idle_connections(max_idle_seconds=600)  # 10 min idle timeout
+
+            # Every cycle: cleanup expired traffic data
+            try:
+                from .core.traffic_store import get_traffic_store
+                from .db.database import AsyncSessionLocal
+                if AsyncSessionLocal:
+                    async with AsyncSessionLocal() as session:
+                        store = get_traffic_store()
+                        await store.cleanup_expired(session)
+            except Exception as e:
+                logger.debug(f"Traffic cleanup error: {e}")
 
             # Every 5 minutes (3rd iteration), check agent health on connected arrays
             check_count += 1
@@ -195,6 +210,10 @@ def create_app() -> FastAPI:
     app.include_router(data_lifecycle_router, prefix="/api")
     app.include_router(scheduler_router, prefix="/api")
     app.include_router(ingest_router, prefix="/api")
+    app.include_router(traffic_router, prefix="/api")
+    app.include_router(task_session_router, prefix="/api")
+    app.include_router(timeline_router, prefix="/api")
+    app.include_router(snapshot_router, prefix="/api")
     app.include_router(ws_router)
     
     # Health check endpoint
@@ -207,15 +226,20 @@ def create_app() -> FastAPI:
     async def api_info():
         return {
             "name": "Observation Web API",
-        "version": "2.0.0",
+        "version": "2.1.0",
         "endpoints": {
             "arrays": "/api/arrays",
             "alerts": "/api/alerts",
+            "alerts_aggregated": "/api/alerts/aggregated",
             "query": "/api/query",
             "system_alerts": "/api/system-alerts",
             "data_lifecycle": "/api/data",
             "tasks": "/api/tasks",
+            "test_tasks": "/api/test-tasks",
+            "timeline": "/api/timeline",
+            "snapshots": "/api/snapshots",
             "ingest": "/api/ingest",
+            "traffic": "/api/traffic",
             "websocket_alerts": "/ws/alerts",
             "websocket_status": "/ws/status",
         }

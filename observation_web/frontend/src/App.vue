@@ -45,6 +45,10 @@
               <el-icon><Timer /></el-icon>
               <span>定时任务</span>
             </el-menu-item>
+            <el-menu-item index="/test-tasks">
+              <el-icon><Stopwatch /></el-icon>
+              <span>测试任务</span>
+            </el-menu-item>
           </el-menu>
         </el-aside>
 
@@ -58,6 +62,16 @@
               </el-breadcrumb>
             </div>
             <div class="header-right">
+              <el-tooltip content="开启/关闭告警提示音">
+                <el-switch
+                  v-model="soundOn"
+                  active-text=""
+                  inactive-text=""
+                  size="small"
+                  style="margin-right: 8px"
+                  @change="toggleSound"
+                />
+              </el-tooltip>
               <el-badge :value="alertCount" :hidden="alertCount === 0" class="alert-badge">
                 <el-button :icon="Bell" circle @click="$router.push('/alerts')" />
               </el-badge>
@@ -72,6 +86,19 @@
               </el-dropdown>
             </div>
           </el-header>
+
+          <!-- Critical event banner -->
+          <div v-if="alertStore.hasCriticalEvents" class="critical-banner">
+            <el-icon><WarningFilled /></el-icon>
+            <span class="critical-text">
+              {{ alertStore.criticalEvents.length }} 个关键事件需要关注
+              <template v-if="latestCritical">
+                — {{ latestCritical.observer_name }}: {{ (latestCritical.message || '').substring(0, 60) }}
+              </template>
+            </span>
+            <el-button type="danger" size="small" plain @click="$router.push('/alerts')">查看</el-button>
+            <el-button size="small" text @click="alertStore.acknowledgeAllCritical()">全部已知</el-button>
+          </div>
 
           <el-main class="main-content">
             <router-view v-slot="{ Component }">
@@ -90,11 +117,13 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRoute } from 'vue-router'
 import zhCn from 'element-plus/dist/locale/zh-cn.mjs'
-import { Monitor, Odometer, Cpu, Bell, Search, Setting, User, Warning, Files, Timer } from '@element-plus/icons-vue'
+import { Monitor, Odometer, Cpu, Bell, Search, Setting, User, Warning, Files, Timer, WarningFilled, Stopwatch } from '@element-plus/icons-vue'
 import { useAlertStore } from './stores/alerts'
+import { setSoundEnabled } from './utils/notification'
 
 const route = useRoute()
 const alertStore = useAlertStore()
+const soundOn = ref(false)
 
 const activeMenu = computed(() => route.path)
 const currentRoute = computed(() => {
@@ -107,11 +136,17 @@ const currentRoute = computed(() => {
     '/system-alerts': '系统告警',
     '/data': '数据管理',
     '/tasks': '定时任务',
+    '/test-tasks': '测试任务',
   }
   return routes[route.path] || ''
 })
 
 const alertCount = computed(() => alertStore.recentCount)
+const latestCritical = computed(() => alertStore.criticalEvents[0] || null)
+
+function toggleSound(val) {
+  setSoundEnabled(val)
+}
 
 // Initialize WebSocket connection
 onMounted(() => {
@@ -204,6 +239,30 @@ html, body, #app {
 
 .alert-badge {
   margin-right: 8px;
+}
+
+/* Critical event banner */
+.critical-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 20px;
+  background: #fef0f0;
+  border-bottom: 2px solid #f56c6c;
+  color: #f56c6c;
+  font-size: 14px;
+  animation: critical-pulse 2s ease-in-out infinite;
+}
+.critical-banner .el-icon {
+  font-size: 18px;
+}
+.critical-text {
+  flex: 1;
+  font-weight: 600;
+}
+@keyframes critical-pulse {
+  0%, 100% { background: #fef0f0; }
+  50% { background: #fde2e2; }
 }
 
 .main-content {
