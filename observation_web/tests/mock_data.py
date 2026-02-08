@@ -15,6 +15,8 @@ from backend.db.database import init_db, get_db, create_tables
 from backend.models.alert import AlertModel
 from backend.models.array import ArrayModel
 from backend.models.traffic import PortTrafficModel
+from backend.models.task_session import TaskSessionModel
+from backend.models.snapshot import SnapshotModel
 
 # Mock arrays
 MOCK_ARRAYS = [
@@ -301,6 +303,8 @@ async def create_mock_data():
         if result.scalars().first():
             print("Mock data already exists, clearing and re-creating...")
             from sqlalchemy import delete
+            await session.execute(delete(SnapshotModel))
+            await session.execute(delete(TaskSessionModel))
             await session.execute(delete(AlertModel))
             await session.execute(delete(PortTrafficModel))
             await session.execute(delete(ArrayModel))
@@ -345,6 +349,41 @@ async def create_mock_data():
 
         await session.commit()
         print(f"Created {traffic_count} mock traffic data points (2 hours, multiple ports)")
+
+        # Create test tasks — demonstrate task session feature
+        task_templates = [
+            {"name": "正常业务压力测试", "task_type": "normal_business",
+             "array_ids": json.dumps(["array-001", "array-002"]),
+             "notes": "512K 随机读写，持续 30 分钟", "status": "completed",
+             "started_at": now - timedelta(hours=6), "ended_at": now - timedelta(hours=5, minutes=30)},
+            {"name": "控制器 A 下电测试", "task_type": "controller_poweroff",
+             "array_ids": json.dumps(["array-001"]),
+             "notes": "拔出控制器 A 电源线，观察业务切换", "status": "completed",
+             "started_at": now - timedelta(hours=4), "ended_at": now - timedelta(hours=3, minutes=45)},
+            {"name": "接口卡热插拔测试", "task_type": "card_hotswap",
+             "array_ids": json.dumps(["array-002"]),
+             "notes": "拔出 eth2 接口卡并重新插入", "status": "completed",
+             "started_at": now - timedelta(hours=2), "ended_at": now - timedelta(hours=1, minutes=50)},
+            {"name": "长时间稳定性测试", "task_type": "long_running",
+             "array_ids": json.dumps(["array-001", "array-002", "array-003"]),
+             "notes": "混合负载 24 小时稳定性验证", "status": "running",
+             "started_at": now - timedelta(minutes=90), "ended_at": None},
+        ]
+        for t in task_templates:
+            task = TaskSessionModel(**t)
+            session.add(task)
+        await session.commit()
+        print(f"Created {len(task_templates)} mock test tasks (3 completed + 1 running)")
+
+        # Update some alerts to link to tasks (simulate task-tagged alerts)
+        from sqlalchemy import select as sa_select, update as sa_update
+        alert_rows = (await session.execute(sa_select(AlertModel).limit(20))).scalars().all()
+        task_rows = (await session.execute(sa_select(TaskSessionModel))).scalars().all()
+        task_ids = [t.id for t in task_rows]
+        for a in alert_rows:
+            a.task_id = random.choice(task_ids)
+        await session.commit()
+        print(f"Tagged {len(alert_rows)} alerts with task_ids")
 
         break
 

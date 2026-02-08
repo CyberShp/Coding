@@ -32,15 +32,15 @@
       <el-empty description="请先选择一个端口以查看流量曲线" :image-size="80" />
     </div>
 
-    <div v-else-if="loading" class="chart-loading">
-      <el-skeleton :rows="6" animated />
+    <div v-else class="chart-wrapper">
+      <div v-show="loading" class="chart-loading">
+        <el-skeleton :rows="6" animated />
+      </div>
+      <div v-show="!loading && chartData.length === 0" class="chart-empty">
+        <el-empty description="暂无流量数据，请同步后重试" :image-size="80" />
+      </div>
+      <div v-show="!loading && chartData.length > 0" ref="chartContainer" class="chart-container"></div>
     </div>
-
-    <div v-else-if="chartData.length === 0" class="chart-empty">
-      <el-empty description="暂无流量数据，请同步后重试" :image-size="80" />
-    </div>
-
-    <div v-else ref="chartContainer" class="chart-container"></div>
   </div>
 </template>
 
@@ -137,13 +137,28 @@ async function syncAndRefresh() {
 function renderChart() {
   if (!chartContainer.value || chartData.value.length === 0) return
 
+  // With v-show, the container stays in DOM, so the instance stays valid.
+  // Just init once; if somehow DOM is stale, dispose and re-create.
+  if (chartInstance && !document.body.contains(chartInstance.getDom())) {
+    chartInstance.dispose()
+    chartInstance = null
+  }
+
   if (!chartInstance) {
     chartInstance = echarts.init(chartContainer.value)
+  } else {
+    // Container might have been hidden (v-show=false) and now visible again;
+    // ensure ECharts recalculates dimensions.
+    chartInstance.resize()
   }
 
   const times = chartData.value.map(d => formatTime(d.ts))
   const txRates = chartData.value.map(d => d.tx_rate_bps || 0)
   const rxRates = chartData.value.map(d => d.rx_rate_bps || 0)
+
+  // Show symbols (dots) when data points are few, otherwise hide for cleanliness
+  const showSymbol = chartData.value.length <= 10
+  const symbolSize = chartData.value.length <= 3 ? 8 : 5
 
   const option = {
     tooltip: {
@@ -208,8 +223,10 @@ function renderChart() {
         name: 'TX (发送)',
         type: 'line',
         data: txRates,
-        smooth: true,
-        symbol: 'none',
+        smooth: txRates.length > 2,
+        showSymbol: showSymbol,
+        symbol: 'circle',
+        symbolSize: symbolSize,
         lineStyle: { width: 2 },
         areaStyle: { opacity: 0.1 },
         itemStyle: { color: '#409eff' },
@@ -218,8 +235,10 @@ function renderChart() {
         name: 'RX (接收)',
         type: 'line',
         data: rxRates,
-        smooth: true,
-        symbol: 'none',
+        smooth: rxRates.length > 2,
+        showSymbol: showSymbol,
+        symbol: 'circle',
+        symbolSize: symbolSize,
         lineStyle: { width: 2 },
         areaStyle: { opacity: 0.1 },
         itemStyle: { color: '#67c23a' },
