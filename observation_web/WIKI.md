@@ -945,3 +945,228 @@ No002  HealthState: FAULT
 | 查看告警根因 | 告警中心 → 切换到「聚合」模式 |
 | 查看事件先后关系 | 阵列详情 → 事件时间线 |
 | 创建测试上下文 | 侧栏「测试任务」→ 创建 → 开始 |
+
+---
+
+## 十二、开发者扩展指南：如何添加一个新的观察点
+
+本章面向希望仿写新观察点并接入系统的开发者。假设你已编写好一个新的观察点 Python 文件（例如 `my_observer.py`），以下是将其集成进系统所需修改的**全部文件清单**和**操作步骤**。
+
+### 12.1 涉及文件总览
+
+需要手动修改的文件共 **5 个**（Agent 端 3 个 + Web 端 2 个为可选），另有 1 个配置文件：
+
+| 序号 | 文件路径 | 必须/可选 | 作用 |
+|------|----------|-----------|------|
+| 1 | `observation_points/observers/my_observer.py` | **必须** | 观察点实现文件（你编写的） |
+| 2 | `observation_points/observers/__init__.py` | **必须** | 注册导出，让模块能被发现 |
+| 3 | `observation_points/core/scheduler.py` | **必须** | 调度器映射，让调度器知道名称对应哪个类 |
+| 4 | `observation_points/config/loader.py` | **必须** | 默认配置，确保即使用户 config.json 未配置也有兜底 |
+| 5 | `observation_points/config.json` | **必须** | 用户配置文件，添加你的观察点配置项 |
+| 6 | `observation_web/frontend/src/utils/alertTranslator.js` | 可选(推荐) | Web 前端告警翻译，让告警以可读中文显示 |
+| 7 | `observation_web/backend/core/alert_aggregator.py` | 可选 | 告警聚合规则，如果需要与其他观察点做根因关联 |
+
+### 12.2 步骤详解
+
+#### 第 1 步：编写观察点文件
+
+在 `observation_points/observers/` 目录下创建你的 `.py` 文件，必须满足以下规范：
+
+```python
+"""
+my_observer — 你的观察点描述
+"""
+import logging
+from typing import Any, Dict
+from ..core.base import BaseObserver, ObserverResult, AlertLevel
+
+logger = logging.getLogger(__name__)
+
+
+class MyObserver(BaseObserver):
+    """你的观察点说明"""
+
+    def __init__(self, name: str, config: Dict[str, Any]):
+        super().__init__(name, config)
+        # 从 config 中读取你的自定义参数
+        self.my_param = config.get('my_param', 'default_value')
+        # 如需用户填写命令：
+        self.command = config.get('command', '')
+
+    def check(self, reporter=None) -> ObserverResult:
+        """
+        执行检查逻辑
+
+        返回 self.create_result(...)，字段说明：
+        - has_alert: 是否触发告警（True/False）
+        - alert_level: AlertLevel.INFO / WARNING / ERROR / CRITICAL
+        - message: 告警摘要文本
+        - details: dict，放入结构化数据（供前端解析）
+        - sticky: True 表示持续告警，不受冷却限制
+        """
+        try:
+            # --- 你的检查逻辑 ---
+            # 例如：执行命令、解析输出、与预期对比
+            # ...
+
+            if something_wrong:
+                return self.create_result(
+                    has_alert=True,
+                    alert_level=AlertLevel.WARNING,
+                    message="检测到异常：xxx",
+                    details={
+                        'key1': 'value1',
+                        'changes': [...]  # 推荐放结构化变更列表
+                    },
+                )
+
+            return self.create_result()  # 无告警
+
+        except Exception as e:
+            self.logger.error(f"检查失败: {e}")
+            return self.create_result(
+                has_alert=True,
+                alert_level=AlertLevel.ERROR,
+                message=f"观察点执行异常: {e}",
+            )
+
+    def cleanup(self):
+        """可选：清理资源"""
+        pass
+```
+
+**要点**：
+- 类名建议用 `XxxObserver` 的驼峰命名
+- `check()` 方法签名建议带 `reporter=None` 参数以兼容指标记录
+- `details` 字典中的数据会原样传到前端，建议放可读的结构化信息
+
+#### 第 2 步：修改 `observers/__init__.py`
+
+打开 `observation_points/observers/__init__.py`，添加两处：
+
+```python
+# 在文件顶部 import 区域，添加一行：
+from .my_observer import MyObserver
+
+# 在 __all__ 列表中，添加一项：
+__all__ = [
+    # ... 已有的条目 ...
+    'MyObserver',
+]
+```
+
+#### 第 3 步：修改 `core/scheduler.py`
+
+打开 `observation_points/core/scheduler.py`，在 `_get_observer_classes()` 方法中添加两处：
+
+```python
+def _get_observer_classes(self) -> Dict[str, type]:
+    # 在 import 区域添加：
+    from ..observers.my_observer import MyObserver
+
+    return {
+        # ... 已有的映射 ...
+        'my_observer': MyObserver,     # ← 添加这行
+    }
+```
+
+**注意**：字典的 **key**（`'my_observer'`）就是 config.json 中的配置名称，必须与配置项名称完全一致。
+
+#### 第 4 步：修改 `config/loader.py`
+
+打开 `observation_points/config/loader.py`，在 `DEFAULT_CONFIG['observers']` 字典中添加你的默认配置：
+
+```python
+DEFAULT_CONFIG = {
+    # ...
+    'observers': {
+        # ... 已有的条目 ...
+        'my_observer': {
+            'enabled': True,
+            'interval': 60,          # 检查间隔（秒）
+            'my_param': 'default',   # 你的自定义参数
+            # 如果需要用户填命令：
+            # 'command': '',
+        },
+    },
+}
+```
+
+#### 第 5 步：修改 `config.json`
+
+打开 `observation_points/config.json`，在 `"observers"` 对象中添加配置：
+
+```json
+{
+  "observers": {
+    "my_observer": {
+      "enabled": true,
+      "interval": 60,
+      "my_param": "your_value",
+      "_comment": "你的观察点说明，_comment 字段仅作注释用"
+    }
+  }
+}
+```
+
+#### 第 6 步（可选但推荐）：添加前端告警翻译
+
+如果你希望在 Web 界面上以可读中文显示告警，需编辑 `observation_web/frontend/src/utils/alertTranslator.js`：
+
+```javascript
+// 1. 在 OBSERVER_NAMES 对象中添加中文名称：
+export const OBSERVER_NAMES = {
+  // ... 已有的 ...
+  my_observer: '我的观察点',
+}
+
+// 2. 编写翻译函数：
+function translateMyObserver(alert) {
+  const details = alert.details || {}
+  let event = '', impact = '', suggestion = ''
+
+  // 根据 details 中的数据生成三段式翻译
+  event = '检测到 xxx 变化'
+  impact = '可能影响 xxx'
+  suggestion = '建议检查 xxx'
+
+  return makeResult({
+    event, impact, suggestion,
+    original: alert.message || '',
+    log_path: details.log_path || '',
+  })
+}
+
+// 3. 在 TRANSLATORS 对象中注册：
+const TRANSLATORS = {
+  // ... 已有的 ...
+  my_observer: translateMyObserver,
+}
+```
+
+#### 第 7 步（可选）：添加告警聚合规则
+
+如果你的观察点需要与其他观察点做根因关联（例如多个相关告警合并显示），编辑 `observation_web/backend/core/alert_aggregator.py` 中的 `CORRELATION_RULES` 列表。
+
+### 12.3 快速检查清单
+
+添加完成后，请逐项确认：
+
+- [ ] 观察点 `.py` 文件放在 `observation_points/observers/` 目录下
+- [ ] 类继承自 `BaseObserver`，实现了 `check()` 方法
+- [ ] `observers/__init__.py` 中有 import 和 `__all__` 条目
+- [ ] `core/scheduler.py` 的 `_get_observer_classes()` 中有 import 和字典条目
+- [ ] `config/loader.py` 的 `DEFAULT_CONFIG` 中有默认配置
+- [ ] `config.json` 中有配置条目且 `enabled: true`
+- [ ] （可选）`alertTranslator.js` 中有中文名和翻译函数
+- [ ] 重启 Agent 服务后，日志中能看到 `注册: my_observer (间隔 xxxs)`
+
+### 12.4 常见问题
+
+| 问题 | 原因 | 解决 |
+|------|------|------|
+| 启动报 `未知观察点: xxx` | scheduler.py 中缺少映射 | 检查第 3 步 |
+| 启动报 `ImportError` | `__init__.py` 中未导入或文件名拼写错误 | 检查第 2 步和文件名 |
+| 观察点不执行 | config.json 中 `enabled: false` 或缺少配置 | 检查第 5 步 |
+| Web 端告警显示为原始英文 | 未添加翻译 | 完成第 6 步 |
+| 告警不上报到 Web 端 | `check()` 返回的 `has_alert` 未设为 True | 检查 check() 逻辑 |
