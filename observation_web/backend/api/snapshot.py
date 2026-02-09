@@ -19,6 +19,32 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/snapshots", tags=["snapshots"])
 
 
+@router.get("/diff", response_model=SnapshotDiffResponse)
+async def diff_snapshots(
+    id1: int = Query(..., description="First snapshot ID"),
+    id2: int = Query(..., description="Second snapshot ID"),
+    db: AsyncSession = Depends(get_db),
+):
+    """Compare two snapshots and return differences.
+    NOTE: This route MUST be defined BEFORE /{array_id} to avoid path conflict.
+    """
+    snap_a = await db.get(SnapshotModel, id1)
+    snap_b = await db.get(SnapshotModel, id2)
+    if not snap_a or not snap_b:
+        raise HTTPException(404, "Snapshot not found")
+
+    data_a = _parse_data(snap_a.data)
+    data_b = _parse_data(snap_b.data)
+
+    changes = _compute_diff(data_a, data_b)
+
+    return SnapshotDiffResponse(
+        snapshot_a=_to_response(snap_a),
+        snapshot_b=_to_response(snap_b),
+        changes=changes,
+    )
+
+
 @router.post("/{array_id}", response_model=SnapshotResponse)
 async def create_snapshot(
     array_id: str,
@@ -90,30 +116,6 @@ async def list_snapshots(
         .limit(limit)
     )
     return [_to_response(s) for s in result.scalars().all()]
-
-
-@router.get("/diff", response_model=SnapshotDiffResponse)
-async def diff_snapshots(
-    id1: int = Query(..., description="First snapshot ID"),
-    id2: int = Query(..., description="Second snapshot ID"),
-    db: AsyncSession = Depends(get_db),
-):
-    """Compare two snapshots and return differences"""
-    snap_a = await db.get(SnapshotModel, id1)
-    snap_b = await db.get(SnapshotModel, id2)
-    if not snap_a or not snap_b:
-        raise HTTPException(404, "Snapshot not found")
-
-    data_a = _parse_data(snap_a.data)
-    data_b = _parse_data(snap_b.data)
-
-    changes = _compute_diff(data_a, data_b)
-
-    return SnapshotDiffResponse(
-        snapshot_a=_to_response(snap_a),
-        snapshot_b=_to_response(snap_b),
-        changes=changes,
-    )
 
 
 def _compute_diff(a: Dict, b: Dict) -> List[Dict[str, Any]]:

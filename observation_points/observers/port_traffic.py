@@ -5,8 +5,8 @@
 定期采集各端口 TX/RX 流量数据，输出到 traffic.jsonl 文件，
 供 web 端拉取后显示流量曲线图。本地保留 2 小时数据。
 
-内置通用方式：直接读取 /sys/class/net/<port>/statistics/ 下的
-tx_bytes 和 rx_bytes（Linux 标准接口，所有网络端口均可用）。
+内置通用方式：优先使用 ethtool -S <port> 获取准确的 tx_bytes / rx_bytes；
+如果 ethtool 不可用或失败，回退到 /sys/class/net/<port>/statistics/。
 如果配置了 command 则优先使用自定义命令。
 """
 
@@ -28,13 +28,14 @@ class PortTrafficObserver(BaseObserver):
     """
     端口流量采集器
 
-    工作方式（二选一）：
-    1. 内置模式（默认）：通过 /sys/class/net/<port>/statistics/ 读取
+    工作方式（三选一，按优先级）：
+    1. 自定义命令模式：配置 command 字段（最高优先级）
+    2. ethtool 模式（默认）：通过 ethtool -S <port> 获取准确的
        tx_bytes / rx_bytes，自动计算速率（bps）
-    2. 自定义命令模式：配置 command 字段
+    3. sysfs 回退模式：ethtool 不可用时通过 /sys/class/net/ 读取
 
     配置项：
-    - command: 自定义命令（可选，留空则使用内置 sysfs）
+    - command: 自定义命令（可选，留空则使用 ethtool）
     - output_path: traffic.jsonl 文件路径
     - ports: 要采集的端口列表（可选，为空则自动发现）
     - retention_hours: 本地保留时长（默认 2）
@@ -65,7 +66,10 @@ class PortTrafficObserver(BaseObserver):
         if self.command:
             current = self._collect_via_command()
         else:
-            current = self._collect_via_sysfs()
+            # 优先 ethtool，回退 sysfs
+            current = self._collect_via_ethtool()
+            if not current:
+                current = self._collect_via_sysfs()
 
         if not current:
             return self.create_result(
@@ -122,12 +126,61 @@ class PortTrafficObserver(BaseObserver):
             details={'ports': list(current.keys()), 'record_count': len(records)},
         )
 
-    # ---------- 内置 sysfs 模式 ----------
+    # ---------- 内置 ethtool 模式（推荐） ----------
+
+    def _collect_via_ethtool(self) -> Dict[str, Dict[str, int]]:
+        """
+        通过 ethtool -S <port> 获取准确的 TX/RX 字节数。
+        ethtool 直接从网卡驱动读取硬件计数器，比 sysfs 更精确。
+        """
+        result = {}
+        ports = self._discover_ports()
+
+        for port in ports:
+            ret, stdout, _ = run_command(['ethtool', '-S', port], timeout=5)
+            if ret != 0:
+                continue
+
+            tx_bytes = None
+            rx_bytes = None
+
+            for line in stdout.split('\n'):
+                line = line.strip()
+                if ':' not in line:
+                    continue
+                key, value = line.split(':', 1)
+                key = key.strip().lower()
+                value = value.strip()
+
+                # ethtool -S 的字段名因驱动而异，做通用匹配
+                if key in ('tx_bytes', 'tx_octets', 'tx_good_bytes',
+                           'port.tx_bytes', 'tx_bytes_nic'):
+                    try:
+                        tx_bytes = int(value)
+                    except (ValueError, TypeError):
+                        pass
+                elif key in ('rx_bytes', 'rx_octets', 'rx_good_bytes',
+                             'port.rx_bytes', 'rx_bytes_nic'):
+                    try:
+                        rx_bytes = int(value)
+                    except (ValueError, TypeError):
+                        pass
+
+            if tx_bytes is not None and rx_bytes is not None:
+                result[port] = {
+                    'tx_bytes': tx_bytes,
+                    'rx_bytes': rx_bytes,
+                }
+
+        return result
+
+    # ---------- sysfs 回退模式 ----------
 
     def _collect_via_sysfs(self) -> Dict[str, Dict[str, int]]:
         """
         通过 /sys/class/net/<port>/statistics/ 读取 TX/RX 字节数。
-        这是 Linux 标准接口，所有网络端口均可用，无需额外工具。
+        这是 Linux 标准接口，当 ethtool 不可用时作为回退。
+        注意：sysfs 数据可能不如 ethtool 精确。
         """
         result = {}
         ports = self._discover_ports()

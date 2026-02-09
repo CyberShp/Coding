@@ -451,7 +451,26 @@ async function loadArray() {
   }
 }
 
-function handleConnect() {
+async function handleConnect() {
+  // 如果有保存的密码，先尝试自动连接
+  const statusData = arrayStore.statuses.find(s => s.array_id === array.value?.array_id)
+  if (statusData?.has_saved_password) {
+    connecting.value = true
+    try {
+      const result = await arrayStore.connectArray(array.value.array_id, '')
+      ElMessage.success('自动连接成功')
+      if (result?.agent_status === 'not_deployed') {
+        ElMessage.warning(result.hint || 'Agent 未部署')
+      }
+      await loadArray()
+      return
+    } catch (error) {
+      ElMessage.warning('已保存密码连接失败，请重新输入')
+    } finally {
+      connecting.value = false
+    }
+  }
+  
   connectForm.password = ''
   connectDialogVisible.value = true
 }

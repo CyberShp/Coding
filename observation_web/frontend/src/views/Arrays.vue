@@ -304,8 +304,24 @@ async function handleAdd() {
   }
 }
 
-function handleConnect(row) {
+async function handleConnect(row) {
   currentArray.value = row
+  
+  // 如果有保存的密码，先尝试自动连接
+  if (row.has_saved_password) {
+    connecting.value = true
+    try {
+      await arrayStore.connectArray(row.array_id, '')  // 后端自动使用已保存密码
+      ElMessage.success('自动连接成功')
+      return
+    } catch (error) {
+      // 自动连接失败，弹出密码框让用户重新输入
+      ElMessage.warning('已保存的密码连接失败，请重新输入密码')
+    } finally {
+      connecting.value = false
+    }
+  }
+  
   connectForm.password = ''
   connectDialogVisible.value = true
 }

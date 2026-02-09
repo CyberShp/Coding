@@ -90,12 +90,20 @@ class ErrorCodeObserver(BaseObserver):
         'UnsupReq',
     ]
     
+    # 单次增量阈值上限：超过此值视为计数器异常（修卡/驱动重置/硬件故障导致
+    # 计数器跳变），不应作为真实误码告警。10,000,000（一千万）是保守上限，
+    # 正常业务下单个采集周期内不可能产生千万级误码。
+    DELTA_ANOMALY_THRESHOLD = 10_000_000
+
     def __init__(self, name: str, config: Dict[str, Any]):
         super().__init__(name, config)
         self.threshold = config.get('threshold', 0)
         self.ports = config.get('ports', [])
         self.pcie_enabled = config.get('pcie_enabled', True)
         self.protocols = config.get('protocols', ['iscsi', 'nvme', 'nas'])
+        self.delta_anomaly_threshold = config.get(
+            'delta_anomaly_threshold', self.DELTA_ANOMALY_THRESHOLD
+        )
         self._last_port_errors = {}  # type: Dict[str, Dict[str, int]]
         self._last_pcie_errors = {}  # type: Dict[str, Dict[str, int]]
     
@@ -209,6 +217,15 @@ class ErrorCodeObserver(BaseObserver):
                     # 计数器回绕或重置，跳过
                     continue
                 
+                # 异常跳变过滤：修卡/驱动重载可能导致计数器瞬间跳变数千万甚至数亿
+                # 这不是真实误码，不应触发告警
+                if delta > self.delta_anomaly_threshold:
+                    logger.warning(
+                        f"[ErrorCode] {port}.{counter_name} 计数器异常跳变 +{delta}，"
+                        f"超过异常阈值 {self.delta_anomaly_threshold}，视为计数器重置，已忽略"
+                    )
+                    continue
+                
                 if delta > self.threshold:
                     cat_key, cat_name, cat_level = self._get_counter_category(counter_name)
                     alerts.append({
@@ -244,6 +261,13 @@ class ErrorCodeObserver(BaseObserver):
                     continue
                 
                 if delta < 0:
+                    continue
+                
+                # PCIe 异常跳变过滤
+                if delta > self.delta_anomaly_threshold:
+                    logger.warning(
+                        f"[ErrorCode] PCIe {device} {error_type} 异常跳变 +{delta}，已忽略"
+                    )
                     continue
                 
                 if delta > self.threshold:

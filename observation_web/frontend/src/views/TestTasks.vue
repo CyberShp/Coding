@@ -93,7 +93,21 @@
           </el-select>
         </el-form-item>
         <el-form-item label="关联阵列">
-          <el-input v-model="form.array_ids_str" placeholder="阵列ID, 逗号分隔（留空关联全部）" />
+          <el-select
+            v-model="form.array_ids"
+            multiple
+            collapse-tags
+            collapse-tags-tooltip
+            placeholder="选择阵列（留空关联全部）"
+            style="width: 100%"
+          >
+            <el-option
+              v-for="a in allArrays"
+              :key="a.array_id"
+              :label="a.name"
+              :value="a.array_id"
+            />
+          </el-select>
         </el-form-item>
         <el-form-item label="备注">
           <el-input v-model="form.notes" type="textarea" :rows="3" />
@@ -170,10 +184,12 @@ const taskTypes = {
   custom: '自定义',
 }
 
+const allArrays = ref([])
+
 const form = reactive({
   name: '',
   task_type: 'custom',
-  array_ids_str: '',
+  array_ids: [],
   notes: '',
 })
 
@@ -202,18 +218,17 @@ async function createTask() {
   }
   creating.value = true
   try {
-    const arrayIds = form.array_ids_str.split(',').map(s => s.trim()).filter(Boolean)
     await api.createTestTask({
       name: form.name,
       task_type: form.task_type,
-      array_ids: arrayIds,
+      array_ids: form.array_ids,
       notes: form.notes,
     })
     ElMessage.success('任务创建成功')
     showCreateDialog.value = false
     form.name = ''
     form.notes = ''
-    form.array_ids_str = ''
+    form.array_ids = []
     await loadTasks()
   } finally {
     creating.value = false
@@ -272,7 +287,18 @@ function formatTime(ts) {
   return new Date(ts).toLocaleString('zh-CN')
 }
 
-onMounted(loadTasks)
+async function loadArrays() {
+  try {
+    const res = await api.getArrays()
+    allArrays.value = res.data || []
+  } catch (e) {
+    console.error('Failed to load arrays:', e)
+  }
+}
+
+onMounted(async () => {
+  await Promise.all([loadTasks(), loadArrays()])
+})
 </script>
 
 <style scoped>

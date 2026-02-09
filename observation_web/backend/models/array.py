@@ -34,6 +34,7 @@ class ArrayModel(Base):
     username = Column(String(64), default="root")
     key_path = Column(String(512), default="")
     folder = Column(String(128), default="")
+    saved_password = Column(String(512), default="")  # 保存密码，首次成功连接后记住
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
@@ -97,6 +98,7 @@ class ArrayStatus(BaseModel):
     last_error: str = ""
     agent_deployed: bool = False
     agent_running: bool = False
+    has_saved_password: bool = False
     last_refresh: Optional[datetime] = None
     observer_status: Dict[str, Dict[str, str]] = {}
     recent_alerts: List[Dict[str, Any]] = []

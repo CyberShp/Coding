@@ -83,6 +83,7 @@ class AgentDeployer:
             return {"ok": False, "error": "Not connected"}
 
         deploy_path = self.config.remote.agent_deploy_path
+        deploy_parent = posixpath.dirname(deploy_path)
         log_path = self.config.remote.agent_log_path
         python_cmd = self.config.remote.python_cmd
         log_parent = posixpath.dirname(log_path)
@@ -91,10 +92,13 @@ class AgentDeployer:
         self.stop_agent()
         time.sleep(1)
 
-        # Step 2: Start agent with shell wrapper that captures PID and startup errors
+        # Step 2: Start agent — 关键：cd 到 deploy_path 的父目录，
+        # 这样 python3 -m observation_points 才能找到 observation_points 包。
+        # 例如 deploy_path=/home/permitdir/observation_points
+        # 则 cd /home/permitdir && python3 -m observation_points
         start_script = (
             f"mkdir -p {log_parent} && "
-            f"cd {deploy_path} && "
+            f"cd {deploy_parent} && "
             f"{python_cmd} -m observation_points "
             f"-c /etc/observation-points/config.json "
             f"--log-file {log_path} "
@@ -129,11 +133,29 @@ class AgentDeployer:
                       {"pid": pid, "start_log": error_detail[:500]})
             return {"ok": False, "error": f"Agent 进程启动后退出 (PID {pid}): {error_detail[:300]}"}
 
-        # Step 4: Use disown to detach from SSH session
+        # Step 4: Wait a bit more, then read startup log for warnings
+        # (non-critical errors like missing observers should not block success)
+        time.sleep(1)
+        _, start_log, _ = self.conn.execute(f"cat {AGENT_START_LOG} 2>/dev/null")
+        startup_warnings = []
+        if start_log and start_log.strip():
+            for line in start_log.strip().split('\n'):
+                line = line.strip()
+                # 过滤掉非关键启动警告（缺少 subhealth/performance 观察点、卡件状态非 RUNNING 等）
+                if not line:
+                    continue
+                if any(kw in line.lower() for kw in ['warning', 'not found', 'no module', 'no such']):
+                    startup_warnings.append(line)
+
+        # Step 5: Use disown to detach from SSH session
         self.conn.execute(f"disown {pid} 2>/dev/null || true")
 
         sys_info("agent_deployer", f"Agent started on {self.conn.host}", {"pid": pid})
-        return {"ok": True, "message": f"Agent started (PID: {pid})", "pid": int(pid)}
+        result = {"ok": True, "message": f"Agent started (PID: {pid})", "pid": int(pid)}
+        if startup_warnings:
+            result["warnings"] = startup_warnings[:5]  # 最多返回 5 条警告
+            result["message"] += f" (有 {len(startup_warnings)} 条启动警告，不影响运行)"
+        return result
 
     def stop_agent(self) -> Dict[str, Any]:
         """Stop agent using PID file, falling back to pkill."""

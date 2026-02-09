@@ -91,6 +91,7 @@ async def list_array_statuses(
         status_obj = _get_array_status(array.array_id)
         status_obj.name = array.name
         status_obj.host = array.host
+        status_obj.has_saved_password = bool(getattr(array, 'saved_password', ''))
         
         conn = ssh_pool.get_connection(array.array_id)
         if conn:
@@ -506,7 +507,13 @@ async def connect_array(
     db: AsyncSession = Depends(get_db),
     ssh_pool: SSHPool = Depends(get_ssh_pool),
 ):
-    """Connect to array"""
+    """Connect to array.
+    
+    密码策略：
+    1. 如果提供了 password 参数，优先使用
+    2. 如果未提供，自动使用数据库中已保存的密码
+    3. 连接成功后，自动将密码保存到数据库（下次免密连接）
+    """
     # Get array info
     result = await db.execute(
         select(ArrayModel).where(ArrayModel.array_id == array_id)
@@ -519,6 +526,9 @@ async def connect_array(
             detail=f"Array {array_id} not found"
         )
     
+    # 密码优先级：参数传入 > 数据库已保存
+    effective_password = password or getattr(array, 'saved_password', '') or ''
+    
     # Ensure connection exists
     conn = ssh_pool.get_connection(array_id)
     if not conn:
@@ -527,12 +537,12 @@ async def connect_array(
             host=array.host,
             port=array.port,
             username=array.username,
-            password=password,
+            password=effective_password,
             key_path=array.key_path or None,
         )
-    elif password:
-        # Update password if provided
-        conn.password = password
+    elif effective_password:
+        # Update password if we have one
+        conn.password = effective_password
     
     # Connect
     success = conn.connect()
@@ -548,6 +558,14 @@ async def connect_array(
             detail=f"Connection failed: {conn.last_error}"
         )
     
+    # 连接成功 → 保存密码到数据库（下次免密使用）
+    if effective_password and (not array.saved_password or array.saved_password != effective_password):
+        try:
+            array.saved_password = effective_password
+            await db.commit()
+        except Exception:
+            pass  # 保存密码失败不影响连接
+    
     # Check agent status
     config = get_config()
     deployer = AgentDeployer(conn, config)
@@ -561,12 +579,14 @@ async def connect_array(
             "hint": "Agent 未部署，是否立即部署？",
             "agent_deployed": status_obj.agent_deployed,
             "agent_running": status_obj.agent_running,
+            "has_saved_password": True,
         }
 
     return {
         "status": "connected",
         "agent_deployed": status_obj.agent_deployed,
         "agent_running": status_obj.agent_running,
+        "has_saved_password": True,
     }
 
 

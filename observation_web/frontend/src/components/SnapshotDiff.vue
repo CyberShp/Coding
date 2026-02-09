@@ -127,7 +127,9 @@ async function doDiff() {
     const res = await api.diffSnapshots(selectedSnaps.value[0].id, selectedSnaps.value[1].id)
     diffResult.value = res.data
   } catch (e) {
-    ElMessage.error('对比失败')
+    const msg = e.response?.data?.detail || e.message || '对比失败'
+    ElMessage.error(`快照对比失败: ${msg}`)
+    console.error('Snapshot diff error:', e)
   } finally {
     diffing.value = false
   }

@@ -101,7 +101,7 @@ export default {
   // Snapshots
   createSnapshot: (arrayId) => httpLong.post(`/snapshots/${arrayId}`),
   getSnapshots: (arrayId) => http.get(`/snapshots/${arrayId}`),
-  diffSnapshots: (id1, id2) => http.get(`/snapshots/diff`, { params: { id1, id2 } }),
+  diffSnapshots: (id1, id2) => httpLong.get(`/snapshots/diff`, { params: { id1, id2 } }),
 
   // Timeline
   getTimeline: (arrayId, params) => http.get(`/timeline/${arrayId}`, { params }),

@@ -77,12 +77,15 @@
             <el-form-item label="选择阵列">
               <el-select v-model="importForm.arrayId" placeholder="请选择阵列" @change="onArraySelect">
                 <el-option
-                  v-for="array in connectedArrays"
-                  :key="array.id"
-                  :label="array.name"
-                  :value="array.id"
+                  v-for="a in arrays"
+                  :key="a.id"
+                  :label="`${a.name} (${a.status === 'connected' ? '已连接' : '未连接'})`"
+                  :value="a.id"
                 />
               </el-select>
+              <span v-if="importForm.arrayId && !isArrayConnected(importForm.arrayId)" class="form-tip" style="color: #e6a23c">
+                该阵列未连接，请先在阵列管理中连接
+              </span>
             </el-form-item>
 
             <el-form-item label="导入模式">
@@ -319,6 +322,11 @@ const queryForm = reactive({
 const connectedArrays = computed(() => {
   return arrays.value.filter(a => a.status === 'connected')
 })
+
+function isArrayConnected(arrayId) {
+  const arr = arrays.value.find(a => a.id === arrayId)
+  return arr?.status === 'connected'
+}
 
 // Methods
 function formatBytes(bytes) {
