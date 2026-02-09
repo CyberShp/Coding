@@ -173,25 +173,29 @@ class AlertStore:
         result = await db.execute(query)
         by_array = {row[0]: row[1] for row in result.all()}
         
-        # 24h trend (hourly)
+        # Dynamic trend: for <=4 hours use 10-min buckets, otherwise hourly
         trend = []
-        for i in range(24):
-            hour_start = datetime.now() - timedelta(hours=24-i)
-            hour_end = datetime.now() - timedelta(hours=23-i)
-            
-            count = await self.get_alert_count(db, start_time=hour_start)
-            # Approximate by subtracting next hour's count
-            if i < 23:
-                next_count = await self.get_alert_count(
-                    db, start_time=hour_end
-                )
-                count = count - next_count
-            
+        now = datetime.now()
+        if hours <= 4:
+            num_buckets = hours * 6          # 10-min intervals
+            bucket_minutes = 10
+        else:
+            num_buckets = min(hours, 48)     # hourly, cap at 48
+            bucket_minutes = 60
+
+        for i in range(num_buckets):
+            bucket_start = now - timedelta(minutes=bucket_minutes * (num_buckets - i))
+            bucket_end   = now - timedelta(minutes=bucket_minutes * (num_buckets - i - 1))
+
+            count_from_start = await self.get_alert_count(db, start_time=bucket_start)
+            count_from_end   = await self.get_alert_count(db, start_time=bucket_end)
+            bucket_count = count_from_start - count_from_end if i < num_buckets - 1 else count_from_start
+
             trend.append({
-                'hour': hour_start.strftime('%H:00'),
-                'count': max(0, count),
+                'hour': bucket_start.strftime('%H:%M'),
+                'count': max(0, bucket_count),
             })
-        
+
         return AlertStats(
             total=total,
             by_level=by_level,

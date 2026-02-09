@@ -35,8 +35,8 @@
               <el-icon size="28"><Bell /></el-icon>
             </div>
             <div class="stat-info">
-              <div class="stat-value">{{ summary.total_24h || 0 }}</div>
-              <div class="stat-label">24h 告警</div>
+              <div class="stat-value">{{ summary.total || summary.total_24h || 0 }}</div>
+              <div class="stat-label">2h 告警</div>
             </div>
           </div>
         </el-card>
@@ -122,7 +122,7 @@
         <!-- Alert Trend Chart (multi-line by level) -->
         <el-card class="content-card chart-card">
           <template #header>
-            <span>24小时告警趋势</span>
+            <span>2小时告警趋势</span>
           </template>
           <v-chart :option="trendChartOption" autoresize style="height: 250px" />
         </el-card>
@@ -299,8 +299,8 @@ async function loadData() {
   const tasks = [
     loadArrays().catch(e => console.error('Load arrays failed:', e)),
     alertStore.fetchRecentAlerts().catch(e => console.error('Load alerts failed:', e)),
-    api.getAlertSummary().then(res => summary.value = res.data).catch(e => console.error('Load summary failed:', e)),
-    api.getAlertStats().then(res => stats.value = res.data).catch(e => console.error('Load stats failed:', e)),
+    api.getAlertSummary(2).then(res => summary.value = res.data).catch(e => console.error('Load summary failed:', e)),
+    api.getAlertStats(2).then(res => stats.value = res.data).catch(e => console.error('Load stats failed:', e)),
     loadActiveTask(),
   ]
   

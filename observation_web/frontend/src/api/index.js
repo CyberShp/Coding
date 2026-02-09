@@ -85,7 +85,7 @@ export default {
   getAlerts: (params) => http.get('/alerts', { params }),
   getRecentAlerts: (limit = 20) => http.get('/alerts/recent', { params: { limit } }),
   getAlertStats: (hours = 24) => http.get('/alerts/stats', { params: { hours } }),
-  getAlertSummary: () => http.get('/alerts/summary'),
+  getAlertSummary: (hours = 2) => http.get('/alerts/summary', { params: { hours } }),
   getAggregatedAlerts: (params) => http.get('/alerts/aggregated', { params }),
   exportAlerts: (params) => http.get('/alerts/export', { params, responseType: 'blob' }),
 

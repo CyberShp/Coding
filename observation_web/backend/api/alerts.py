@@ -71,6 +71,7 @@ async def get_alert_stats(
 @router.get("/recent")
 async def get_recent_alerts(
     limit: int = Query(20, ge=1, le=100),
+    hours: int = Query(2, ge=1, le=168, description="Only return alerts within this many hours"),
     db: AsyncSession = Depends(get_db),
 ):
     """Get most recent alerts for dashboard"""
@@ -78,6 +79,7 @@ async def get_recent_alerts(
     
     alerts = await store.get_alerts(
         db,
+        start_time=datetime.now() - timedelta(hours=hours),
         limit=limit,
         offset=0,
     )
@@ -148,35 +150,39 @@ async def get_aggregated_alerts(
 
 @router.get("/summary")
 async def get_alert_summary(
+    hours: int = Query(2, ge=1, le=168, description="Time range in hours (default 2)"),
     db: AsyncSession = Depends(get_db),
 ):
     """Get quick summary for dashboard cards"""
     store = get_alert_store()
+    now = datetime.now()
     
-    # Last 24 hours
-    total_24h = await store.get_alert_count(
-        db, start_time=datetime.now() - timedelta(hours=24)
+    # Main time range
+    total = await store.get_alert_count(
+        db, start_time=now - timedelta(hours=hours)
     )
     
-    # Last hour
+    # Last hour (always)
     total_1h = await store.get_alert_count(
-        db, start_time=datetime.now() - timedelta(hours=1)
+        db, start_time=now - timedelta(hours=1)
     )
     
-    # Error count
+    # Error count within the requested range
     error_count = await store.get_alert_count(
-        db, level="error", start_time=datetime.now() - timedelta(hours=24)
+        db, level="error", start_time=now - timedelta(hours=hours)
     )
     
     critical_count = await store.get_alert_count(
-        db, level="critical", start_time=datetime.now() - timedelta(hours=24)
+        db, level="critical", start_time=now - timedelta(hours=hours)
     )
     
     return {
-        "total_24h": total_24h,
+        "total": total,
+        "total_24h": total,  # backward compat
         "total_1h": total_1h,
+        "hours": hours,
         "error_count": error_count + critical_count,
-        "warning_count": total_24h - error_count - critical_count,
+        "warning_count": total - error_count - critical_count,
     }
 
 

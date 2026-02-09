@@ -284,7 +284,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Refresh, ArrowRight } from '@element-plus/icons-vue'
@@ -567,7 +567,35 @@ async function handleStopAgent() {
   }
 }
 
-onMounted(loadArray)
+// ───── Auto-refresh (30s silent) ─────
+let refreshTimer = null
+
+async function silentRefresh() {
+  // Skip if page is hidden or a manual operation is in progress
+  if (document.hidden) return
+  if (isOperating.value || refreshing.value || connecting.value) return
+
+  try {
+    const arrayId = route.params.id
+    const response = await api.getArrayStatus(arrayId)
+    array.value = response.data
+    await loadRecentAlerts()
+  } catch {
+    // Silent — don't disturb the user
+  }
+}
+
+onMounted(() => {
+  loadArray()
+  refreshTimer = setInterval(silentRefresh, 30000) // 30 seconds
+})
+
+onUnmounted(() => {
+  if (refreshTimer) {
+    clearInterval(refreshTimer)
+    refreshTimer = null
+  }
+})
 </script>
 
 <style scoped>
