@@ -199,7 +199,7 @@
         </div>
       </el-card>
 
-      <!-- Recent Alerts (Translated + Drawer) -->
+      <!-- Recent Alerts (Translated + Drawer + Folding) -->
       <el-card class="alerts-card">
         <template #header>
           <div class="card-header">
@@ -208,31 +208,12 @@
           </div>
         </template>
         
-        <div class="alert-timeline" v-if="recentAlerts.length > 0">
-          <div 
-            v-for="(a, index) in recentAlerts" 
-            :key="index" 
-            class="alert-timeline-item clickable-alert"
-            :class="`alert-${a.level}`"
-            @click="openAlertDrawer(a)"
-          >
-            <div class="alert-time">{{ formatDateTime(a.timestamp) }}</div>
-            <div class="alert-body">
-              <div class="alert-header-row">
-                <el-tag :type="getLevelType(a.level)" size="small">
-                  {{ getLevelText(a.level) }}
-                </el-tag>
-                <span class="alert-observer">{{ getObserverLabel(a.observer_name) }}</span>
-                <el-tag v-if="getAlertTranslation(a).parsed?.is_history" type="info" size="small" effect="plain">历史告警上报</el-tag>
-                <el-tag v-else-if="getAlertTranslation(a).parsed?.is_resume" type="success" size="small" effect="plain">已恢复</el-tag>
-              </div>
-              <div class="alert-summary-text">{{ getAlertTranslation(a).summary }}</div>
-            </div>
-            <el-icon class="alert-arrow"><ArrowRight /></el-icon>
-          </div>
-        </div>
-        
-        <el-empty v-else description="暂无告警，请刷新以同步" />
+        <FoldedAlertList
+          :alerts="recentAlerts"
+          :show-array-id="false"
+          empty-text="暂无告警，请刷新以同步"
+          @select="openAlertDrawer"
+        />
       </el-card>
 
       <!-- 告警详情抽屉 -->
@@ -297,6 +278,7 @@ import PortTrafficChart from '../components/PortTrafficChart.vue'
 import EventTimeline from '../components/EventTimeline.vue'
 import SnapshotDiff from '../components/SnapshotDiff.vue'
 import AlertDetailDrawer from '@/components/AlertDetailDrawer.vue'
+import FoldedAlertList from '@/components/FoldedAlertList.vue'
 import { translateAlert, getObserverName as getObserverLabel, getObserverGroup, OBSERVER_GROUPS, LEVEL_LABELS, LEVEL_TAG_TYPES } from '@/utils/alertTranslator'
 
 const route = useRoute()
@@ -710,74 +692,7 @@ onUnmounted(() => {
   font-family: monospace;
 }
 
-/* Alert timeline */
-.alert-timeline {
-  max-height: 500px;
-  overflow-y: auto;
-}
-
-.alert-timeline-item {
-  display: flex;
-  gap: 12px;
-  padding: 10px 0;
-  border-bottom: 1px solid #f0f0f0;
-}
-
-.alert-timeline-item:last-child {
-  border-bottom: none;
-}
-
-.alert-time {
-  flex-shrink: 0;
-  width: 140px;
-  font-size: 12px;
-  color: #909399;
-  padding-top: 2px;
-}
-
-.alert-body {
-  flex: 1;
-  min-width: 0;
-}
-
-.alert-header-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 6px;
-}
-
-.alert-observer {
-  font-size: 13px;
-  font-weight: 500;
-  color: #606266;
-}
-
-.alert-summary-text {
-  font-size: 13px;
-  color: #303133;
-  line-height: 1.6;
-  word-break: break-word;
-}
-
-.clickable-alert {
-  cursor: pointer;
-  transition: background 0.15s;
-  align-items: center;
-}
-
-.clickable-alert:hover {
-  background: #f5f7fa;
-}
-
-.alert-arrow {
-  color: var(--el-text-color-placeholder);
-  flex-shrink: 0;
-}
-
-.alert-error { }
-.alert-warning { }
-.alert-critical .alert-body { color: #f56c6c; }
+/* Alert list is now in FoldedAlertList.vue component */
 
 /* Performance & Traffic card */
 .perf-card,

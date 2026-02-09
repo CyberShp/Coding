@@ -128,7 +128,7 @@
         </el-card>
       </el-col>
 
-      <!-- Recent Alerts Stream -->
+      <!-- Recent Alerts Stream (with folding) -->
       <el-col :span="8">
         <el-card class="content-card alerts-card">
           <template #header>
@@ -140,27 +140,12 @@
             </div>
           </template>
           <div class="alerts-list">
-            <div
-              v-for="a in alertStore.recentAlerts"
-              :key="a.id"
-              class="alert-item clickable"
-              :class="`alert-${a.level}`"
-              @click="openAlertDrawer(a)"
-            >
-              <div class="alert-level">
-                <el-tag :type="getLevelType(a.level)" size="small">
-                  {{ getLevelText(a.level) }}
-                </el-tag>
-                <span class="alert-observer-tag">{{ getObserverLabel(a.observer_name) }}</span>
-              </div>
-              <div class="alert-content">
-                <div class="alert-message">{{ getAlertSummary(a) }}</div>
-                <div class="alert-meta">
-                  {{ formatTime(a.timestamp) }}
-                </div>
-              </div>
-            </div>
-            <el-empty v-if="alertStore.recentAlerts.length === 0" description="暂无告警" />
+            <FoldedAlertList
+              :alerts="alertStore.recentAlerts"
+              :show-array-id="true"
+              :compact="true"
+              @select="openAlertDrawer"
+            />
           </div>
         </el-card>
       </el-col>
@@ -183,6 +168,7 @@ import { useArrayStore } from '../stores/arrays'
 import { useAlertStore } from '../stores/alerts'
 import api from '../api'
 import AlertDetailDrawer from '@/components/AlertDetailDrawer.vue'
+import FoldedAlertList from '@/components/FoldedAlertList.vue'
 import { translateAlert, getObserverName, LEVEL_LABELS, LEVEL_TAG_TYPES } from '@/utils/alertTranslator'
 
 use([CanvasRenderer, LineChart, GridComponent, TooltipComponent, LegendComponent])
@@ -479,52 +465,7 @@ onMounted(loadData)
   overflow-y: auto;
 }
 
-.alert-item {
-  padding: 12px;
-  border-left: 3px solid;
-  margin-bottom: 8px;
-  background: #f5f7fa;
-  border-radius: 0 4px 4px 0;
-}
-
-.alert-item.alert-info { border-color: #909399; }
-.alert-item.alert-warning { border-color: #e6a23c; }
-.alert-item.alert-error { border-color: #f56c6c; }
-.alert-item.alert-critical { border-color: #f56c6c; }
-
-.alert-level {
-  margin-bottom: 4px;
-}
-
-.alert-item.clickable {
-  cursor: pointer;
-  transition: background 0.15s;
-}
-
-.alert-item.clickable:hover {
-  background: #eef1f6;
-}
-
-.alert-observer-tag {
-  font-size: 11px;
-  color: var(--el-color-primary);
-  background: var(--el-color-primary-light-9);
-  padding: 1px 6px;
-  border-radius: 3px;
-  margin-left: 6px;
-}
-
-.alert-message {
-  font-size: 13px;
-  color: #303133;
-  word-break: break-all;
-}
-
-.alert-meta {
-  font-size: 12px;
-  color: #909399;
-  margin-top: 4px;
-}
+/* Alert items are now rendered by FoldedAlertList component */
 
 .ws-badge :deep(.el-badge__content) {
   font-size: 10px;

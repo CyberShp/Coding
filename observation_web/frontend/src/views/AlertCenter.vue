@@ -68,51 +68,12 @@
       </el-row>
 
       <!-- Alert Table (flat mode with folding) -->
-      <div v-if="!aggregateMode" v-loading="loading" class="folded-alerts">
-        <template v-for="(group, gIdx) in foldedAlerts" :key="gIdx">
-          <!-- 单条告警（无需折叠） -->
-          <div v-if="group.count === 1" class="fold-item" @click="openDrawer(group.items[0])">
-            <div class="fold-row">
-              <span class="fold-time">{{ formatDateTime(group.items[0].timestamp) }}</span>
-              <el-tag :type="getLevelType(group.items[0].level)" size="small">{{ getLevelText(group.items[0].level) }}</el-tag>
-              <span class="fold-array">{{ group.items[0].array_id }}</span>
-              <span class="fold-obs">{{ getObserverLabel(group.items[0].observer_name) }}</span>
-              <span class="fold-msg">{{ getTranslatedSummary(group.items[0]) }}</span>
-              <el-icon class="row-arrow"><ArrowRight /></el-icon>
-            </div>
-          </div>
-          <!-- 折叠的重复告警 -->
-          <div v-else class="fold-item fold-group" :class="{ expanded: group.expanded }">
-            <div class="fold-row fold-header" @click="group.expanded = !group.expanded">
-              <span class="fold-time">{{ formatDateTime(group.latestTime) }}</span>
-              <el-tag :type="getLevelType(group.worstLevel)" size="small">{{ getLevelText(group.worstLevel) }}</el-tag>
-              <span class="fold-array">{{ group.arrayId }}</span>
-              <span class="fold-obs">{{ getObserverLabel(group.observer) }}</span>
-              <span class="fold-msg">{{ group.summaryMsg }}</span>
-              <el-tag type="warning" size="small" effect="plain" round>
-                × {{ group.count }}
-              </el-tag>
-              <el-icon class="fold-arrow" :class="{ rotated: group.expanded }"><ArrowRight /></el-icon>
-            </div>
-            <!-- 展开的子项 -->
-            <transition name="fold-expand">
-              <div v-show="group.expanded" class="fold-children">
-                <div
-                  v-for="(item, iIdx) in group.items"
-                  :key="iIdx"
-                  class="fold-child"
-                  @click.stop="openDrawer(item)"
-                >
-                  <span class="fold-time">{{ formatDateTime(item.timestamp) }}</span>
-                  <el-tag :type="getLevelType(item.level)" size="small">{{ getLevelText(item.level) }}</el-tag>
-                  <span class="fold-msg">{{ getTranslatedSummary(item) }}</span>
-                  <el-icon class="row-arrow"><ArrowRight /></el-icon>
-                </div>
-              </div>
-            </transition>
-          </div>
-        </template>
-        <el-empty v-if="!loading && foldedAlerts.length === 0" description="暂无告警" />
+      <div v-if="!aggregateMode" v-loading="loading">
+        <FoldedAlertList
+          :alerts="alerts"
+          :show-array-id="true"
+          @select="openDrawer"
+        />
       </div>
 
       <!-- Aggregated view -->
@@ -171,6 +132,7 @@ import { Search, Download, ArrowRight } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import api from '../api'
 import AlertDetailDrawer from '@/components/AlertDetailDrawer.vue'
+import FoldedAlertList from '@/components/FoldedAlertList.vue'
 import { translateAlert, getObserverName, OBSERVER_NAMES, LEVEL_LABELS, LEVEL_TAG_TYPES } from '@/utils/alertTranslator'
 
 const route = useRoute()
@@ -181,55 +143,6 @@ const stats = ref(null)
 const drawerVisible = ref(false)
 const selectedAlert = ref(null)
 const aggregateMode = ref(false)
-
-// ───── 告警折叠逻辑 ─────
-const LEVEL_RANK = { critical: 4, error: 3, warning: 2, info: 1 }
-
-/**
- * 将告警按 observer_name + array_id + 消息摘要 分组折叠。
- * 去除消息中的数字/时间戳以匹配"几乎一样"的告警。
- */
-const foldedAlerts = computed(() => {
-  const groups = []
-  const map = new Map()
-
-  for (const alert of alerts.value) {
-    // 生成折叠 key：observer + array + 消息骨架（去数字/时间）
-    const skeleton = (alert.message || '')
-      .replace(/\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}[:\d.]*/g, '#TIME#')  // 时间戳
-      .replace(/\d+/g, '#N#')  // 数字
-      .replace(/\s+/g, ' ')
-      .trim()
-      .substring(0, 80)  // 前80字符做 key
-
-    const key = `${alert.observer_name}|${alert.array_id}|${skeleton}`
-
-    if (map.has(key)) {
-      const g = map.get(key)
-      g.items.push(alert)
-      g.count++
-      // 更新最新时间和最高级别
-      if (alert.timestamp > g.latestTime) g.latestTime = alert.timestamp
-      if ((LEVEL_RANK[alert.level] || 0) > (LEVEL_RANK[g.worstLevel] || 0)) g.worstLevel = alert.level
-    } else {
-      const group = {
-        key,
-        observer: alert.observer_name,
-        arrayId: alert.array_id,
-        summaryMsg: getTranslatedSummary(alert),
-        latestTime: alert.timestamp,
-        worstLevel: alert.level,
-        count: 1,
-        expanded: false,
-        items: [alert],
-      }
-      map.set(key, group)
-      groups.push(group)
-    }
-  }
-
-  return groups
-})
 
 const filters = reactive({
   level: '',
@@ -467,141 +380,5 @@ onMounted(() => {
   white-space: nowrap;
 }
 
-/* ───── Folded alerts view ───── */
-.folded-alerts {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  margin-top: 8px;
-}
-
-.fold-item {
-  padding: 10px 14px;
-  border: 1px solid var(--el-border-color-lighter);
-  border-radius: 6px;
-  cursor: pointer;
-  transition: background 0.15s;
-}
-
-.fold-item:hover {
-  background: var(--el-fill-color-light);
-}
-
-/* Grouped (folded) items get a highlight left border */
-.fold-item.fold-group {
-  border-left: 3px solid var(--el-color-warning);
-}
-
-.fold-item.fold-group.expanded {
-  border-left-color: var(--el-color-primary);
-  background: var(--el-color-primary-light-9);
-}
-
-/* Row layout */
-.fold-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-height: 24px;
-}
-
-.fold-time {
-  flex-shrink: 0;
-  width: 155px;
-  font-size: 13px;
-  color: var(--el-text-color-secondary);
-}
-
-.fold-array {
-  flex-shrink: 0;
-  width: 95px;
-  font-size: 13px;
-  color: var(--el-text-color-regular);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.fold-obs {
-  flex-shrink: 0;
-  width: 95px;
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--el-color-primary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.fold-msg {
-  flex: 1;
-  font-size: 13px;
-  color: var(--el-text-color-regular);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  line-height: 1.5;
-}
-
-/* Expand/collapse arrow */
-.fold-arrow {
-  flex-shrink: 0;
-  font-size: 14px;
-  color: var(--el-text-color-placeholder);
-  transition: transform 0.2s;
-}
-
-.fold-arrow.rotated {
-  transform: rotate(90deg);
-}
-
-/* Expanded children area */
-.fold-children {
-  margin-top: 8px;
-  padding-left: 16px;
-  border-left: 2px solid var(--el-border-color-light);
-}
-
-.fold-child {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 7px 10px;
-  border-radius: 4px;
-  cursor: pointer;
-  transition: background 0.15s;
-  font-size: 13px;
-}
-
-.fold-child:hover {
-  background: var(--el-fill-color);
-}
-
-.fold-child .fold-time {
-  width: 140px;
-  font-size: 12px;
-}
-
-.fold-child .fold-msg {
-  font-size: 12px;
-}
-
-/* Expand transition */
-.fold-expand-enter-active,
-.fold-expand-leave-active {
-  transition: all 0.2s ease;
-  overflow: hidden;
-}
-
-.fold-expand-enter-from,
-.fold-expand-leave-to {
-  opacity: 0;
-  max-height: 0;
-}
-
-.fold-expand-enter-to,
-.fold-expand-leave-from {
-  opacity: 1;
-  max-height: 2000px;
-}
+/* Folded alert list is now in FoldedAlertList.vue component */
 </style>

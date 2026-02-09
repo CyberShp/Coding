@@ -23,6 +23,7 @@ from ..models.array import (
     ArrayModel, ArrayCreate, ArrayUpdate, ArrayResponse,
     ArrayStatus, ConnectionState
 )
+from ..models.lifecycle import SyncStateModel
 
 
 class BatchActionRequest(BaseModel):
@@ -36,8 +37,50 @@ router = APIRouter(prefix="/arrays", tags=["arrays"])
 # In-memory status cache
 _array_status_cache: Dict[str, ArrayStatus] = {}
 
-# Track last sync position per array (line count of alerts.log)
-_sync_positions: Dict[str, int] = {}
+
+async def _get_sync_position(db: AsyncSession, array_id: str) -> int:
+    """Get last sync position from DB (multi-instance safe)."""
+    result = await db.execute(
+        select(SyncStateModel).where(SyncStateModel.array_id == array_id)
+    )
+    row = result.scalar_one_or_none()
+    return row.last_position if row else 0
+
+
+async def _update_sync_position(
+    db: AsyncSession, array_id: str, new_position: int, expected_old: int
+) -> bool:
+    """
+    Update sync position with optimistic locking (compare-and-swap).
+    Returns True if update succeeded, False if another instance already advanced.
+    """
+    from sqlalchemy import update as sa_update, insert as sa_insert
+
+    result = await db.execute(
+        select(SyncStateModel).where(SyncStateModel.array_id == array_id)
+    )
+    row = result.scalar_one_or_none()
+
+    if row is None:
+        # First time — insert new row
+        new_row = SyncStateModel(
+            array_id=array_id,
+            last_position=new_position,
+            last_sync_at=datetime.now(),
+        )
+        db.add(new_row)
+        await db.flush()
+        return True
+
+    # Optimistic lock: only update if position matches what we read
+    if row.last_position != expected_old:
+        # Another instance already advanced the position — skip
+        return False
+
+    row.last_position = new_position
+    row.last_sync_at = datetime.now()
+    await db.flush()
+    return True
 
 
 async def _get_array_or_404(array_id: str, db: AsyncSession) -> ArrayModel:
@@ -665,7 +708,7 @@ async def refresh_array(
             }
         
         total_lines = int(total_str.strip())
-        last_pos = _sync_positions.get(array_id, 0)
+        last_pos = await _get_sync_position(db, array_id)
         
         # Reset position if full_sync or if file was truncated/rotated
         if full_sync or total_lines < last_pos:
@@ -764,8 +807,8 @@ async def refresh_array(
                                     'message': message[:100],
                                 }
         
-        # Update sync position
-        _sync_positions[array_id] = total_lines
+        # Update sync position in DB (optimistic lock — skip if another instance advanced)
+        await _update_sync_position(db, array_id, total_lines, last_pos)
         
     except Exception as e:
         sys_error("arrays", f"Refresh failed for {array_id}", {"error": str(e)})
@@ -1188,6 +1231,12 @@ def _format_bytes(size: int) -> str:
     return f"{size:.1f} TB"
 
 
+def _compute_config_hash(content: str) -> str:
+    """Compute MD5 hash of config content for optimistic locking."""
+    import hashlib
+    return hashlib.md5(content.encode('utf-8')).hexdigest()
+
+
 @router.get("/{array_id}/agent-config")
 async def get_agent_config(
     array_id: str,
@@ -1196,7 +1245,7 @@ async def get_agent_config(
     """
     Get Agent configuration from remote array.
     
-    Returns the current config.json content from the deployed Agent.
+    Returns the current config.json content and a config_hash for optimistic locking.
     """
     conn = ssh_pool.get_connection(array_id)
     if not conn or not conn.is_connected():
@@ -1217,8 +1266,11 @@ async def get_agent_config(
                 "exists": False,
                 "config": None,
                 "config_path": config_path,
+                "config_hash": None,
                 "error": "Config file not found or empty"
             }
+        
+        config_hash = _compute_config_hash(content)
         
         # Parse JSON
         try:
@@ -1227,6 +1279,7 @@ async def get_agent_config(
                 "exists": True,
                 "config": config_data,
                 "config_path": config_path,
+                "config_hash": config_hash,
                 "raw": content,
             }
         except json.JSONDecodeError as e:
@@ -1234,6 +1287,7 @@ async def get_agent_config(
                 "exists": True,
                 "config": None,
                 "config_path": config_path,
+                "config_hash": config_hash,
                 "raw": content,
                 "error": f"Invalid JSON: {str(e)}"
             }
@@ -1249,14 +1303,20 @@ async def get_agent_config(
 @router.put("/{array_id}/agent-config")
 async def update_agent_config(
     array_id: str,
-    config_data: Dict[str, Any] = Body(...),
-    restart_agent_flag: bool = Body(False, alias="restart_agent"),
+    body: Dict[str, Any] = Body(...),
     ssh_pool: SSHPool = Depends(get_ssh_pool),
 ):
     """
     Update Agent configuration on remote array.
     
     Writes the config to config.json and optionally restarts the Agent.
+    If config_hash is provided in the body, the server re-reads the remote file
+    and verifies the hash matches before writing.  A mismatch returns 409 Conflict.
+    
+    Body fields:
+    - restart_agent (bool):  whether to restart agent after save
+    - config_hash (str|null): MD5 hash from GET for optimistic locking
+    - (all other keys):       treated as the agent config JSON
     """
     conn = ssh_pool.get_connection(array_id)
     if not conn or not conn.is_connected():
@@ -1265,11 +1325,27 @@ async def update_agent_config(
             detail="Array not connected"
         )
     
+    # Extract control fields from body; the rest is config data
+    restart_agent_flag = body.pop("restart_agent", False)
+    config_hash = body.pop("config_hash", None)
+    config_data = body  # remaining keys are the agent config
+    
     config = get_config()
     agent_path = config.remote.agent_deploy_path
     config_path = f"{agent_path}/config.json"
     
     try:
+        # Optimistic lock: verify remote file hasn't changed since the client read it
+        if config_hash:
+            current_content = conn.read_file(config_path)
+            if current_content:
+                current_hash = _compute_config_hash(current_content)
+                if current_hash != config_hash:
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail="配置已被其他人修改，请刷新后重试"
+                    )
+
         # Validate JSON
         config_json = json.dumps(config_data, indent=2, ensure_ascii=False)
         
@@ -1286,14 +1362,17 @@ async def update_agent_config(
         if exit_code != 0:
             raise Exception(f"Write failed: {error}")
         
-        # Verify the write
+        # Verify the write and return new hash
         verify_content = conn.read_file(config_path)
         if not verify_content:
             raise Exception("Failed to verify config write")
         
+        new_hash = _compute_config_hash(verify_content)
+        
         result = {
             "success": True,
             "config_path": config_path,
+            "config_hash": new_hash,
             "message": "Configuration updated successfully"
         }
         
@@ -1310,7 +1389,9 @@ async def update_agent_config(
         })
         
         return result
-        
+    
+    except HTTPException:
+        raise
     except Exception as e:
         sys_error("agent-config", f"Failed to update agent config for {array_id}", {"error": str(e)})
         raise HTTPException(

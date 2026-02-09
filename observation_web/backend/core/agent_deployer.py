@@ -40,6 +40,17 @@ class AgentDeployer:
             deploy_parent = posixpath.dirname(deploy_path)
             remote_package = posixpath.join(deploy_parent, "observation_points.tar.gz")
 
+            # Step 1: Clean up old agent folder and old package before uploading
+            cleanup_commands = [
+                f"mkdir -p {deploy_parent}",
+                f"rm -f {remote_package}",
+                f"rm -rf {deploy_path}",
+            ]
+            ok, error = self._run_commands(cleanup_commands)
+            if not ok:
+                return {"ok": False, "error": f"Cleanup failed: {error}"}
+
+            # Step 2: Upload new package
             ok, error = self.conn.upload_file(local_package, remote_package)
             if not ok:
                 sys_error(
@@ -49,9 +60,8 @@ class AgentDeployer:
                 )
                 return {"ok": False, "error": f"Upload failed: {error}"}
 
+            # Step 3: Extract and configure
             commands = [
-                f"mkdir -p {deploy_parent}",
-                f"rm -rf {deploy_path}",
                 f"tar -xzf {remote_package} -C {deploy_parent}",
                 f"mkdir -p /etc/observation-points",
                 f"cp {deploy_path}/config.json /etc/observation-points/config.json",

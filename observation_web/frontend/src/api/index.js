@@ -71,7 +71,12 @@ export default {
   batchAction: (action, arrayIds, password = null) => httpLong.post(`/arrays/batch/${action}`, { array_ids: arrayIds, password }),
   // Agent Config
   getAgentConfig: (id) => http.get(`/arrays/${id}/agent-config`),
-  updateAgentConfig: (id, config, restartAgent = false) => http.put(`/arrays/${id}/agent-config`, { ...config, restart_agent: restartAgent }),
+  updateAgentConfig: (id, config, restartAgent = false, configHash = null) =>
+    httpLong.put(`/arrays/${id}/agent-config`, {
+      ...config,
+      restart_agent: restartAgent,
+      config_hash: configHash,
+    }),
   restoreAgentConfig: (id) => http.post(`/arrays/${id}/agent-config/restore`),
   // Metrics
   getArrayMetrics: (id, minutes = 60) => http.get(`/arrays/${id}/metrics`, { params: { minutes } }),

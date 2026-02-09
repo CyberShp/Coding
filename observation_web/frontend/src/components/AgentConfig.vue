@@ -72,6 +72,7 @@ const restoring = ref(false)
 const configExists = ref(false)
 const configPath = ref('')
 const configText = ref('')
+const configHash = ref(null) // MD5 hash for optimistic locking
 const error = ref('')
 const jsonError = ref('')
 const restartAfterSave = ref(false)
@@ -98,6 +99,7 @@ async function loadConfig() {
     const res = await api.getAgentConfig(props.arrayId)
     configExists.value = res.data.exists
     configPath.value = res.data.config_path
+    configHash.value = res.data.config_hash || null
     
     if (res.data.exists && res.data.config) {
       configText.value = JSON.stringify(res.data.config, null, 2)
@@ -154,9 +156,15 @@ async function saveConfig() {
     return
   }
   
+  let configObj
   try {
-    const configObj = JSON.parse(configText.value)
-    
+    configObj = JSON.parse(configText.value)
+  } catch {
+    ElMessage.error('JSON 解析失败')
+    return
+  }
+
+  try {
     await ElMessageBox.confirm(
       restartAfterSave.value 
         ? '保存配置并重启 Agent？' 
@@ -164,20 +172,40 @@ async function saveConfig() {
       '确认保存',
       { type: 'warning' }
     )
-    
-    saving.value = true
-    const res = await api.updateAgentConfig(props.arrayId, configObj, restartAfterSave.value)
+  } catch {
+    return  // User cancelled
+  }
+
+  saving.value = true
+  try {
+    const res = await api.updateAgentConfig(
+      props.arrayId, configObj, restartAfterSave.value, configHash.value
+    )
     
     if (res.data.success) {
+      // Update local hash to the new value returned by server
+      configHash.value = res.data.config_hash || null
       ElMessage.success(res.data.message || '配置已保存')
       if (res.data.agent_restarted === false && restartAfterSave.value) {
         ElMessage.warning('配置已保存，但 Agent 重启失败: ' + (res.data.restart_error || ''))
       }
     }
-    
   } catch (e) {
-    if (e !== 'cancel') {
-      ElMessage.error(e.response?.data?.detail || '保存失败')
+    if (e.response?.status === 409) {
+      // Conflict — config was modified by another instance
+      try {
+        await ElMessageBox.confirm(
+          '配置已被其他人修改，请刷新后重试。是否立即刷新？',
+          '冲突',
+          { confirmButtonText: '刷新', cancelButtonText: '取消', type: 'warning' }
+        )
+        await loadConfig()
+      } catch (_) {
+        // User cancelled refresh
+      }
+    } else {
+      const errorDetail = e.response?.data?.detail
+      ElMessage.error(typeof errorDetail === 'string' ? errorDetail : (errorDetail ? JSON.stringify(errorDetail) : '保存失败'))
     }
   } finally {
     saving.value = false

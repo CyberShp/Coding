@@ -19,7 +19,7 @@
 解析逻辑：
 1. 按 '---+' 分隔各卡件文本块
 2. 从每个块中提取卡号 (No\\d+)
-3. 对每个块逐行匹配 RunningState / HealthState / Model
+3. 对每个块逐行匹配 BoardId / RunningState / HealthState / Model
 """
 
 import logging
@@ -37,9 +37,10 @@ class CardInfoObserver(BaseObserver):
     卡件信息监控
 
     检查每张卡件的：
+    - BoardId:      解析并附带到告警详情中，用于定位具体卡件
     - RunningState: 必须是 RUNNING，否则 ERROR
     - HealthState:  必须是 NORMAL，否则 ERROR
-    - Model:        不能为空，否则 WARNING
+    - Model:        不能为空或 undefined/none/null/n/a，否则 WARNING
 
     配置项：
     - command: 查询所有卡件信息的命令（留空待用户填写）
@@ -62,6 +63,9 @@ class CardInfoObserver(BaseObserver):
         self.running_expect = config.get('running_state_expect', 'RUNNING')
         self.health_expect = config.get('health_state_expect', 'NORMAL')
 
+        # Model 异常值列表（视同为空）
+        self._model_invalid_values = {'undefined', 'none', 'null', 'n/a', ''}
+
         # 编译匹配正则
         self._re_running = re.compile(
             self.FIELD_PATTERN_TEMPLATE.format(keyword='RunningState'),
@@ -73,6 +77,10 @@ class CardInfoObserver(BaseObserver):
         )
         self._re_model = re.compile(
             self.FIELD_PATTERN_TEMPLATE.format(keyword='Model'),
+            re.IGNORECASE,
+        )
+        self._re_board_id = re.compile(
+            self.FIELD_PATTERN_TEMPLATE.format(keyword='BoardId'),
             re.IGNORECASE,
         )
 
@@ -140,21 +148,28 @@ class CardInfoObserver(BaseObserver):
                     'level': 'warning',
                 })
 
-            # 检查 Model
+            # 检查 Model（空值 或 undefined/none/null/n/a 均告警）
             model = fields.get('Model', '')
-            if not model:
+            if not model or model.lower() in self._model_invalid_values:
+                display_value = f'({model})' if model else '(空)'
                 issues.append({
                     'field': 'Model',
-                    'value': '(空)',
-                    'expect': '非空',
+                    'value': display_value,
+                    'expect': '非空且有效',
                     'level': 'warning',
                 })
 
+            # 提取 BoardId 用于定位
+            board_id = fields.get('BoardId', '')
+
             for issue in issues:
-                alerts.append({
+                alert_entry = {
                     'card': card_no,
                     **issue,
-                })
+                }
+                if board_id:
+                    alert_entry['board_id'] = board_id
+                alerts.append(alert_entry)
 
         if alerts:
             # 构建消息
@@ -163,8 +178,11 @@ class CardInfoObserver(BaseObserver):
 
             msg_parts = []
             for a in (error_alerts + warn_alerts)[:6]:
+                card_label = a['card']
+                if a.get('board_id'):
+                    card_label = f"{a['card']} (BoardId: {a['board_id']})"
                 msg_parts.append(
-                    f"卡件 {a['card']} {a['field']} 异常: {a['value']} (预期: {a['expect']})"
+                    f"卡件 {card_label} {a['field']} 异常: {a['value']} (预期: {a['expect']})"
                 )
             if len(alerts) > 6:
                 msg_parts.append(f"...共 {len(alerts)} 项异常")
@@ -193,7 +211,7 @@ class CardInfoObserver(BaseObserver):
         解析命令回显，按卡件分组并提取关键字段。
 
         Returns:
-            {card_no: {RunningState: ..., HealthState: ..., Model: ...}}
+            {card_no: {BoardId: ..., RunningState: ..., HealthState: ..., Model: ...}}
         """
         # 按分隔符切分
         blocks = self.SEPARATOR_PATTERN.split(stdout)
@@ -215,6 +233,10 @@ class CardInfoObserver(BaseObserver):
                 line = line.strip()
                 if not line:
                     continue
+
+                m = self._re_board_id.search(line)
+                if m:
+                    fields['BoardId'] = m.group(1).strip()
 
                 m = self._re_running.search(line)
                 if m:
