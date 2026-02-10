@@ -144,37 +144,44 @@ function translateAlarmType(alert) {
   const original = message || ''
   const log_path = details?.log_path || ''
 
-  const newSends = details?.new_send_alarms || []
-  const newResumes = details?.new_resume_alarms || []
+  const newEvts = details?.new_events || []         // AlarmType:0 event
+  const newSends = details?.new_send_alarms || []   // AlarmType:1 fault
+  const newResumes = details?.new_resume_alarms || [] // AlarmType:2 resume
   const activeAlarms = details?.active_alarms || []
 
   const events = []
-  for (const e of newSends) events.push(normalizeEvent(e, 'send'))
+  for (const e of newEvts) events.push(normalizeEvent(e, 'event'))
+  for (const e of newSends) events.push(normalizeEvent(e, 'fault'))
   for (const e of newResumes) events.push(normalizeEvent(e, 'resume'))
 
   let event = '', impact = '', suggestion = ''
   const parts = []
 
-  if (newSends.length > 0) {
-    const historySends = newSends.filter(e => e.alarm_type === 0 || e.is_history_report)
-    const normalSends = newSends.filter(e => e.alarm_type !== 0 && !e.is_history_report)
-
-    if (normalSends.length === 1) {
-      const e = normalSends[0]
-      parts.push(`告警上报：${e.alarm_name || '未知'} (${e.alarm_id || '?'})`)
-    } else if (normalSends.length > 1) {
-      parts.push(`新上报 ${normalSends.length} 条告警`)
-    }
-    if (historySends.length > 0) {
-      parts.push(`${historySends.length} 条历史告警上报`)
+  if (newEvts.length > 0) {
+    if (newEvts.length === 1) {
+      const e = newEvts[0]
+      parts.push(`事件上报：AlarmId:${e.alarm_id || '?'} objType:${e.obj_type || e.alarm_name || '?'}`)
+    } else {
+      parts.push(`${newEvts.length} 条事件上报`)
     }
   }
 
-  if (newResumes.length === 1) {
-    const e = newResumes[0]
-    parts.push(`告警恢复：${e.alarm_name || '未知'} (${e.alarm_id || '?'}) 已消除`)
-  } else if (newResumes.length > 1) {
-    parts.push(`${newResumes.length} 条告警已恢复`)
+  if (newSends.length > 0) {
+    if (newSends.length === 1) {
+      const e = newSends[0]
+      parts.push(`故障告警：AlarmId:${e.alarm_id || '?'} objType:${e.obj_type || e.alarm_name || '?'}`)
+    } else {
+      parts.push(`${newSends.length} 条故障告警`)
+    }
+  }
+
+  if (newResumes.length > 0) {
+    if (newResumes.length === 1) {
+      const e = newResumes[0]
+      parts.push(`告警恢复：AlarmId:${e.alarm_id || '?'} objType:${e.obj_type || e.alarm_name || '?'}`)
+    } else {
+      parts.push(`${newResumes.length} 条告警恢复`)
+    }
   }
 
   event = parts.join(' | ')
@@ -186,14 +193,17 @@ function translateAlarmType(alert) {
   impact = activeAlarms.length > 0 ? `${activeAlarms.length} 个活跃告警未恢复，可能影响业务` : '请关注告警内容'
   suggestion = '检查阵列告警日志，确认是否需要人工介入处理'
 
-  const firstEvent = newSends[0] || newResumes[0] || null
+  const firstEvent = newSends[0] || newResumes[0] || newEvts[0] || null
   const parsed = firstEvent ? {
     alarm_type: firstEvent.alarm_type,
-    alarm_name: firstEvent.alarm_name,
+    action: firstEvent.action || (firstEvent.alarm_type === 0 ? 'event' : firstEvent.alarm_type === 1 ? 'fault' : 'resume'),
     alarm_id: firstEvent.alarm_id,
+    obj_type: firstEvent.obj_type || firstEvent.alarm_name,
+    alarm_name: firstEvent.alarm_name || firstEvent.obj_type,
     is_send: firstEvent.is_send ?? false,
     is_resume: firstEvent.is_resume ?? false,
-    is_history: firstEvent.alarm_type === 0 || firstEvent.is_history_report === true,
+    is_event: firstEvent.is_event ?? firstEvent.alarm_type === 0,
+    is_history: firstEvent.alarm_type === 0 || firstEvent.is_event_report === true,
     recovered: firstEvent.recovered ?? false,
   } : parseAlarmFromText(original)
 
@@ -203,12 +213,15 @@ function translateAlarmType(alert) {
 function normalizeEvent(e, action) {
   return {
     alarm_type: e.alarm_type,
-    alarm_name: e.alarm_name || '未知',
+    action: e.action || action,
+    alarm_name: e.alarm_name || e.obj_type || '未知',
     alarm_id: e.alarm_id || '?',
+    obj_type: e.obj_type || '未知',
     timestamp: e.timestamp || '',
-    is_send: action === 'send',
-    is_resume: action === 'resume',
-    is_history: e.alarm_type === 0 || e.is_history_report === true,
+    is_send: action === 'fault' || e.alarm_type === 1,
+    is_resume: action === 'resume' || e.alarm_type === 2,
+    is_event: action === 'event' || e.alarm_type === 0,
+    is_history: e.alarm_type === 0 || e.is_event_report === true,
     recovered: e.recovered ?? (action === 'resume'),
     line: e.line || '',
   }
@@ -216,6 +229,23 @@ function normalizeEvent(e, action) {
 
 function parseAlarmFromText(text) {
   if (!text) return null
+  // New format: AlarmType:X action
+  const newTypeMatch = text.match(/AlarmType:(\d+)\s+(event|fault|resume)/i)
+  if (newTypeMatch) {
+    const alarmType = parseInt(newTypeMatch[1])
+    const action = newTypeMatch[2].toLowerCase()
+    const idMatch = text.match(/AlarmId:(\S+)/i)
+    const objMatch = text.match(/objType:(\S+)/i)
+    return {
+      alarm_type: alarmType, action,
+      alarm_name: objMatch ? objMatch[1].trim() : '未知',
+      alarm_id: idMatch ? idMatch[1].trim() : null,
+      obj_type: objMatch ? objMatch[1].trim() : '未知',
+      is_send: alarmType === 1, is_resume: alarmType === 2, is_event: alarmType === 0,
+      is_history: alarmType === 0, recovered: alarmType === 2,
+    }
+  }
+  // Fallback: old format
   const typeMatch = text.match(/alarm\s*type\s*\((\d+)\)/i)
   const nameMatch = text.match(/alarm\s*name\s*\(([^)]+)\)/i)
   const idMatch = text.match(/alarm\s*id\s*\(([^)]+)\)/i)
@@ -226,27 +256,35 @@ function parseAlarmFromText(text) {
   return {
     alarm_type: alarmType, alarm_name: nameMatch ? nameMatch[1].trim() : '未知',
     alarm_id: idMatch ? idMatch[1].trim() : null,
-    is_send: isSend, is_resume: isResume, is_history: alarmType === 0, recovered: isResume,
+    is_send: isSend, is_resume: isResume, is_event: false,
+    is_history: alarmType === 0, recovered: isResume,
   }
 }
 
 function fallbackParseAlarmMessage(text) {
   if (!text) return '告警事件'
-  const sendMatch = text.match(/新上报\s*(\d+)\s*条/)
+  // New format markers
+  const eventMatch = text.match(/事件\s*(\d+)\s*条/)
+  const faultMatch = text.match(/故障\s*(\d+)\s*条/)
   const resumeMatch = text.match(/恢复\s*(\d+)\s*条/)
-  if (sendMatch || resumeMatch) {
+  if (eventMatch || faultMatch || resumeMatch) {
     const p = []
-    if (sendMatch) p.push(`新上报 ${sendMatch[1]} 条告警`)
-    if (resumeMatch) p.push(`${resumeMatch[1]} 条告警已恢复`)
+    if (eventMatch) p.push(`${eventMatch[1]} 条事件上报`)
+    if (faultMatch) p.push(`${faultMatch[1]} 条故障告警`)
+    if (resumeMatch) p.push(`${resumeMatch[1]} 条告警恢复`)
     return p.join(' | ')
   }
+  // Old format fallback
+  const sendMatch = text.match(/新上报\s*(\d+)\s*条/)
+  if (sendMatch) return `新上报 ${sendMatch[1]} 条告警`
   const parsed = parseAlarmFromText(text)
   if (parsed) {
     const name = parsed.alarm_name
     const id = parsed.alarm_id ? ` (${parsed.alarm_id})` : ''
-    if (parsed.is_history) return `[历史] ${name}${id} 历史告警上报`
+    if (parsed.is_event) return `[事件] ${name}${id}`
+    if (parsed.is_history) return `[历史] ${name}${id}`
     if (parsed.is_resume) return `告警恢复：${name}${id} 已消除`
-    if (parsed.is_send) return `告警上报：${name}${id}`
+    if (parsed.is_send) return `故障告警：${name}${id}`
   }
   return text.length > 80 ? text.substring(0, 80) + '...' : text
 }

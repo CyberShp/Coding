@@ -52,34 +52,38 @@
         <el-descriptions :column="1" border size="small">
           <el-descriptions-item label="告警类型">
             <el-tag
-              :type="translated.parsed.alarm_type === 0 ? 'info' : 'warning'"
+              :type="translated.parsed.alarm_type === 0 ? 'info' : translated.parsed.alarm_type === 2 ? 'success' : 'warning'"
               size="small"
             >
-              {{ translated.parsed.alarm_type === 0 ? '历史告警上报 (type 0)' : '事件生成 (type 1)' }}
+              {{ translated.parsed.alarm_type === 0 ? '事件上报 (event)' : translated.parsed.alarm_type === 1 ? '故障告警 (fault)' : '告警恢复 (resume)' }}
             </el-tag>
           </el-descriptions-item>
-          <el-descriptions-item label="告警名称">
-            {{ translated.parsed.alarm_name || '--' }}
+          <el-descriptions-item label="AlarmId">
+            <code>{{ translated.parsed.alarm_id || '--' }}</code>
           </el-descriptions-item>
-          <el-descriptions-item label="告警 ID">
-            {{ translated.parsed.alarm_id || '--' }}
+          <el-descriptions-item label="objType">
+            <code>{{ translated.parsed.obj_type || translated.parsed.alarm_name || '--' }}</code>
           </el-descriptions-item>
           <el-descriptions-item label="动作">
             <el-tag
-              v-if="translated.parsed.is_send"
+              v-if="translated.parsed.is_send || translated.parsed.alarm_type === 1"
               type="danger" size="small" effect="plain"
-            >告警上报</el-tag>
+            >故障告警</el-tag>
             <el-tag
-              v-else-if="translated.parsed.is_resume"
+              v-else-if="translated.parsed.is_resume || translated.parsed.alarm_type === 2"
               type="success" size="small" effect="plain"
             >告警恢复</el-tag>
+            <el-tag
+              v-else-if="translated.parsed.is_event || translated.parsed.alarm_type === 0"
+              size="small" type="info" effect="plain"
+            >事件上报</el-tag>
             <el-tag v-else size="small" type="info">通知</el-tag>
           </el-descriptions-item>
           <el-descriptions-item label="恢复状态">
-            <template v-if="translated.parsed.is_history">
-              <el-tag type="info" size="small">历史上报 - 不走恢复</el-tag>
+            <template v-if="translated.parsed.is_event || translated.parsed.alarm_type === 0">
+              <el-tag type="info" size="small">事件上报 - 无恢复策略</el-tag>
             </template>
-            <template v-else-if="translated.parsed.recovered">
+            <template v-else-if="translated.parsed.recovered || translated.parsed.alarm_type === 2">
               <el-tag type="success" size="small">已恢复</el-tag>
             </template>
             <template v-else>

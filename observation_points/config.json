@@ -56,7 +56,7 @@
     "alarm_type": {
       "enabled": true,
       "interval": 30,
-      "log_path": "/OSM/log/cur_debug/messages",
+      "log_path": "/OSM/log/cur_debug/system_alarm.txt",
       "max_lines_per_check": 1000,
       "recent_count": 5
     },

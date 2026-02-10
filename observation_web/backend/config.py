@@ -36,7 +36,7 @@ class ServerConfig:
 @dataclass
 class RemoteConfig:
     """Remote agent configuration"""
-    agent_deploy_path: str = "/home/permitdir/observation_points"
+    agent_deploy_path: str = "/OSM/coffer_data/observation_points"
     agent_log_path: str = "/var/log/observation-points/alerts.log"
     python_cmd: str = "python3"
 

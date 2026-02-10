@@ -5,7 +5,7 @@
  * and message skeleton after stripping numbers/timestamps) into collapsible
  * groups, shared across AlertCenter, ArrayDetail and Dashboard.
  */
-import { computed } from 'vue'
+import { computed, reactive } from 'vue'
 import { translateAlert } from '@/utils/alertTranslator'
 
 export const LEVEL_RANK = { critical: 4, error: 3, warning: 2, info: 1 }
@@ -17,9 +17,22 @@ function getTranslatedSummary(row) {
 
 /**
  * @param {import('vue').Ref<Array>} alerts  – reactive alert array
- * @returns {{ foldedAlerts: import('vue').ComputedRef<Array> }}
+ * @returns {{ foldedAlerts: import('vue').ComputedRef<Array>, toggleExpand: (key: string) => void }}
  */
 export function useAlertFolding(alerts) {
+  // Expanded state lives OUTSIDE computed in a reactive Map so that:
+  // 1) Mutations trigger Vue re-renders (unlike plain objects in computed)
+  // 2) State survives computed re-evaluations (e.g. after silent refresh)
+  const expandedKeys = reactive(new Set())
+
+  function toggleExpand(key) {
+    if (expandedKeys.has(key)) {
+      expandedKeys.delete(key)
+    } else {
+      expandedKeys.add(key)
+    }
+  }
+
   const foldedAlerts = computed(() => {
     const groups = []
     const map = new Map()
@@ -51,7 +64,6 @@ export function useAlertFolding(alerts) {
           latestTime: alert.timestamp,
           worstLevel: alert.level,
           count: 1,
-          expanded: false,
           items: [alert],
         }
         map.set(key, group)
@@ -59,8 +71,14 @@ export function useAlertFolding(alerts) {
       }
     }
 
+    // Attach reactive expanded flag derived from the Set
+    // (reading expandedKeys.has() inside computed creates a reactive dependency)
+    for (const g of groups) {
+      g.expanded = expandedKeys.has(g.key)
+    }
+
     return groups
   })
 
-  return { foldedAlerts }
+  return { foldedAlerts, toggleExpand }
 }

@@ -14,7 +14,7 @@
       </div>
       <!-- Folded repeated alerts -->
       <div v-else class="fold-item fold-group" :class="{ expanded: group.expanded }">
-        <div class="fold-row fold-header" @click="group.expanded = !group.expanded">
+        <div class="fold-row fold-header" @click="handleToggle(group)">
           <span class="fold-time">{{ formatDateTime(group.latestTime) }}</span>
           <el-tag :type="getLevelType(group.worstLevel)" size="small">{{ getLevelText(group.worstLevel) }}</el-tag>
           <span v-if="showArrayId" class="fold-array">{{ group.arrayId }}</span>
@@ -32,7 +32,7 @@
               v-for="(item, iIdx) in group.items"
               :key="iIdx"
               class="fold-child"
-              @click.stop="$emit('select', item)"
+              @click.stop="handleChildClick(item)"
             >
               <span class="fold-time">{{ formatDateTime(item.timestamp) }}</span>
               <el-tag :type="getLevelType(item.level)" size="small">{{ getLevelText(item.level) }}</el-tag>
@@ -64,9 +64,17 @@ const props = defineProps({
   emptyText: { type: String, default: '暂无告警' },
 })
 
-defineEmits(['select'])
+const emit = defineEmits(['select'])
 
-const { foldedAlerts } = useAlertFolding(toRef(props, 'alerts'))
+const { foldedAlerts, toggleExpand } = useAlertFolding(toRef(props, 'alerts'))
+
+function handleToggle(group) {
+  toggleExpand(group.key)
+}
+
+function handleChildClick(item) {
+  emit('select', item)
+}
 
 function getLevelType(level) {
   return LEVEL_TAG_TYPES[level] || 'info'

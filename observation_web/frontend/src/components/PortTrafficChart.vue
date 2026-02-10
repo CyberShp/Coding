@@ -26,6 +26,27 @@
         <el-icon><Refresh /></el-icon>
         同步数据
       </el-button>
+      <div class="auto-refresh-toggle">
+        <el-switch v-model="autoRefresh" size="small" />
+        <span class="auto-label">自动刷新</span>
+        <el-tag v-if="autoRefresh" type="success" size="small" effect="plain">30s</el-tag>
+      </div>
+    </div>
+
+    <!-- Real-time bandwidth summary bar -->
+    <div v-if="selectedPort && latestBandwidth" class="bandwidth-bar">
+      <div class="bw-item">
+        <span class="bw-label">TX 发送</span>
+        <span class="bw-value tx">{{ formatBandwidth(latestBandwidth.tx) }}</span>
+      </div>
+      <div class="bw-item">
+        <span class="bw-label">RX 接收</span>
+        <span class="bw-value rx">{{ formatBandwidth(latestBandwidth.rx) }}</span>
+      </div>
+      <div class="bw-item">
+        <span class="bw-label">最后更新</span>
+        <span class="bw-value time">{{ latestBandwidth.time || '--' }}</span>
+      </div>
     </div>
 
     <div v-if="!selectedPort" class="no-port-hint">
@@ -45,7 +66,7 @@
 </template>
 
 <script setup>
-import { ref, watch, onMounted, onUnmounted, nextTick } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { Refresh } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import api from '../api'
@@ -63,8 +84,21 @@ const loading = ref(false)
 const loadingPorts = ref(false)
 const syncing = ref(false)
 const chartContainer = ref(null)
+const autoRefresh = ref(true)
 
 let chartInstance = null
+let refreshTimer = null
+
+// Latest bandwidth values for summary bar
+const latestBandwidth = computed(() => {
+  if (chartData.value.length === 0) return null
+  const last = chartData.value[chartData.value.length - 1]
+  return {
+    tx: last.tx_rate_bps || 0,
+    rx: last.rx_rate_bps || 0,
+    time: formatTime(last.ts),
+  }
+})
 
 // Bandwidth auto-unit formatter
 function formatBandwidth(bps) {
@@ -253,12 +287,41 @@ function handleResize() {
   chartInstance?.resize()
 }
 
+function startAutoRefresh() {
+  stopAutoRefresh()
+  if (autoRefresh.value && selectedPort.value) {
+    refreshTimer = setInterval(autoSyncAndRefresh, 30000)
+  }
+}
+
+function stopAutoRefresh() {
+  if (refreshTimer) {
+    clearInterval(refreshTimer)
+    refreshTimer = null
+  }
+}
+
+async function autoSyncAndRefresh() {
+  if (document.hidden || syncing.value || loading.value || !selectedPort.value) return
+  try {
+    await api.syncTraffic(props.arrayId)
+    await fetchTrafficData()
+  } catch {
+    // Silent — don't disturb the user during auto-refresh
+  }
+}
+
+watch(autoRefresh, startAutoRefresh)
+watch(selectedPort, startAutoRefresh)
+
 onMounted(() => {
   fetchPorts()
   window.addEventListener('resize', handleResize)
+  startAutoRefresh()
 })
 
 onUnmounted(() => {
+  stopAutoRefresh()
   window.removeEventListener('resize', handleResize)
   chartInstance?.dispose()
   chartInstance = null
@@ -288,5 +351,59 @@ onUnmounted(() => {
 .chart-empty {
   padding: 40px 0;
   text-align: center;
+}
+
+.auto-refresh-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.auto-label {
+  font-size: 13px;
+  color: var(--el-text-color-secondary);
+}
+
+/* Bandwidth summary bar */
+.bandwidth-bar {
+  display: flex;
+  gap: 24px;
+  padding: 10px 16px;
+  background: var(--el-fill-color-light);
+  border-radius: 8px;
+  margin-bottom: 12px;
+}
+
+.bw-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.bw-label {
+  font-size: 11px;
+  color: var(--el-text-color-secondary);
+  font-weight: 500;
+}
+
+.bw-value {
+  font-size: 16px;
+  font-weight: 700;
+  font-family: 'Menlo', 'Consolas', monospace;
+}
+
+.bw-value.tx {
+  color: #409eff;
+}
+
+.bw-value.rx {
+  color: #67c23a;
+}
+
+.bw-value.time {
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--el-text-color-regular);
 }
 </style>
