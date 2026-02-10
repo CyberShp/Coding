@@ -1,8 +1,8 @@
 # 存储阵列观察点监控系统 — 用户手册
 
-> **版本**：2.1.0  
+> **版本**：3.1.0  
 > **适用人群**：存储测试工程师、自动化测试平台维护人员  
-> **最后更新**：2026-02-05
+> **最后更新**：2026-02-10
 
 ---
 
@@ -25,6 +25,8 @@
    - 4.11 [数据管理与归档](#411-数据管理与归档)
    - 4.12 [系统告警](#412-系统告警)
    - 4.13 [关键事件通知](#413-关键事件通知)
+   - 4.14 [活跃告警与异常面板](#414-活跃告警与异常面板)
+   - 4.15 [告警确认消除机制](#415-告警确认消除机制)
 5. [观察点（Observer）完整列表](#5-观察点observer完整列表)
    - 5.1 [端口级观察点](#51-端口级观察点)
    - 5.2 [卡件级观察点](#52-卡件级观察点)
@@ -33,6 +35,7 @@
    - 6.1 [告警级别](#61-告警级别)
    - 6.2 [告警三段式可读性](#62-告警三段式可读性)
    - 6.3 [告警聚合与风暴抑制](#63-告警聚合与风暴抑制)
+   - 6.4 [告警智能折叠](#64-告警智能折叠)
 7. [配置参考](#7-配置参考)
    - 7.1 [Web 端配置](#71-web-端配置)
    - 7.2 [Agent 端配置](#72-agent-端配置)
@@ -40,6 +43,8 @@
 9. [常见场景操作指南](#9-常见场景操作指南)
 10. [故障排查](#10-故障排查)
 11. [术语表](#11-术语表)
+12. [开发者扩展指南：如何添加一个新的观察点](#十二开发者扩展指南如何添加一个新的观察点)
+13. [开发者教程：修改监测命令/回显/预期结果/Web 显示](#十三开发者教程修改监测命令回显预期结果web-显示)
 
 ---
 
@@ -137,13 +142,13 @@ Agent 可通过两种方式部署：
 3. 连接成功后，点击「部署 Agent」
 4. 部署完成后，点击「启动 Agent」
 
-> Agent 会被上传至阵列的 `/home/permitdir/observation_points` 目录
+> Agent 会被上传至阵列的 `/OSM/coffer_data/observation_points` 目录
 
 #### 方式二：手动部署
 
 ```bash
 # 1. 将 observation_points 目录复制到阵列
-scp -r observation_points admin@阵列IP:/home/permitdir/
+scp -r observation_points admin@阵列IP:/OSM/coffer_data/
 
 # 2. 登录阵列
 ssh admin@阵列IP
@@ -152,10 +157,10 @@ ssh admin@阵列IP
 mkdir -p /var/log/observation-points
 
 # 4. 编辑配置（按需修改 command 字段）
-vi /home/permitdir/observation_points/config.json
+vi /OSM/coffer_data/observation_points/config.json
 
 # 5. 启动 Agent
-cd /home/permitdir
+cd /OSM/coffer_data
 python3 -m observation_points -c observation_points/config.json &
 ```
 
@@ -230,9 +235,14 @@ python -m uvicorn backend.main:app --host 0.0.0.0 --port 9999
   - 在线阵列 → 点击跳转到阵列管理
   - 24 小时告警数 → 点击跳转到告警中心
   - 错误告警数 → 点击跳转到告警中心，并自动筛选错误级别
-- **阵列健康矩阵**：彩色方块显示各阵列状态（绿=正常，黄=警告，红=错误，灰=离线）
+- **阵列健康矩阵**：彩色方块显示各阵列状态
+  - 绿色 = 健康（无活跃问题）
+  - 黄色 = 有 WARNING 级别活跃问题
+  - 红色 = 有 ERROR/CRITICAL 级别活跃问题
+  - 灰色 = 离线/未连接
+  - 每个方块显示"X 个活跃问题"或"健康"标签
 - **24 小时告警趋势**：折线图展示告警数量随时间的变化
-- **最近告警列表**：显示最新告警，点击可查看详情
+- **实时告警流**：显示最新告警（含来源阵列名、确认按钮），支持智能折叠，点击可查看详情
 - **活跃测试任务横幅**：如果有正在进行的测试任务，在统计卡片上方显示任务名称和已运行时间
 
 ### 4.2 阵列管理
@@ -246,17 +256,21 @@ python -m uvicorn backend.main:app --host 0.0.0.0 --port 9999
 - **批量操作**：支持批量连接、断开、刷新、部署 Agent、启动/停止 Agent
 - **阵列详情页**：
   - 基本信息（连接状态、Agent 状态）
-  - 观察点状态（按端口级/卡件级/系统级分组展示）
+  - **活跃告警与异常面板**（仅显示当前未解决的问题，支持确认消除）
+  - 最近告警（智能折叠、确认按钮、详情抽屉）
   - 性能监控（CPU/内存实时曲线）
-  - 端口流量监控（TX/RX 带宽曲线）
+  - 端口流量监控（TX/RX 带宽曲线，实时自动刷新）
   - 事件时间线（跨观察点时间轴视图）
   - 状态快照与对比
   - Agent 控制面板（部署/启动/停止/重启/配置修改）
 
 **连接保持机制**：
 - SSH keepalive 间隔：30 秒
+- **SSH 心跳探活**：每次操作前发送 `send_ignore()` 轻量包检测连接真实可用性，避免假活导致的操作卡死
 - 空闲连接自动清理：10 分钟无操作
+- 自动重连：连接断开后最多尝试 3 次重连
 - Agent 健康检查：每 5 分钟检测 Agent 是否仍在运行
+- **刷新超时保护**：所有 SSH 操作均有 asyncio 层面的超时兜底，防止网络异常导致页面无限转圈
 
 ### 4.3 告警中心
 
@@ -270,9 +284,13 @@ python -m uvicorn backend.main:app --host 0.0.0.0 --port 9999
   - 时间窗口聚合：同一阵列同一观察点在 10 秒内触发的告警合并
   - 根因关联：link_down + FEC 变化 + 速率变化 自动聚合为「端口链路事件」
   - 风暴检测：60 秒内超过 20 条告警触发「告警风暴」摘要
+- **告警来源阵列**：每条告警显示来自哪个阵列，方便跨阵列定位
+- **告警确认**：每条告警可点击"确认"标记为非问题，已确认的显示绿色"已确认"徽章
 - **告警详情抽屉**：点击任意告警，右侧弹出详情面板，展示：
+  - 来源阵列名称
   - 三段式卡片：**事件**（发生了什么）→ **影响**（有什么后果）→ **建议**（该怎么处理）
-  - 结构化信息（alarm_type 专有）
+  - 结构化信息（alarm_type 专有：AlarmId、objType、动作）
+  - 告警确认区域（确认/撤销、确认人 IP、时间、备注）
   - 日志来源路径
   - 原始消息（可折叠）
   - 详细数据 JSON（可折叠）
@@ -433,6 +451,53 @@ python -m uvicorn backend.main:app --host 0.0.0.0 --port 9999
 - 磁盘状态异常（disk_state）
 - 所有 `critical` 级别告警
 
+### 4.14 活跃告警与异常面板
+
+**位置**：阵列详情页 → 顶部第一个面板
+
+实时展示该阵列当前**仍未解决**的问题，仅在问题存在时显示条目，问题恢复后自动消失：
+
+- **追踪的观察点类型**：
+  | 观察点 | 出现条件 | 消失条件 |
+  |--------|---------|---------|
+  | CPU 利用率 | 连续超过 90% 阈值 | 降到 90% 以下 |
+  | 内存泄漏 | 检测到内存持续增长 | 内存恢复正常 |
+  | AlarmType:1 fault | 收到故障告警 | 收到对应 AlarmType:2 resume |
+  | PCIe 带宽降级 | 检测到降速降 lane | 恢复正常速率 |
+  | 卡件状态异常 | RunningState/HealthState 异常 | 恢复正常状态 |
+
+- **与仪表盘联动**：
+  - 仪表盘中阵列健康矩阵的颜色基于活跃问题数量判断
+  - 0 个活跃问题 = 绿色（健康）
+  - 有 WARNING 级别 = 黄色
+  - 有 ERROR/CRITICAL 级别 = 红色
+  - 显示"X 个活跃问题"标签
+
+- **确认消除**：每个条目右侧有"确认消除"按钮（见 4.15）
+
+### 4.15 告警确认消除机制
+
+**全局功能**，可在以下三处使用：
+
+1. **阵列详情页** → 活跃告警面板的"确认消除"按钮 / 最近告警的"确认"按钮
+2. **仪表盘** → 实时告警流中的"确认"按钮
+3. **告警中心** → 告警列表中的"确认"按钮
+
+**功能说明**：
+
+- **确认**：将告警标记为"已确认非问题"，已确认的告警：
+  - 从活跃告警面板中消失
+  - 在告警列表中显示绿色"已确认"徽章
+  - 保留在告警中心和最近告警中可查看
+  - 仪表盘阵列健康状态相应更新
+- **批量确认**：对折叠的告警组点击"确认全组"，可一次确认组内所有未确认告警
+- **撤销确认**：在告警详情抽屉中点击"撤销确认"，告警恢复为未确认状态
+- **确认记录**：
+  - 记录确认人的 **IP 地址**（区分不同使用者）
+  - 记录确认时间
+  - 支持填写备注说明
+- **新告警不继承**：新产生的告警不会自动继承旧告警的已确认状态
+
 ---
 
 ## 5. 观察点（Observer）完整列表
@@ -463,7 +528,7 @@ python -m uvicorn backend.main:app --host 0.0.0.0 --port 9999
 
 | 观察点 | 名称 | 监控内容 | 命令来源 | 默认间隔 | 告警级别 |
 |--------|------|---------|---------|---------|---------|
-| `alarm_type` | 告警事件 | 阵列 alarm 日志中的 send/resume alarm 事件 | 内置（读取日志） | 30s | WARNING / INFO |
+| `alarm_type` | 告警事件 | `/OSM/log/cur_debug/system_alarm.txt` 中的 AlarmType:0/1/2 事件 | 内置（读取日志） | 30s | WARNING（type 1/2）/ INFO（type 0） |
 | `memory_leak` | 内存监测 | 内存使用率连续上升检测 | 内置（free -m） | 5400s（1.5h） | ERROR（持续） |
 | `cpu_usage` | CPU 监测 | CPU0 利用率超阈值检测 | 内置（/proc/stat） | 30s | ERROR（持续） |
 | `cmd_response` | 命令响应 | 命令执行耗时是否超过阈值 | 用户配置命令列表 | 60s | ERROR |
@@ -580,6 +645,24 @@ No002  HealthState: FAULT
 - 展示为醒目的黄色聚合卡片
 - 点击可展开查看所有子告警
 
+### 6.4 告警智能折叠
+
+除了聚合模式外，告警列表在所有视图（仪表盘、阵列详情、告警中心）均支持**智能折叠**：
+
+| 观察点 | 折叠依据（语义身份） | 示例 |
+|--------|---------------------|------|
+| `alarm_type` | `objType` + `action`（fault/resume） | 同一 DiskEnclosure 的多次 fault 折叠为一组 |
+| `card_info` | `card编号` + `board_id` + `字段名` | No001 的 RunningState 多次告警折叠 |
+| `error_code` | 端口名 | eth2 的多次误码增长折叠 |
+| `link_status` | 端口名 | eth3 的多次 UP/DOWN 折叠 |
+| 其他 | 消息骨架（去除数字/时间戳后的文本） | 相似消息自动合并 |
+
+折叠组展示：
+- 组头显示最新一条告警和总数
+- 点击可展开查看组内所有告警
+- "确认全组"按钮可批量确认
+- 全部已确认的组显示"全部已确认"标签
+
 ---
 
 ## 7. 配置参考
@@ -606,7 +689,7 @@ No002  HealthState: FAULT
     "echo": false                   // 是否输出 SQL 日志
   },
   "remote": {
-    "agent_deploy_path": "/home/permitdir/observation_points",  // Agent 部署路径
+    "agent_deploy_path": "/OSM/coffer_data/observation_points",  // Agent 部署路径
     "agent_log_path": "/var/log/observation-points/alerts.log",  // Agent 告警日志路径
     "python_cmd": "python3"                                      // 阵列上的 Python 命令
   }
@@ -645,7 +728,7 @@ No002  HealthState: FAULT
     "alarm_type": {
       "enabled": true,
       "interval": 30,
-      "log_path": "/OSM/log/cur_debug/messages"
+      "log_path": "/OSM/log/cur_debug/system_alarm.txt"
     },
     "cpu_usage": {
       "enabled": true,
@@ -912,6 +995,11 @@ No002  HealthState: FAULT
 | **sysfs** | Linux 虚拟文件系统（/sys），提供硬件信息读取接口 |
 | **ethtool** | Linux 网络驱动和硬件设置查询工具 |
 | **lspci** | Linux PCI 设备列表查询工具 |
+| **活跃问题** | 当前仍未解决的告警或异常状态，显示在阵列详情的活跃告警面板中 |
+| **告警确认（Ack）** | 用户手动标记某条告警为"已确认非问题"，将其从活跃面板移除 |
+| **智能折叠** | 基于语义身份（观察点+关键字段）将相似告警自动分组显示 |
+| **AlarmType** | 阵列系统告警类型。0=事件（INFO）、1=故障（WARNING）、2=恢复（WARNING） |
+| **send_ignore** | SSH 协议中的轻量心跳包，用于检测连接真实可用性 |
 
 ---
 
@@ -1170,3 +1258,331 @@ const TRANSLATORS = {
 | 观察点不执行 | config.json 中 `enabled: false` 或缺少配置 | 检查第 5 步 |
 | Web 端告警显示为原始英文 | 未添加翻译 | 完成第 6 步 |
 | 告警不上报到 Web 端 | `check()` 返回的 `has_alert` 未设为 True | 检查 check() 逻辑 |
+
+---
+
+## 十三、开发者教程：修改监测命令/回显/预期结果/Web 显示
+
+本章面向需要**修改已有观察点**行为的开发者。无论你是想改变监测命令、调整回显解析、变更预期结果判断逻辑，还是调整 Web 端的显示方式，都可以参考下面的文件清单和数据流说明。
+
+### 13.1 完整数据流
+
+一条告警从"阵列上执行命令"到"Web 界面展示"经过的完整路径：
+
+```
+┌─────────────────── 阵列端（Agent） ───────────────────┐
+│                                                        │
+│  ① Observer.check()          ← 执行命令、解析回显       │
+│       ↓                                                │
+│  ② BaseObserver.create_result()  ← 构建 ObserverResult │
+│       ↓                                                │
+│  ③ Reporter.report()         ← 写入 alerts.log (JSON)  │
+│                                                        │
+└─────────────────────────┬──────────────────────────────┘
+                          │  SSH tail alerts.log
+┌─────────────────── Web 后端 ────────────────────────────┐
+│                          ↓                              │
+│  ④ refresh_array()       ← 解析 JSON 行、存入 DB        │
+│       ↓                                                │
+│  ⑤ _derive_active_issues_from_db()  ← 推导活跃问题     │
+│       ↓                                                │
+│  ⑥ API 返回给前端                                       │
+│                                                        │
+└─────────────────────────┬──────────────────────────────┘
+                          │  HTTP / WebSocket
+┌─────────────────── Web 前端 ────────────────────────────┐
+│                          ↓                              │
+│  ⑦ alertTranslator.js   ← 翻译为中文三段式             │
+│       ↓                                                │
+│  ⑧ useAlertFolding.js   ← 智能折叠                     │
+│       ↓                                                │
+│  ⑨ FoldedAlertList.vue  ← 列表渲染                     │
+│  ⑩ AlertDetailDrawer.vue ← 详情抽屉渲染                │
+│                                                        │
+└────────────────────────────────────────────────────────┘
+```
+
+### 13.2 修改场景与涉及文件对照表
+
+根据你要修改的内容，对照下表找到需要编辑的文件：
+
+| 你要修改的内容 | 涉及文件 | 数据流阶段 |
+|--------------|---------|-----------|
+| **监测命令**（如改用另一个 CLI 命令） | `observation_points/observers/{观察点}.py` | ① |
+| **回显解析**（如命令输出格式变了） | `observation_points/observers/{观察点}.py` | ① |
+| **预期结果**（如阈值、告警条件） | `observation_points/observers/{观察点}.py` | ① |
+| **告警级别**（如 WARNING → ERROR） | `observation_points/observers/{观察点}.py` | ① |
+| **告警详情结构**（details 字典字段） | `observation_points/observers/{观察点}.py` | ① |
+| **默认配置值**（间隔、阈值等） | `observation_points/config/loader.py` + `config.json` | ① |
+| **恢复告警逻辑** | `observation_points/observers/{观察点}.py` | ① |
+| **活跃问题判断逻辑** | `observation_web/backend/api/arrays.py` — `_derive_active_issues_from_db()` | ⑤ |
+| **活跃问题显示文案** | `observation_web/backend/api/arrays.py` — `_derive_active_issues_from_db()` | ⑤ |
+| **Web 告警翻译**（中文事件/影响/建议） | `observation_web/frontend/src/utils/alertTranslator.js` | ⑦ |
+| **折叠分组逻辑** | `observation_web/frontend/src/composables/useAlertFolding.js` | ⑧ |
+| **告警列表样式/按钮** | `observation_web/frontend/src/components/FoldedAlertList.vue` | ⑨ |
+| **告警详情抽屉** | `observation_web/frontend/src/components/AlertDetailDrawer.vue` | ⑩ |
+| **仪表盘健康状态逻辑** | `observation_web/frontend/src/views/Dashboard.vue` | ⑩ |
+| **阵列详情页布局** | `observation_web/frontend/src/views/ArrayDetail.vue` | ⑩ |
+
+### 13.3 场景一：修改监测命令
+
+**需求示例**：`card_info` 观察点原来用 `show card all`，现在需要换成 `show board info -all`。
+
+**需要修改的文件**：**1 个**
+
+| 文件 | 修改点 |
+|------|--------|
+| `observation_points/config.json` | 修改 `observers.card_info.command` 字段 |
+
+如果新命令**输出格式不变**（仍然是 `No编号 字段名: 值` 的格式），那只需改配置即可。
+
+如果新命令**输出格式变了**，还需修改：
+
+| 文件 | 修改点 |
+|------|--------|
+| `observation_points/observers/card_info.py` | 修改 `_parse_cards()` 方法中的解析逻辑 |
+
+**验证方法**：
+1. 在阵列上手动执行新命令，确认输出格式
+2. 修改 config.json 中的 command 字段
+3. 重启 Agent
+4. 在 Web 端刷新，观察告警是否正常
+
+### 13.4 场景二：修改回显解析逻辑
+
+**需求示例**：`card_info` 的回显格式从 `No001 BoardId: 03024GRH` 变成了 `Slot[1] BoardId=03024GRH`。
+
+**需要修改的文件**：**1 个**
+
+| 文件 | 修改点 |
+|------|--------|
+| `observation_points/observers/card_info.py` | 修改 `_parse_cards()` 方法 |
+
+**修改要点**：
+- `_parse_cards()` 中的正则表达式或字符串分割逻辑需要匹配新的格式
+- 确保解析后的字段名不变（`BoardId`、`RunningState`、`HealthState`、`Model`），否则需要同步修改 details 结构
+- 如果 details 结构变了，需要同步修改前端翻译（见 13.6）
+
+**关键代码位置**：
+```python
+# observation_points/observers/card_info.py
+def _parse_cards(self, output: str) -> dict:
+    """解析命令输出，返回 {卡件编号: {字段: 值}} 的字典"""
+    # ← 修改此处的解析逻辑
+```
+
+### 13.5 场景三：修改预期结果 / 告警判断条件
+
+**需求示例**：CPU 阈值从 90% 改为 80%；卡件新增 `Mode` 字段需要检查。
+
+#### 改阈值（简单）
+
+**需要修改的文件**：**1 个**
+
+| 文件 | 修改点 |
+|------|--------|
+| `observation_points/config.json` | 修改对应观察点的阈值参数 |
+
+示例：CPU 阈值改为 80%：
+```json
+"cpu_usage": {
+  "threshold_percent": 80
+}
+```
+
+#### 改告警判断逻辑（复杂）
+
+**需要修改的文件**：**1-3 个**
+
+| 文件 | 修改点 | 何时需要 |
+|------|--------|---------|
+| `observation_points/observers/{观察点}.py` | `check()` 方法中的判断逻辑 | **必须** |
+| `observation_web/frontend/src/utils/alertTranslator.js` | 翻译函数 | 如果 details 字段名变了 |
+| `observation_web/backend/api/arrays.py` | `_derive_active_issues_from_db()` | 如果影响活跃问题判断 |
+
+**示例**：给 `card_info` 新增 `Mode` 字段检查：
+
+```python
+# observation_points/observers/card_info.py 的 check() 方法中
+# 在现有的 RunningState/HealthState 检查后添加：
+mode = card_data.get('Mode', '')
+if not mode or mode.lower() == 'undefined':
+    alerts_list.append({
+        'card': card_id,
+        'field': 'Mode',
+        'value': mode or 'empty',
+        'level': 'warning',
+        'board_id': card_data.get('BoardId', ''),
+    })
+```
+
+### 13.6 场景四：修改 Web 端显示
+
+**需求示例**：告警卡片翻译文案不对、想加新的展示字段、想改告警折叠方式。
+
+#### 改告警翻译（中文三段式）
+
+**需要修改的文件**：**1 个**
+
+| 文件 | 修改点 |
+|------|--------|
+| `observation_web/frontend/src/utils/alertTranslator.js` | 对应观察点的翻译函数 |
+
+**文件结构**：
+
+```javascript
+// 1. OBSERVER_NAMES — 观察点中文名称映射
+export const OBSERVER_NAMES = {
+  card_info: '卡件信息',
+  cpu_usage: 'CPU 监测',
+  alarm_type: '告警事件',
+  // ...
+}
+
+// 2. 各观察点的翻译函数
+function translateCardInfo(alert) {
+  const details = alert.details || {}
+  // 从 details 中提取数据，生成：
+  // - event: 发生了什么
+  // - impact: 有什么后果
+  // - suggestion: 该怎么处理
+  // - summary: 小卡片上的简短摘要
+  return makeResult({ event, impact, suggestion, summary, ... })
+}
+
+// 3. TRANSLATORS — 注册表
+const TRANSLATORS = {
+  card_info: translateCardInfo,
+  cpu_usage: translateCpuUsage,
+  alarm_type: translateAlarmType,
+  // ...
+}
+```
+
+**修改要点**：
+- 翻译函数的输入是 `alert` 对象，关键数据在 `alert.details` 中
+- `alert.details` 的结构由**观察点的 `check()` 方法**决定（见 13.5）
+- 如果改了观察点的 details 字段名，必须同步改翻译函数中的字段读取
+- `summary` 字段显示在小卡片上，`event/impact/suggestion` 显示在详情抽屉中
+
+#### 改折叠分组逻辑
+
+**需要修改的文件**：**1 个**
+
+| 文件 | 修改点 |
+|------|--------|
+| `observation_web/frontend/src/composables/useAlertFolding.js` | `getAlertIdentity()` 函数 |
+
+```javascript
+// useAlertFolding.js
+function getAlertIdentity(alert) {
+  const d = alert.details || {}
+  switch (alert.observer_name) {
+    case 'alarm_type':
+      // 按 objType + action 折叠
+      return `${d.obj_type || ''}|${d.action || ''}`
+    case 'card_info':
+      // 按 card + board_id + field 折叠
+      return `${d.card || ''}|${d.board_id || ''}|${d.field || ''}`
+    // ...
+    default:
+      // 默认按消息骨架折叠
+      return alert.message.replace(/\d+/g, 'N')
+  }
+}
+```
+
+#### 改活跃问题面板显示
+
+**需要修改的文件**：**1-2 个**
+
+| 文件 | 修改点 | 内容 |
+|------|--------|------|
+| `observation_web/backend/api/arrays.py` | `_derive_active_issues_from_db()` | 活跃问题的标题、消息、类型判断 |
+| `observation_web/frontend/src/views/ArrayDetail.vue` | 活跃告警面板模板 | 前端展示样式 |
+
+`_derive_active_issues_from_db()` 中每个观察点的判断逻辑：
+
+```python
+# 以 card_info 为例
+if observer == 'card_info':
+    alerts_info = details.get('alerts', [])
+    for a in alerts_info:
+        if a.get('level') in ('error', 'warning'):
+            issues.append({
+                'key': f'card_info_{a.get("card")}_{a.get("field")}',
+                'observer': 'card_info',
+                'level': a.get('level', 'warning'),
+                'title': f'卡件异常: {a.get("card", "?")}',
+                'message': f'{a.get("field","?")}: {a.get("value","?")}',
+                'alert_id': alert_row.id,
+            })
+```
+
+#### 改告警详情抽屉
+
+**需要修改的文件**：**1 个**
+
+| 文件 | 修改点 |
+|------|--------|
+| `observation_web/frontend/src/components/AlertDetailDrawer.vue` | 模板中的条件渲染区域 |
+
+抽屉中的特殊区域（如 alarm_type 的结构化信息）在模板中以 `v-if="isAlarmType"` 等条件控制，可根据需要添加新的观察点专属区域。
+
+### 13.7 修改影响速查表
+
+改动一个地方可能需要连带修改其他地方。以下是**改动传播关系**：
+
+```
+观察点 details 字段名变了
+    ├─→ alertTranslator.js 翻译函数需同步
+    ├─→ useAlertFolding.js 折叠身份需同步（如果用了 details 中的字段）
+    ├─→ arrays.py _derive_active_issues_from_db() 需同步（如果涉及活跃问题）
+    └─→ AlertDetailDrawer.vue 需同步（如果有观察点专属展示区域）
+
+告警级别变了
+    ├─→ alertTranslator.js 中的级别提示文案
+    └─→ arrays.py 活跃问题中的 level 判断
+
+config.json 参数名变了
+    ├─→ observer.py 中的 config.get() 调用
+    └─→ config/loader.py 中的默认值
+```
+
+### 13.8 实际案例：alarm_type 观察点的完整修改记录
+
+以下是 `alarm_type` 观察点从初始版本到当前版本的实际修改清单，可作为参考模板：
+
+| 修改内容 | 涉及文件 | 说明 |
+|---------|---------|------|
+| 目标日志路径改为 `system_alarm.txt` | `observers/alarm_type.py` | `self.log_path` 默认值 |
+| 解析 `AlarmType:0/1/2` 格式 | `observers/alarm_type.py` | `_parse_event()` 正则 |
+| 提取 `AlarmId:` 和 `objType:` | `observers/alarm_type.py` | `_parse_event()` 解析 |
+| Type 0 = INFO，Type 1/2 = WARNING | `observers/alarm_type.py` | `check()` 中 `alert_level` 判断 |
+| fault/resume 配对追踪 | `observers/alarm_type.py` | `_active_alarms` 字典 |
+| 恢复告警发送 | `observers/alarm_type.py` | `details['recovered'] = True` |
+| config.json 中 `log_path` 变更 | `config.json` + `config/loader.py` | 默认配置 |
+| 前端翻译函数 | `alertTranslator.js` | `translateAlarmType()` |
+| 折叠按 `objType+action` | `useAlertFolding.js` | `getAlertIdentity()` case |
+| 活跃问题追踪 fault 未 resume | `arrays.py` | `_derive_active_issues_from_db()` |
+| 详情抽屉显示结构化信息 | `AlertDetailDrawer.vue` | alarm_type 专属条件渲染 |
+| boardId 在小卡片显示 | `alertTranslator.js` | `translateCardInfo()` summary |
+
+### 13.9 快速验证流程
+
+无论修改了哪个环节，建议按以下步骤验证：
+
+1. **Agent 端修改后**：
+   - 重启 Agent：`kill $(pgrep -f observation_points) && python3 -m observation_points &`
+   - 在阵列上检查 `tail -f /var/log/observation-points/alerts.log`，确认 JSON 格式正确
+   
+2. **Web 后端修改后**：
+   - 重启后端：`python -m uvicorn backend.main:app --reload --port 9999`
+   - 点击阵列详情 → 刷新，观察活跃问题面板
+   - 检查 API 响应：`curl http://localhost:9999/api/alerts/recent?limit=5 | python -m json.tool`
+
+3. **Web 前端修改后**：
+   - Vite 热更新会自动生效（开发模式下）
+   - 检查告警小卡片的翻译文案
+   - 点击小卡片，检查详情抽屉
+   - 在告警中心检查折叠是否正确
