@@ -66,6 +66,9 @@ class CardInfoObserver(BaseObserver):
         # Model 异常值列表（视同为空）
         self._model_invalid_values = {'undefined', 'none', 'null', 'n/a', ''}
 
+        # 用于检测异常→恢复的状态转换
+        self._was_alerting = False
+
         # 编译匹配正则
         self._re_running = re.compile(
             self.FIELD_PATTERN_TEMPLATE.format(keyword='RunningState'),
@@ -172,6 +175,7 @@ class CardInfoObserver(BaseObserver):
                 alerts.append(alert_entry)
 
         if alerts:
+            self._was_alerting = True
             # 构建消息
             error_alerts = [a for a in alerts if a['level'] == 'error']
             warn_alerts = [a for a in alerts if a['level'] == 'warning']
@@ -198,6 +202,23 @@ class CardInfoObserver(BaseObserver):
                     'cards': card_details,
                     'total_cards': len(cards),
                 },
+            )
+
+        # 之前有异常，现在全部正常 → 发出恢复告警
+        if self._was_alerting:
+            self._was_alerting = False
+            message = f"卡件信息恢复正常 ({len(cards)} 张卡)"
+            logger.info(message)
+            return self.create_result(
+                has_alert=True,
+                alert_level=AlertLevel.INFO,
+                message=message,
+                details={
+                    'recovered': True,
+                    'cards': card_details,
+                    'total_cards': len(cards),
+                },
+                sticky=True,  # bypass cooldown 确保恢复事件被上报
             )
 
         return self.create_result(

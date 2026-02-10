@@ -108,6 +108,256 @@ def _get_array_status(array_id: str) -> ArrayStatus:
     return _array_status_cache[array_id]
 
 
+# ---------------------------------------------------------------------------
+# Active Issues helpers
+# ---------------------------------------------------------------------------
+
+# Observers that contribute to the "active issues" panel
+_ACTIVE_ISSUE_OBSERVERS = {'cpu_usage', 'memory_leak', 'alarm_type', 'pcie_bandwidth', 'card_info'}
+
+_OBSERVER_TITLES = {
+    'cpu_usage': 'CPU 利用率过高',
+    'memory_leak': '内存疑似泄漏',
+    'alarm_type': '告警未恢复',
+    'pcie_bandwidth': 'PCIe 带宽降级',
+    'card_info': '卡件异常',
+}
+
+
+def _update_active_issues(status_obj: ArrayStatus, alert: dict):
+    """
+    Process a single parsed alert and update ``status_obj.active_issues``.
+
+    Rules per observer:
+    * cpu_usage / pcie_bandwidth / card_info — if ``details.recovered`` is
+      truthy, remove all matching issues; otherwise upsert.
+    * memory_leak — always upsert (no self-recovery).
+    * alarm_type — rebuild from ``details.active_alarms`` list each time.
+    """
+    observer = alert.get('observer_name', '')
+    if observer not in _ACTIVE_ISSUE_OBSERVERS:
+        return
+
+    details = alert.get('details', {}) or {}
+    level = alert.get('level', 'info')
+    message = alert.get('message', '')
+    timestamp = alert.get('timestamp', '')
+
+    issues = status_obj.active_issues  # mutable list reference
+
+    if observer == 'alarm_type':
+        # Rebuild from active_alarms in details
+        active_alarms = details.get('active_alarms', [])
+        # Remove all old alarm_type issues
+        status_obj.active_issues = [i for i in issues if i.get('observer') != 'alarm_type']
+        # Re-add currently active alarms
+        for al in active_alarms:
+            aid = al.get('alarm_id', '?')
+            otype = al.get('obj_type', '')
+            key = f"alarm_type:{aid}"
+            status_obj.active_issues.append({
+                'key': key,
+                'observer': 'alarm_type',
+                'level': 'warning',
+                'title': _OBSERVER_TITLES['alarm_type'],
+                'message': f"AlarmId:{aid} objType:{otype}",
+                'details': al,
+                'since': al.get('timestamp', timestamp),
+                'latest': timestamp,
+            })
+        return
+
+    # For observers with recovery logic
+    recovered = details.get('recovered', False)
+    if recovered:
+        status_obj.active_issues = [
+            i for i in issues if i.get('observer') != observer
+        ]
+        return
+
+    # Only track WARNING / ERROR level alerts as active issues
+    if level not in ('warning', 'error', 'critical'):
+        return
+
+    if observer == 'cpu_usage':
+        key = 'cpu_usage'
+        _upsert_issue(status_obj, key, observer, level, message, details, timestamp)
+
+    elif observer == 'memory_leak':
+        key = 'memory_leak'
+        _upsert_issue(status_obj, key, observer, level, message, details, timestamp)
+
+    elif observer == 'pcie_bandwidth':
+        downgrades = details.get('downgrades', [])
+        # Remove old entries, re-add current ones
+        status_obj.active_issues = [
+            i for i in status_obj.active_issues if i.get('observer') != 'pcie_bandwidth'
+        ]
+        for dg in downgrades:
+            dev = dg.split(' ')[0] if isinstance(dg, str) else '?'
+            key = f"pcie_bandwidth:{dev}"
+            status_obj.active_issues.append({
+                'key': key,
+                'observer': 'pcie_bandwidth',
+                'level': level,
+                'title': _OBSERVER_TITLES['pcie_bandwidth'],
+                'message': dg if isinstance(dg, str) else str(dg),
+                'details': details,
+                'since': timestamp,
+                'latest': timestamp,
+            })
+
+    elif observer == 'card_info':
+        card_alerts = details.get('alerts', [])
+        # Remove old entries, re-add current ones
+        status_obj.active_issues = [
+            i for i in status_obj.active_issues if i.get('observer') != 'card_info'
+        ]
+        for ca in card_alerts:
+            card = ca.get('card', '?')
+            field = ca.get('field', '?')
+            key = f"card_info:{card}:{field}"
+            board_id = ca.get('board_id', '')
+            label = f"{card}"
+            if board_id:
+                label = f"{card} (BoardId:{board_id})"
+            status_obj.active_issues.append({
+                'key': key,
+                'observer': 'card_info',
+                'level': ca.get('level', level),
+                'title': _OBSERVER_TITLES['card_info'],
+                'message': f"卡件 {label} {field}={ca.get('value', '?')}",
+                'details': ca,
+                'since': timestamp,
+                'latest': timestamp,
+            })
+
+
+def _upsert_issue(
+    status_obj: ArrayStatus, key: str, observer: str,
+    level: str, message: str, details: dict, timestamp: str,
+):
+    """Insert or update a single active issue by key."""
+    for issue in status_obj.active_issues:
+        if issue.get('key') == key:
+            issue['level'] = level
+            issue['message'] = message[:200]
+            issue['details'] = details
+            issue['latest'] = timestamp
+            return
+    status_obj.active_issues.append({
+        'key': key,
+        'observer': observer,
+        'level': level,
+        'title': _OBSERVER_TITLES.get(observer, observer),
+        'message': message[:200],
+        'details': details,
+        'since': timestamp,
+        'latest': timestamp,
+    })
+
+
+async def _derive_active_issues_from_db(db: AsyncSession, array_id: str) -> List[Dict[str, Any]]:
+    """
+    Derive active issues from the DB when the in-memory cache is empty.
+    Looks at the LATEST alert per relevant observer and checks its details.
+    """
+    from ..models.alert import AlertModel
+
+    issues: List[Dict[str, Any]] = []
+
+    for obs_name in _ACTIVE_ISSUE_OBSERVERS:
+        stmt = (
+            select(AlertModel)
+            .where(AlertModel.array_id == array_id)
+            .where(AlertModel.observer_name == obs_name)
+            .order_by(AlertModel.timestamp.desc())
+            .limit(1)
+        )
+        row_result = await db.execute(stmt)
+        alert_row = row_result.scalar_one_or_none()
+        if not alert_row:
+            continue
+
+        # Parse details
+        details = {}
+        if alert_row.details:
+            try:
+                details = json.loads(alert_row.details) if isinstance(alert_row.details, str) else alert_row.details
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+        # Skip if recovered
+        if details.get('recovered'):
+            continue
+
+        level = alert_row.level or 'info'
+        message = alert_row.message or ''
+        ts = alert_row.timestamp.isoformat() if alert_row.timestamp else ''
+
+        if obs_name == 'alarm_type':
+            for al in details.get('active_alarms', []):
+                aid = al.get('alarm_id', '?')
+                otype = al.get('obj_type', '')
+                issues.append({
+                    'key': f"alarm_type:{aid}",
+                    'observer': 'alarm_type',
+                    'level': 'warning',
+                    'title': _OBSERVER_TITLES['alarm_type'],
+                    'message': f"AlarmId:{aid} objType:{otype}",
+                    'details': al,
+                    'since': al.get('timestamp', ts),
+                    'latest': ts,
+                })
+        elif obs_name in ('cpu_usage', 'memory_leak'):
+            if level in ('warning', 'error', 'critical'):
+                issues.append({
+                    'key': obs_name,
+                    'observer': obs_name,
+                    'level': level,
+                    'title': _OBSERVER_TITLES[obs_name],
+                    'message': message[:200],
+                    'details': details,
+                    'since': ts,
+                    'latest': ts,
+                })
+        elif obs_name == 'pcie_bandwidth':
+            if level in ('warning', 'error', 'critical'):
+                for dg in details.get('downgrades', []):
+                    dev = dg.split(' ')[0] if isinstance(dg, str) else '?'
+                    issues.append({
+                        'key': f"pcie_bandwidth:{dev}",
+                        'observer': 'pcie_bandwidth',
+                        'level': level,
+                        'title': _OBSERVER_TITLES['pcie_bandwidth'],
+                        'message': dg if isinstance(dg, str) else str(dg),
+                        'details': details,
+                        'since': ts,
+                        'latest': ts,
+                    })
+        elif obs_name == 'card_info':
+            if level in ('warning', 'error', 'critical'):
+                for ca in details.get('alerts', []):
+                    card = ca.get('card', '?')
+                    field = ca.get('field', '?')
+                    board_id = ca.get('board_id', '')
+                    label = f"{card}"
+                    if board_id:
+                        label = f"{card} (BoardId:{board_id})"
+                    issues.append({
+                        'key': f"card_info:{card}:{field}",
+                        'observer': 'card_info',
+                        'level': ca.get('level', level),
+                        'title': _OBSERVER_TITLES['card_info'],
+                        'message': f"卡件 {label} {field}={ca.get('value', '?')}",
+                        'details': ca,
+                        'since': ts,
+                        'latest': ts,
+                    })
+
+    return issues
+
+
 @router.get("", response_model=List[ArrayResponse])
 async def list_arrays(
     db: AsyncSession = Depends(get_db),
@@ -167,6 +417,10 @@ async def list_array_statuses(
                     'status': obs_status,
                     'message': msg[:100],
                 }
+
+        # Derive active_issues from DB if cache is empty
+        if not status_obj.active_issues:
+            status_obj.active_issues = await _derive_active_issues_from_db(db, array.array_id)
         
         statuses.append(status_obj)
     
@@ -539,6 +793,10 @@ async def get_array_status(
                 'status': obs_status,
                 'message': msg[:100],
             }
+
+    # Derive active_issues from DB if cache is empty
+    if not status_obj.active_issues:
+        status_obj.active_issues = await _derive_active_issues_from_db(db, array_id)
     
     return status_obj
 
@@ -806,6 +1064,10 @@ async def refresh_array(
                                     'status': 'warning',
                                     'message': message[:100],
                                 }
+
+                # Update active issues from parsed alerts (chronological order)
+                for alert in parsed_alerts:
+                    _update_active_issues(status_obj, alert)
         
         # Update sync position in DB (optimistic lock — skip if another instance advanced)
         await _update_sync_position(db, array_id, total_lines, last_pos)

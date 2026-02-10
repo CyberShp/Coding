@@ -54,39 +54,59 @@
         </el-descriptions>
       </el-card>
 
-      <!-- Observer Status (Grouped Card Layout) -->
-      <el-card class="observer-card">
+      <!-- Active Issues Panel -->
+      <el-card class="active-issues-card">
         <template #header>
           <div class="card-header">
-            <span>观察点状态</span>
-            <el-tag type="info" size="small">{{ observerList.length }} 个观察点</el-tag>
+            <span>活跃告警与异常</span>
+            <el-tag v-if="activeIssues.length > 0" type="danger" size="small">{{ activeIssues.length }} 项</el-tag>
+            <el-tag v-else type="success" size="small">无异常</el-tag>
           </div>
         </template>
-        
-        <div v-if="observerList.length > 0">
-          <div v-for="group in groupedObservers" :key="group.key" class="observer-group">
-            <div class="group-title">{{ group.label }}</div>
-            <div class="observer-grid">
-              <div 
-                v-for="obs in group.items" 
-                :key="obs.name" 
-                class="observer-item"
-                :class="`observer-${obs.status}`"
-              >
-                <div class="observer-header">
-                  <span class="observer-name">{{ getObserverName(obs.name) }}</span>
-                  <el-tag :type="getObserverStatusType(obs.status)" size="small">
-                    {{ getObserverStatusText(obs.status) }}
-                  </el-tag>
-                </div>
-                <div class="observer-message" v-if="obs.message">{{ obs.message }}</div>
-                <div class="observer-id">{{ obs.name }}</div>
-              </div>
+
+        <div v-if="activeIssues.length > 0" class="issues-list">
+          <div
+            v-for="issue in activeIssues"
+            :key="issue.key"
+            class="issue-item"
+            :class="`issue-${issue.level}`"
+            @click="openIssueDetail(issue)"
+          >
+            <div class="issue-header">
+              <span class="issue-title">{{ issue.title }}</span>
+              <el-tag :type="issue.level === 'error' || issue.level === 'critical' ? 'danger' : 'warning'" size="small">
+                {{ issue.level === 'error' || issue.level === 'critical' ? '错误' : '警告' }}
+              </el-tag>
+            </div>
+            <div class="issue-message">{{ issue.message }}</div>
+            <div class="issue-meta">
+              <span class="issue-observer">{{ getObserverName(issue.observer) }}</span>
+              <span class="issue-since" v-if="issue.since">持续自 {{ formatRelativeTime(issue.since) }}</span>
             </div>
           </div>
         </div>
+
+        <div v-else class="issues-empty">
+          <el-icon :size="32" color="#67c23a"><CircleCheck /></el-icon>
+          <p>所有监测项正常运行</p>
+        </div>
+      </el-card>
+
+      <!-- Recent Alerts (Translated + Drawer + Folding) -->
+      <el-card class="alerts-card">
+        <template #header>
+          <div class="card-header">
+            <span>最近告警</span>
+            <el-button size="small" @click="$router.push('/alerts')">查看全部</el-button>
+          </div>
+        </template>
         
-        <el-empty v-else description="暂无数据，请刷新" />
+        <FoldedAlertList
+          :alerts="recentAlerts"
+          :show-array-id="false"
+          empty-text="暂无告警，请刷新以同步"
+          @select="openAlertDrawer"
+        />
       </el-card>
 
       <!-- Performance Monitor Tab -->
@@ -199,23 +219,6 @@
         </div>
       </el-card>
 
-      <!-- Recent Alerts (Translated + Drawer + Folding) -->
-      <el-card class="alerts-card">
-        <template #header>
-          <div class="card-header">
-            <span>最近告警</span>
-            <el-button size="small" @click="$router.push('/alerts')">查看全部</el-button>
-          </div>
-        </template>
-        
-        <FoldedAlertList
-          :alerts="recentAlerts"
-          :show-array-id="false"
-          empty-text="暂无告警，请刷新以同步"
-          @select="openAlertDrawer"
-        />
-      </el-card>
-
       <!-- 告警详情抽屉 -->
       <AlertDetailDrawer v-model="drawerVisible" :alert="selectedAlert" />
 
@@ -268,7 +271,7 @@
 import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { Refresh, ArrowRight } from '@element-plus/icons-vue'
+import { Refresh, ArrowRight, CircleCheck } from '@element-plus/icons-vue'
 import { useArrayStore } from '../stores/arrays'
 import api from '../api'
 import LogViewer from '../components/LogViewer.vue'
@@ -279,7 +282,7 @@ import EventTimeline from '../components/EventTimeline.vue'
 import SnapshotDiff from '../components/SnapshotDiff.vue'
 import AlertDetailDrawer from '@/components/AlertDetailDrawer.vue'
 import FoldedAlertList from '@/components/FoldedAlertList.vue'
-import { translateAlert, getObserverName as getObserverLabel, getObserverGroup, OBSERVER_GROUPS, LEVEL_LABELS, LEVEL_TAG_TYPES } from '@/utils/alertTranslator'
+import { translateAlert, getObserverName as getObserverLabel, LEVEL_LABELS, LEVEL_TAG_TYPES } from '@/utils/alertTranslator'
 
 const route = useRoute()
 const arrayStore = useArrayStore()
@@ -302,37 +305,39 @@ const recentAlerts = ref([])
 const drawerVisible = ref(false)
 const selectedAlert = ref(null)
 
-const observerList = computed(() => {
-  if (!array.value?.observer_status) return []
-  return Object.entries(array.value.observer_status)
-    .filter(([name]) => name !== '_meta')
-    .map(([name, info]) => ({
-      name,
-      status: info.status,
-      message: info.message,
-    }))
-})
-
-const groupedObservers = computed(() => {
-  const list = observerList.value
-  if (list.length === 0) return []
-
-  const groups = {}
-  for (const obs of list) {
-    const { key, label } = getObserverGroup(obs.name)
-    if (!groups[key]) {
-      groups[key] = { key, label, items: [] }
-    }
-    groups[key].items.push(obs)
-  }
-
-  // Sort: port -> card -> system
-  const order = ['port', 'card', 'system']
-  return order.map(k => groups[k]).filter(Boolean)
+const activeIssues = computed(() => {
+  return array.value?.active_issues || []
 })
 
 function getAlertTranslation(alert) {
   return translateAlert(alert)
+}
+
+function openIssueDetail(issue) {
+  // Build a pseudo-alert object from the issue for the drawer
+  selectedAlert.value = {
+    observer_name: issue.observer,
+    level: issue.level,
+    message: issue.message,
+    details: issue.details || {},
+    timestamp: issue.latest || issue.since || '',
+  }
+  drawerVisible.value = true
+}
+
+function formatRelativeTime(ts) {
+  if (!ts) return ''
+  const now = Date.now()
+  const then = new Date(ts).getTime()
+  if (isNaN(then)) return ts
+  const diffSec = Math.floor((now - then) / 1000)
+  if (diffSec < 60) return `${diffSec} 秒前`
+  const diffMin = Math.floor(diffSec / 60)
+  if (diffMin < 60) return `${diffMin} 分钟前`
+  const diffHr = Math.floor(diffMin / 60)
+  if (diffHr < 24) return `${diffHr} 小时前`
+  const diffDay = Math.floor(diffHr / 24)
+  return `${diffDay} 天前`
 }
 
 function openAlertDrawer(alert) {
@@ -383,26 +388,6 @@ function getStateText(state) {
     error: '错误',
   }
   return texts[state] || state
-}
-
-function getObserverStatusType(status) {
-  const types = {
-    ok: 'success',
-    warning: 'warning',
-    error: 'danger',
-    unknown: 'info',
-  }
-  return types[status] || 'info'
-}
-
-function getObserverStatusText(status) {
-  const texts = {
-    ok: '正常',
-    warning: '警告',
-    error: '错误',
-    unknown: '未知',
-  }
-  return texts[status] || status
 }
 
 function getLevelType(level) {
@@ -595,7 +580,7 @@ onUnmounted(() => {
 }
 
 .info-card,
-.observer-card,
+.active-issues-card,
 .agent-card,
 .alerts-card,
 .perf-card {
@@ -624,72 +609,83 @@ onUnmounted(() => {
   gap: 8px;
 }
 
-/* Observer group */
-.observer-group {
-  margin-bottom: 16px;
+/* Active Issues */
+.issues-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
 }
 
-.observer-group:last-child {
-  margin-bottom: 0;
-}
-
-.group-title {
-  font-size: 13px;
-  font-weight: 600;
-  color: #606266;
-  margin-bottom: 8px;
-  padding-left: 4px;
-  border-left: 3px solid #409eff;
-  padding-left: 8px;
-}
-
-/* Observer card grid */
-.observer-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-  gap: 12px;
-}
-
-.observer-item {
+.issue-item {
   padding: 12px 16px;
   border-radius: 8px;
   border-left: 4px solid #dcdfe6;
   background: #fafafa;
+  cursor: pointer;
   transition: all 0.2s;
 }
 
-.observer-item:hover {
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+.issue-item:hover {
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  transform: translateX(2px);
 }
 
-.observer-ok { border-left-color: #67c23a; background: #f0f9eb; }
-.observer-warning { border-left-color: #e6a23c; background: #fdf6ec; }
-.observer-error { border-left-color: #f56c6c; background: #fef0f0; }
+.issue-warning { border-left-color: #e6a23c; background: #fdf6ec; }
+.issue-error, .issue-critical { border-left-color: #f56c6c; background: #fef0f0; }
 
-.observer-header {
+.issue-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
   margin-bottom: 6px;
 }
 
-.observer-name {
+.issue-title {
   font-weight: 600;
   font-size: 14px;
+  color: #303133;
 }
 
-.observer-message {
-  font-size: 12px;
+.issue-message {
+  font-size: 13px;
   color: #606266;
-  line-height: 1.4;
+  line-height: 1.5;
   word-break: break-all;
+  margin-bottom: 6px;
 }
 
-.observer-id {
-  font-size: 11px;
-  color: #c0c4cc;
-  margin-top: 4px;
+.issue-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 12px;
+  color: #909399;
+}
+
+.issue-observer {
   font-family: monospace;
+  background: #f0f2f5;
+  padding: 1px 6px;
+  border-radius: 4px;
+}
+
+.issue-since {
+  font-style: italic;
+}
+
+.issues-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 24px 0;
+  color: #67c23a;
+}
+
+.issues-empty p {
+  margin-top: 8px;
+  color: #909399;
+  font-size: 14px;
 }
 
 /* Alert list is now in FoldedAlertList.vue component */

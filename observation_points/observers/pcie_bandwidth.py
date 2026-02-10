@@ -10,6 +10,7 @@ PCIe 带宽 downgrade 监测观察点
 3. 同时对比上次读数，检测动态 downgrade
 
 如果配置了 command 则优先使用自定义命令。
+当降级恢复后，自动发出恢复告警，活跃问题面板中对应条目消失。
 """
 
 import logging
@@ -57,6 +58,7 @@ class PcieBandwidthObserver(BaseObserver):
         self.device_filter = config.get('device_filter', [])
         self._last_link = {}  # type: Dict[str, Dict[str, str]]
         self._first_run = True
+        self._was_alerting = False  # 用于检测降级→恢复的状态转换
 
     def check(self) -> ObserverResult:
         if self.command:
@@ -95,6 +97,7 @@ class PcieBandwidthObserver(BaseObserver):
         self._first_run = False
 
         if downgrades:
+            self._was_alerting = True
             logger.warning(f"[PCIeBW] {'; '.join(downgrades)}")
             return self.create_result(
                 has_alert=True,
@@ -104,6 +107,22 @@ class PcieBandwidthObserver(BaseObserver):
                     'downgrades': downgrades,
                     'current': current_link,
                 },
+            )
+
+        # 之前有降级，现在恢复了 → 发出恢复告警
+        if self._was_alerting:
+            self._was_alerting = False
+            message = f"PCIe 带宽恢复正常 ({len(current_link)} 设备)"
+            logger.info(f"[PCIeBW] {message}")
+            return self.create_result(
+                has_alert=True,
+                alert_level=AlertLevel.INFO,
+                message=message,
+                details={
+                    'recovered': True,
+                    'current': current_link,
+                },
+                sticky=True,  # bypass cooldown 确保恢复事件被上报
             )
 
         return self.create_result(

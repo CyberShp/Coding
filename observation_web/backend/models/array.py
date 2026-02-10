@@ -101,6 +101,7 @@ class ArrayStatus(BaseModel):
     has_saved_password: bool = False
     last_refresh: Optional[datetime] = None
     observer_status: Dict[str, Dict[str, str]] = {}
+    active_issues: List[Dict[str, Any]] = []
     recent_alerts: List[Dict[str, Any]] = []
 
 

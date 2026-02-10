@@ -454,7 +454,10 @@ function translateCardInfo(alert) {
   const alerts = details.alerts || []
   const total = details.total_cards || '?'
   if (alerts.length > 0) {
-    const msgs = alerts.slice(0, 3).map(a => `${a.card} ${a.field}=${a.value}`)
+    const msgs = alerts.slice(0, 3).map(a => {
+      const bid = a.board_id ? ` [BoardId:${a.board_id}]` : ''
+      return `${a.card} ${a.field}=${a.value}${bid}`
+    })
     return makeResult({
       event: `${total} 张卡检查，${alerts.length} 项异常：${msgs.join('；')}`,
       impact: '卡件状态异常，可能导致关联端口和业务不可用',

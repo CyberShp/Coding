@@ -3,6 +3,7 @@ CPU0 利用率监测观察点
 
 通过解析 /proc/stat 或 top 命令监测 CPU0 的利用率。
 当连续 N 次（默认6次）检测超过阈值（默认90%）时告警。
+当利用率下降到阈值以下时，自动发出恢复告警，活跃问题面板中对应条目消失。
 """
 
 import logging
@@ -23,9 +24,9 @@ class CpuUsageObserver(BaseObserver):
     CPU0 利用率监测观察点
     
     功能：
-    - 定期检测 CPU0 利用率
+    - 定期检测 CPU0 利用率（默认30秒一次）
     - 连续 N 次（默认6次，即3分钟）超过阈值则告警
-    - 告警后持续报告（sticky_alert），直到线程退出
+    - 告警期间持续报告（sticky），当利用率降回阈值以下时发出恢复告警
     """
     
     def __init__(self, name: str, config: Dict[str, Any]):
@@ -43,8 +44,8 @@ class CpuUsageObserver(BaseObserver):
         # 上次 /proc/stat 数据（用于计算利用率）
         self._last_cpu_stats = None  # type: Optional[Tuple[int, int]]
         
-        # 是否已触发告警（sticky状态）
-        self._alert_triggered = False
+        # 是否正在告警（用于状态转换检测，非永久 sticky）
+        self._was_alerting = False
     
     def check(self, reporter=None) -> ObserverResult:
         """检查 CPU0 利用率"""
@@ -84,15 +85,26 @@ class CpuUsageObserver(BaseObserver):
             'consecutive_over_threshold': self._count_consecutive_over_threshold(),
         }
         
-        # 检查是否连续超阈值
+        # 当前是否处于告警状态（连续超阈值 或 曾经触发且仍超阈值）
+        currently_alerting = False
+
         if self._is_continuous_over_threshold():
-            self._alert_triggered = True
-            message = (
-                f"CPU0 利用率告警: 连续 {self.consecutive_threshold} 次检测超过 {self.threshold_percent}% "
-                f"(当前: {cpu_usage:.1f}%)"
-            )
+            currently_alerting = True
+        elif self._was_alerting and is_over_threshold:
+            # 曾经告警过，且当前仍超阈值 → 维持告警
+            currently_alerting = True
+
+        if currently_alerting:
+            self._was_alerting = True
+            if self._is_continuous_over_threshold():
+                message = (
+                    f"CPU0 利用率告警: 连续 {self.consecutive_threshold} 次检测超过 "
+                    f"{self.threshold_percent}% (当前: {cpu_usage:.1f}%)"
+                )
+            else:
+                message = f"CPU0 利用率告警持续中 (当前: {cpu_usage:.1f}%)"
             logger.error(message)
-            
+
             return self.create_result(
                 has_alert=True,
                 alert_level=AlertLevel.ERROR,
@@ -100,19 +112,22 @@ class CpuUsageObserver(BaseObserver):
                 details=details,
                 sticky=True,
             )
-        
-        # 如果之前触发过告警，持续报告
-        if self._alert_triggered:
-            message = f"CPU0 利用率告警持续中 (当前: {cpu_usage:.1f}%)"
-            
+
+        # 之前在告警状态，现在利用率降回阈值以下 → 发出恢复告警
+        if self._was_alerting:
+            self._was_alerting = False
+            message = f"CPU0 利用率恢复正常 (当前: {cpu_usage:.1f}%，低于 {self.threshold_percent}%)"
+            logger.info(message)
+
+            details['recovered'] = True
             return self.create_result(
                 has_alert=True,
-                alert_level=AlertLevel.ERROR,
+                alert_level=AlertLevel.INFO,
                 message=message,
                 details=details,
-                sticky=True,
+                sticky=True,  # bypass cooldown 以确保恢复事件被上报
             )
-        
+
         return self.create_result(
             has_alert=False,
             message=f"CPU0 检查正常 (当前: {cpu_usage:.1f}%)",
