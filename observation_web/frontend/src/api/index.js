@@ -94,6 +94,11 @@ export default {
   getAggregatedAlerts: (params) => http.get('/alerts/aggregated', { params }),
   exportAlerts: (params) => http.get('/alerts/export', { params, responseType: 'blob' }),
 
+  // Alert Acknowledgement
+  ackAlerts: (alertIds, comment = '') => http.post('/alerts/ack', { alert_ids: alertIds, comment }),
+  unackAlert: (alertId) => http.delete(`/alerts/ack/${alertId}`),
+  getAlertAckDetails: (alertId) => http.get(`/alerts/${alertId}/ack`),
+
   // Test Tasks
   getTestTasks: (params) => http.get('/test-tasks', { params }),
   createTestTask: (data) => http.post('/test-tasks', data),

@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status, Body, Query
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import select, exists
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import get_config
@@ -261,12 +261,15 @@ async def _derive_active_issues_from_db(db: AsyncSession, array_id: str) -> List
     """
     Derive active issues from the DB when the in-memory cache is empty.
     Looks at the LATEST alert per relevant observer and checks its details.
+    Filters out alerts that have been acknowledged.
+    Includes ``alert_id`` in each issue for frontend ack operations.
     """
-    from ..models.alert import AlertModel
+    from ..models.alert import AlertModel, AlertAckModel
 
     issues: List[Dict[str, Any]] = []
 
     for obs_name in _ACTIVE_ISSUE_OBSERVERS:
+        # Get the LATEST alert for this observer (regardless of ack status)
         stmt = (
             select(AlertModel)
             .where(AlertModel.array_id == array_id)
@@ -279,6 +282,8 @@ async def _derive_active_issues_from_db(db: AsyncSession, array_id: str) -> List
         if not alert_row:
             continue
 
+        alert_id = alert_row.id
+
         # Parse details
         details = {}
         if alert_row.details:
@@ -289,6 +294,13 @@ async def _derive_active_issues_from_db(db: AsyncSession, array_id: str) -> List
 
         # Skip if recovered
         if details.get('recovered'):
+            continue
+
+        # Skip if the latest alert has been acknowledged
+        ack_result = await db.execute(
+            select(AlertAckModel.id).where(AlertAckModel.alert_id == alert_id).limit(1)
+        )
+        if ack_result.scalar_one_or_none() is not None:
             continue
 
         level = alert_row.level or 'info'
@@ -306,6 +318,7 @@ async def _derive_active_issues_from_db(db: AsyncSession, array_id: str) -> List
                     'title': _OBSERVER_TITLES['alarm_type'],
                     'message': f"AlarmId:{aid} objType:{otype}",
                     'details': al,
+                    'alert_id': alert_id,
                     'since': al.get('timestamp', ts),
                     'latest': ts,
                 })
@@ -318,6 +331,7 @@ async def _derive_active_issues_from_db(db: AsyncSession, array_id: str) -> List
                     'title': _OBSERVER_TITLES[obs_name],
                     'message': message[:200],
                     'details': details,
+                    'alert_id': alert_id,
                     'since': ts,
                     'latest': ts,
                 })
@@ -332,6 +346,7 @@ async def _derive_active_issues_from_db(db: AsyncSession, array_id: str) -> List
                         'title': _OBSERVER_TITLES['pcie_bandwidth'],
                         'message': dg if isinstance(dg, str) else str(dg),
                         'details': details,
+                        'alert_id': alert_id,
                         'since': ts,
                         'latest': ts,
                     })
@@ -351,6 +366,7 @@ async def _derive_active_issues_from_db(db: AsyncSession, array_id: str) -> List
                         'title': _OBSERVER_TITLES['card_info'],
                         'message': f"卡件 {label} {field}={ca.get('value', '?')}",
                         'details': ca,
+                        'alert_id': alert_id,
                         'since': ts,
                         'latest': ts,
                     })
@@ -1068,6 +1084,9 @@ async def refresh_array(
                 # Update active issues from parsed alerts (chronological order)
                 for alert in parsed_alerts:
                     _update_active_issues(status_obj, alert)
+
+                # Re-derive from DB to get alert_ids and filter out acked issues
+                status_obj.active_issues = await _derive_active_issues_from_db(db, array_id)
         
         # Update sync position in DB (optimistic lock — skip if another instance advanced)
         await _update_sync_position(db, array_id, total_lines, last_pos)

@@ -10,6 +10,7 @@ from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..core.alert_store import get_alert_store, AlertStore
@@ -54,7 +55,18 @@ async def list_alerts(
         limit=limit,
         offset=offset,
     )
-    
+
+    # Populate array_name from DB
+    if alerts:
+        from ..models.array import ArrayModel
+        arr_ids = list({a.array_id for a in alerts})
+        arr_result = await db.execute(
+            select(ArrayModel.array_id, ArrayModel.name).where(ArrayModel.array_id.in_(arr_ids))
+        )
+        name_map = {row.array_id: row.name for row in arr_result.all()}
+        for a in alerts:
+            a.array_name = name_map.get(a.array_id, a.array_id)
+
     return alerts
 
 
@@ -85,15 +97,23 @@ async def get_recent_alerts(
     )
     
     import json as _json
+    from ..models.array import ArrayModel
+    
+    # Build array_id -> name lookup
+    arr_result = await db.execute(select(ArrayModel.array_id, ArrayModel.name))
+    name_map = {row.array_id: row.name for row in arr_result.all()}
+    
     result = []
     for a in alerts:
         item = {
             "id": a.id,
             "array_id": a.array_id,
+            "array_name": name_map.get(a.array_id, a.array_id),
             "observer_name": a.observer_name,
             "level": a.level,
             "message": a.message[:200] if len(a.message) > 200 else a.message,
             "timestamp": a.timestamp.isoformat(),
+            "is_acked": getattr(a, 'is_acked', False),
         }
         # Include parsed details for frontend translator
         if a.details:
@@ -126,16 +146,22 @@ async def get_aggregated_alerts(
         db, array_id=array_id, start_time=start_time, limit=limit,
     )
 
+    from ..models.array import ArrayModel
+    arr_result = await db.execute(select(ArrayModel.array_id, ArrayModel.name))
+    name_map = {row.array_id: row.name for row in arr_result.all()}
+
     # Convert to dicts for aggregation
     alert_dicts = []
     for a in alerts:
         d = {
             'id': a.id,
             'array_id': a.array_id,
+            'array_name': name_map.get(a.array_id, a.array_id),
             'observer_name': a.observer_name,
             'level': a.level,
             'message': a.message,
             'timestamp': a.timestamp.isoformat() if a.timestamp else '',
+            'is_acked': getattr(a, 'is_acked', False),
         }
         try:
             import json as _json

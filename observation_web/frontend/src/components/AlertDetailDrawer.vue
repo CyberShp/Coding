@@ -13,6 +13,7 @@
           <div class="section-header">
             <el-tag :type="levelTagType" effect="dark" size="small">{{ levelLabel }}</el-tag>
             <span class="observer-badge">{{ observerName }}</span>
+            <span v-if="alert.array_name || alert.array_id" class="meta-array">{{ alert.array_name || alert.array_id }}</span>
             <span class="meta-time">
               <el-icon><Clock /></el-icon>
               {{ formatTime(alert.timestamp) }}
@@ -190,6 +191,63 @@
           <pre>{{ formattedDetails }}</pre>
         </div>
       </el-card>
+
+      <!-- 告警确认 -->
+      <el-card shadow="never" class="drawer-section ack-section">
+        <template #header>
+          <div class="section-header">
+            <el-icon><CircleCheck /></el-icon>
+            <span>告警确认</span>
+            <el-tag v-if="alert.is_acked || ackInfo" type="success" size="small" effect="dark" style="margin-left:auto">已确认</el-tag>
+          </div>
+        </template>
+
+        <!-- Loading ack details -->
+        <div v-if="ackLoading" class="ack-loading">
+          <el-icon class="is-loading"><Loading /></el-icon> 加载确认信息...
+        </div>
+
+        <!-- Already acknowledged -->
+        <div v-else-if="ackInfo" class="ack-details">
+          <el-descriptions :column="1" border size="small">
+            <el-descriptions-item label="确认人 IP">
+              <code>{{ ackInfo.acked_by_ip }}</code>
+            </el-descriptions-item>
+            <el-descriptions-item label="确认时间">
+              {{ formatTime(ackInfo.acked_at) }}
+            </el-descriptions-item>
+            <el-descriptions-item v-if="ackInfo.comment" label="备注">
+              {{ ackInfo.comment }}
+            </el-descriptions-item>
+          </el-descriptions>
+          <el-button
+            type="warning"
+            plain
+            size="small"
+            style="margin-top:12px"
+            :loading="ackActing"
+            @click="handleUnack"
+          >撤销确认</el-button>
+        </div>
+
+        <!-- Not acknowledged -->
+        <div v-else class="ack-form">
+          <el-input
+            v-model="ackComment"
+            type="textarea"
+            :rows="2"
+            placeholder="备注（可选）"
+            style="margin-bottom:10px"
+          />
+          <el-button
+            type="success"
+            :loading="ackActing"
+            @click="handleAck"
+          >
+            <el-icon><Check /></el-icon> 确认非问题
+          </el-button>
+        </div>
+      </el-card>
     </template>
 
     <template v-else>
@@ -199,16 +257,18 @@
 </template>
 
 <script setup>
-import { ref, computed } from 'vue'
-import { Warning, Clock, Monitor, InfoFilled, List, Document, DocumentCopy, More, ArrowRight } from '@element-plus/icons-vue'
+import { ref, computed, watch } from 'vue'
+import { Warning, Clock, Monitor, InfoFilled, List, Document, DocumentCopy, More, ArrowRight, CircleCheck, Check, Loading } from '@element-plus/icons-vue'
 import { translateAlert, getObserverName, LEVEL_LABELS, LEVEL_TAG_TYPES } from '@/utils/alertTranslator'
+import { ElMessage } from 'element-plus'
+import api from '@/api'
 
 const props = defineProps({
   modelValue: { type: Boolean, default: false },
   alert: { type: Object, default: null },
 })
 
-const emit = defineEmits(['update:modelValue'])
+const emit = defineEmits(['update:modelValue', 'ack-changed'])
 
 const visible = computed({
   get: () => props.modelValue,
@@ -217,6 +277,12 @@ const visible = computed({
 
 const showOriginal = ref(false)
 const showDetails = ref(false)
+
+// Acknowledgement state
+const ackInfo = ref(null)
+const ackLoading = ref(false)
+const ackActing = ref(false)
+const ackComment = ref('')
 
 const translated = computed(() => translateAlert(props.alert))
 const isAlarmType = computed(() => props.alert?.observer_name === 'alarm_type')
@@ -238,6 +304,62 @@ const formattedDetails = computed(() => {
   try { return JSON.stringify(props.alert?.details, null, 2) }
   catch { return String(props.alert?.details) }
 })
+
+// Lazy-load ack details when drawer opens or alert changes
+watch(
+  () => [props.modelValue, props.alert?.id],
+  async ([open, alertId]) => {
+    ackInfo.value = null
+    ackComment.value = ''
+    if (!open || !alertId) return
+    await loadAckDetails(alertId)
+  },
+  { immediate: true },
+)
+
+async function loadAckDetails(alertId) {
+  ackLoading.value = true
+  try {
+    const { data } = await api.getAlertAckDetails(alertId)
+    ackInfo.value = Array.isArray(data) && data.length > 0 ? data[0] : null
+  } catch {
+    ackInfo.value = null
+  } finally {
+    ackLoading.value = false
+  }
+}
+
+async function handleAck() {
+  const alertId = props.alert?.id
+  if (!alertId) return
+  ackActing.value = true
+  try {
+    await api.ackAlerts([alertId], ackComment.value)
+    ElMessage.success('已确认')
+    await loadAckDetails(alertId)
+    emit('ack-changed', { alertId, acked: true })
+  } catch (e) {
+    ElMessage.error('确认失败: ' + (e.response?.data?.detail || e.message))
+  } finally {
+    ackActing.value = false
+  }
+}
+
+async function handleUnack() {
+  const alertId = props.alert?.id
+  if (!alertId) return
+  ackActing.value = true
+  try {
+    await api.unackAlert(alertId)
+    ackInfo.value = null
+    ElMessage.success('已撤销确认')
+    emit('ack-changed', { alertId, acked: false })
+  } catch (e) {
+    ElMessage.error('撤销失败: ' + (e.response?.data?.detail || e.message))
+  } finally {
+    ackActing.value = false
+  }
+}
 
 function formatTime(ts) {
   if (!ts) return '--'
@@ -295,6 +417,14 @@ function handleClose(done) { done() }
   padding: 2px 8px;
   background: var(--el-color-primary-light-9);
   color: var(--el-color-primary);
+  border-radius: 4px;
+  font-size: 12px;
+}
+.meta-array {
+  display: inline-block;
+  padding: 2px 8px;
+  background: var(--el-color-info-light-9);
+  color: var(--el-color-info);
   border-radius: 4px;
   font-size: 12px;
 }
@@ -373,5 +503,23 @@ function handleClose(done) { done() }
   border-radius: 4px; font-size: 12px; white-space: pre-wrap;
   word-break: break-word; max-height: 300px; overflow-y: auto;
   font-family: monospace;
+}
+
+/* Ack section */
+.ack-section :deep(.el-card__body) {
+  padding: 12px 16px;
+}
+.ack-loading {
+  color: var(--el-text-color-secondary);
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.ack-details {
+  font-size: 13px;
+}
+.ack-form {
+  font-size: 13px;
 }
 </style>

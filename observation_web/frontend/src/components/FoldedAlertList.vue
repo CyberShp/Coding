@@ -2,13 +2,17 @@
   <div class="folded-alerts" :class="{ compact }">
     <template v-for="(group, gIdx) in foldedAlerts" :key="gIdx">
       <!-- Single alert (no fold) -->
-      <div v-if="group.count === 1" class="fold-item" @click="$emit('select', group.items[0])">
+      <div v-if="group.count === 1" class="fold-item" :class="{ 'is-acked': group.items[0].is_acked }" @click="$emit('select', group.items[0])">
         <div class="fold-row">
           <span class="fold-time">{{ formatDateTime(group.items[0].timestamp) }}</span>
           <el-tag :type="getLevelType(group.items[0].level)" size="small">{{ getLevelText(group.items[0].level) }}</el-tag>
-          <span v-if="showArrayId" class="fold-array">{{ group.items[0].array_id }}</span>
+          <span v-if="showArrayId" class="fold-array">{{ group.items[0].array_name || group.items[0].array_id }}</span>
           <span class="fold-obs">{{ getObserverLabel(group.items[0].observer_name) }}</span>
           <span class="fold-msg">{{ getSummary(group.items[0]) }}</span>
+          <el-tag v-if="group.items[0].is_acked" type="success" size="small" effect="plain" class="ack-badge">已确认</el-tag>
+          <el-button v-else size="small" text type="success" class="ack-btn" @click.stop="handleAckSingle(group.items[0])">
+            <el-icon><Check /></el-icon>确认
+          </el-button>
           <el-icon class="row-arrow"><ArrowRight /></el-icon>
         </div>
       </div>
@@ -17,12 +21,16 @@
         <div class="fold-row fold-header" @click="handleToggle(group)">
           <span class="fold-time">{{ formatDateTime(group.latestTime) }}</span>
           <el-tag :type="getLevelType(group.worstLevel)" size="small">{{ getLevelText(group.worstLevel) }}</el-tag>
-          <span v-if="showArrayId" class="fold-array">{{ group.arrayId }}</span>
+          <span v-if="showArrayId" class="fold-array">{{ group.arrayName || group.arrayId }}</span>
           <span class="fold-obs">{{ getObserverLabel(group.observer) }}</span>
           <span class="fold-msg">{{ group.summaryMsg }}</span>
           <el-tag type="warning" size="small" effect="plain" round>
             &times; {{ group.count }}
           </el-tag>
+          <el-tag v-if="isGroupAllAcked(group)" type="success" size="small" effect="plain" class="ack-badge">全部已确认</el-tag>
+          <el-button v-else size="small" text type="success" class="ack-btn" @click.stop="handleAckGroup(group)">
+            <el-icon><Check /></el-icon>确认全组
+          </el-button>
           <el-icon class="fold-arrow" :class="{ rotated: group.expanded }"><ArrowRight /></el-icon>
         </div>
         <!-- Expanded children -->
@@ -32,11 +40,16 @@
               v-for="(item, iIdx) in group.items"
               :key="iIdx"
               class="fold-child"
+              :class="{ 'is-acked': item.is_acked }"
               @click.stop="handleChildClick(item)"
             >
               <span class="fold-time">{{ formatDateTime(item.timestamp) }}</span>
               <el-tag :type="getLevelType(item.level)" size="small">{{ getLevelText(item.level) }}</el-tag>
               <span class="fold-msg">{{ getSummary(item) }}</span>
+              <el-tag v-if="item.is_acked" type="success" size="small" effect="plain" class="ack-badge">已确认</el-tag>
+              <el-button v-else size="small" text type="success" class="ack-btn" @click.stop="handleAckSingle(item)">
+                <el-icon><Check /></el-icon>确认
+              </el-button>
               <el-icon class="row-arrow"><ArrowRight /></el-icon>
             </div>
           </div>
@@ -48,7 +61,7 @@
 </template>
 
 <script setup>
-import { ArrowRight } from '@element-plus/icons-vue'
+import { ArrowRight, Check } from '@element-plus/icons-vue'
 import { translateAlert, getObserverName, LEVEL_LABELS, LEVEL_TAG_TYPES } from '@/utils/alertTranslator'
 import { useAlertFolding } from '@/composables/useAlertFolding'
 import { toRef } from 'vue'
@@ -64,7 +77,7 @@ const props = defineProps({
   emptyText: { type: String, default: '暂无告警' },
 })
 
-const emit = defineEmits(['select'])
+const emit = defineEmits(['select', 'ack'])
 
 const { foldedAlerts, toggleExpand } = useAlertFolding(toRef(props, 'alerts'))
 
@@ -74,6 +87,23 @@ function handleToggle(group) {
 
 function handleChildClick(item) {
   emit('select', item)
+}
+
+function handleAckSingle(item) {
+  if (item.id) {
+    emit('ack', { alertIds: [item.id] })
+  }
+}
+
+function handleAckGroup(group) {
+  const ids = group.items.filter(i => i.id && !i.is_acked).map(i => i.id)
+  if (ids.length) {
+    emit('ack', { alertIds: ids })
+  }
+}
+
+function isGroupAllAcked(group) {
+  return group.items.every(i => i.is_acked)
 }
 
 function getLevelType(level) {
@@ -241,6 +271,27 @@ function formatDateTime(timestamp) {
   max-height: 2000px;
 }
 
+/* Ack button / badge */
+.ack-btn {
+  flex-shrink: 0;
+  padding: 2px 6px;
+  font-size: 12px;
+}
+
+.ack-badge {
+  flex-shrink: 0;
+  font-size: 11px;
+}
+
+.is-acked {
+  opacity: 0.6;
+}
+
+.is-acked .fold-msg {
+  text-decoration: line-through;
+  color: var(--el-text-color-placeholder);
+}
+
 /* ─── Compact mode adjustments (for dashboard sidebar) ─── */
 .compact .fold-item {
   padding: 8px 10px;
@@ -252,7 +303,11 @@ function formatDateTime(timestamp) {
 }
 
 .compact .fold-array {
-  display: none;
+  max-width: 80px;
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .compact .fold-obs {

@@ -26,6 +26,7 @@ from .api.traffic import router as traffic_router
 from .api.task_session import router as task_session_router
 from .api.timeline import router as timeline_router
 from .api.snapshot import router as snapshot_router
+from .api.acknowledgements import router as ack_router
 from .core.ssh_pool import get_ssh_pool
 from .core.scheduler import get_scheduler
 
@@ -214,6 +215,7 @@ def create_app() -> FastAPI:
     app.include_router(task_session_router, prefix="/api")
     app.include_router(timeline_router, prefix="/api")
     app.include_router(snapshot_router, prefix="/api")
+    app.include_router(ack_router, prefix="/api")
     app.include_router(ws_router)
     
     # Health check endpoint

@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional
 import json
 
 from pydantic import BaseModel, ConfigDict, field_validator
-from sqlalchemy import Column, Integer, String, DateTime, Text, Index
+from sqlalchemy import Column, Integer, String, DateTime, Text, Index, ForeignKey
 from sqlalchemy.sql import func
 
 from ..db.database import Base
@@ -75,6 +75,7 @@ class AlertResponse(AlertBase):
     id: int
     array_id: str
     array_name: Optional[str] = None
+    is_acked: bool = False
     created_at: datetime
     
     model_config = ConfigDict(from_attributes=True)
@@ -95,4 +96,40 @@ class Alert(AlertBase):
     array_id: str
     array_name: Optional[str] = None
     
+    model_config = ConfigDict(from_attributes=True)
+
+
+# ---------------------------------------------------------------------------
+# Alert Acknowledgement
+# ---------------------------------------------------------------------------
+
+class AlertAckModel(Base):
+    """Alert acknowledgement record"""
+    __tablename__ = "alert_acknowledgements"
+
+    id = Column(Integer, primary_key=True, index=True)
+    alert_id = Column(Integer, ForeignKey("alerts.id", ondelete="CASCADE"), nullable=False, index=True)
+    acked_by_ip = Column(String(64), nullable=False)
+    acked_at = Column(DateTime, server_default=func.now())
+    comment = Column(Text, default="")
+
+    __table_args__ = (
+        Index('ix_ack_alert_id', 'alert_id'),
+    )
+
+
+class AlertAckCreate(BaseModel):
+    """Schema for creating acknowledgements (batch)"""
+    alert_ids: List[int]
+    comment: str = ""
+
+
+class AlertAckResponse(BaseModel):
+    """Schema for acknowledgement response"""
+    id: int
+    alert_id: int
+    acked_by_ip: str
+    acked_at: datetime
+    comment: str = ""
+
     model_config = ConfigDict(from_attributes=True)

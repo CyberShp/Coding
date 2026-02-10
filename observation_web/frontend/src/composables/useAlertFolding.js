@@ -130,6 +130,7 @@ export function useAlertFolding(alerts) {
           key,
           observer: alert.observer_name,
           arrayId: alert.array_id,
+          arrayName: alert.array_name || alert.array_id,
           summaryMsg: getTranslatedSummary(alert),
           latestTime: alert.timestamp,
           worstLevel: alert.level,

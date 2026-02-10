@@ -73,6 +73,7 @@
           :alerts="alerts"
           :show-array-id="true"
           @select="openDrawer"
+          @ack="handleAck"
         />
       </div>
 
@@ -108,7 +109,7 @@
       </div>
 
       <!-- 告警详情抽屉 -->
-      <AlertDetailDrawer v-model="drawerVisible" :alert="selectedAlert" />
+      <AlertDetailDrawer v-model="drawerVisible" :alert="selectedAlert" @ack-changed="onAckChanged" />
 
       <!-- Pagination -->
       <el-pagination
@@ -176,6 +177,23 @@ function getTranslatedSummary(row) {
 function openDrawer(row) {
   selectedAlert.value = row
   drawerVisible.value = true
+}
+
+async function handleAck({ alertIds }) {
+  try {
+    await api.ackAlerts(alertIds)
+    ElMessage.success('已确认')
+    alerts.value.forEach(a => {
+      if (alertIds.includes(a.id)) a.is_acked = true
+    })
+  } catch (e) {
+    ElMessage.error('确认失败: ' + (e.response?.data?.detail || e.message))
+  }
+}
+
+function onAckChanged({ alertId, acked }) {
+  const a = alerts.value.find(x => x.id === alertId)
+  if (a) a.is_acked = acked
 }
 
 function formatDateTime(timestamp) {

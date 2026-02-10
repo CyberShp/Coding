@@ -342,10 +342,26 @@ function translateLinkStatus(alert) {
 // ============ memory_leak ============
 function translateMemoryLeak(alert) {
   const details = alert.details || {}
-  const pct = details.current_percent || '?'
-  const thresh = details.threshold || '?'
+  const process = details.process || ''
+  const rssMb = details.current_rss_mb
+  const growthRate = details.rss_growth_mb_per_hour
+  const hours = details.duration_hours
+  const pct = details.current_percent
+
+  let event = ''
+  if (rssMb != null) {
+    event = `内存泄漏检测：${process ? process + ' ' : ''}当前 RSS ${rssMb} MB`
+    if (growthRate != null) event += `，增长速率 ${growthRate} MB/h`
+    if (hours != null) event += `，持续 ${hours} 小时`
+  } else if (pct != null) {
+    const thresh = details.threshold || '?'
+    event = `内存使用率持续上升，当前 ${pct}%（阈值 ${thresh}%）`
+  } else {
+    event = alert.message || '内存泄漏检测告警'
+  }
+
   return makeResult({
-    event: `内存使用率持续上升，当前 ${pct}%（阈值 ${thresh}%）`,
+    event,
     impact: '系统可用内存减少，可能导致 OOM 或进程被杀',
     suggestion: '检查是否有内存泄漏进程，使用 top/htop 排查',
     original: alert.message || '',
@@ -355,19 +371,27 @@ function translateMemoryLeak(alert) {
 // ============ cpu_usage ============
 function translateCpuUsage(alert) {
   const details = alert.details || {}
-  const pct = details.current_percent || '?'
-  const thresh = details.threshold || '?'
+  // Support both field names: cpu_usage (from observer) and current_percent (legacy)
+  const pct = details.cpu_usage ?? details.current_percent
+  const thresh = details.threshold
   const isNormal = alert.level === 'info'
+  const topProcs = details.top_processes || []
+
   if (isNormal) {
     return makeResult({
-      event: `CPU 使用率正常：${pct}%`,
+      event: pct != null ? `CPU 使用率恢复正常：${pct}%` : 'CPU 使用率正常',
       impact: '系统运行正常',
       suggestion: '',
       original: alert.message || '',
     })
   }
+
+  let event = pct != null ? `CPU 使用率达到 ${pct}%` : 'CPU 使用率过高'
+  if (thresh != null) event += `（阈值 ${thresh}%）`
+  if (topProcs.length > 0) event += `，高占用：${topProcs.slice(0, 3).join('、')}`
+
   return makeResult({
-    event: `CPU0 使用率达到 ${pct}%（阈值 ${thresh}%）`,
+    event,
     impact: '系统响应变慢，IO 延迟可能增大',
     suggestion: '使用 top 检查高占用进程，确认是否为测试预期',
     original: alert.message || '',

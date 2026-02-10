@@ -86,7 +86,9 @@ class AlertStore:
         limit: int = 100,
         offset: int = 0,
     ) -> List[AlertModel]:
-        """Query alerts with filters"""
+        """Query alerts with filters, each with an ``is_acked`` attribute."""
+        from ..models.alert import AlertAckModel
+
         query = select(AlertModel)
         
         conditions = []
@@ -108,7 +110,21 @@ class AlertStore:
         query = query.offset(offset).limit(limit)
         
         result = await db.execute(query)
-        return result.scalars().all()
+        alerts = result.scalars().all()
+
+        # Batch-check acknowledgement status (single extra query)
+        if alerts:
+            alert_ids = [a.id for a in alerts]
+            ack_result = await db.execute(
+                select(AlertAckModel.alert_id).where(
+                    AlertAckModel.alert_id.in_(alert_ids)
+                )
+            )
+            acked_ids = {row[0] for row in ack_result.all()}
+            for alert in alerts:
+                alert.is_acked = alert.id in acked_ids
+        
+        return alerts
     
     async def get_alert_count(
         self,

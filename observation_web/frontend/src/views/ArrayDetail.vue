@@ -77,6 +77,16 @@
               <el-tag :type="issue.level === 'error' || issue.level === 'critical' ? 'danger' : 'warning'" size="small">
                 {{ issue.level === 'error' || issue.level === 'critical' ? '错误' : '警告' }}
               </el-tag>
+              <el-button
+                v-if="issue.alert_id"
+                size="small"
+                type="success"
+                text
+                class="issue-ack-btn"
+                @click.stop="handleAckIssue(issue)"
+              >
+                <el-icon><Check /></el-icon> 确认消除
+              </el-button>
             </div>
             <div class="issue-message">{{ issue.message }}</div>
             <div class="issue-meta">
@@ -106,6 +116,7 @@
           :show-array-id="false"
           empty-text="暂无告警，请刷新以同步"
           @select="openAlertDrawer"
+          @ack="handleAck"
         />
       </el-card>
 
@@ -220,7 +231,7 @@
       </el-card>
 
       <!-- 告警详情抽屉 -->
-      <AlertDetailDrawer v-model="drawerVisible" :alert="selectedAlert" />
+      <AlertDetailDrawer v-model="drawerVisible" :alert="selectedAlert" @ack-changed="onAckChanged" />
 
       <!-- Log Viewer -->
       <el-card class="log-card" v-if="array.state === 'connected'">
@@ -271,7 +282,7 @@
 import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { Refresh, ArrowRight, CircleCheck } from '@element-plus/icons-vue'
+import { Refresh, ArrowRight, CircleCheck, Check } from '@element-plus/icons-vue'
 import { useArrayStore } from '../stores/arrays'
 import api from '../api'
 import LogViewer from '../components/LogViewer.vue'
@@ -313,6 +324,22 @@ function getAlertTranslation(alert) {
   return translateAlert(alert)
 }
 
+async function handleAckIssue(issue) {
+  if (!issue.alert_id) return
+  try {
+    await api.ackAlerts([issue.alert_id])
+    ElMessage.success('已确认消除')
+    // Remove from local active issues immediately
+    if (array.value?.active_issues) {
+      array.value.active_issues = array.value.active_issues.filter(
+        i => i.key !== issue.key
+      )
+    }
+  } catch (e) {
+    ElMessage.error('确认失败: ' + (e.response?.data?.detail || e.message))
+  }
+}
+
 function openIssueDetail(issue) {
   // Build a pseudo-alert object from the issue for the drawer
   selectedAlert.value = {
@@ -343,6 +370,32 @@ function formatRelativeTime(ts) {
 function openAlertDrawer(alert) {
   selectedAlert.value = alert
   drawerVisible.value = true
+}
+
+async function handleAck({ alertIds }) {
+  try {
+    await api.ackAlerts(alertIds)
+    ElMessage.success('已确认')
+    recentAlerts.value.forEach(a => {
+      if (alertIds.includes(a.id)) a.is_acked = true
+    })
+    // Also remove from active issues if applicable
+    if (array.value?.active_issues) {
+      // Refresh to get updated active issues
+      await loadArray()
+    }
+  } catch (e) {
+    ElMessage.error('确认失败: ' + (e.response?.data?.detail || e.message))
+  }
+}
+
+function onAckChanged({ alertId, acked }) {
+  const a = recentAlerts.value.find(x => x.id === alertId)
+  if (a) a.is_acked = acked
+  // Refresh active issues when ack status changes
+  if (array.value?.array_id) {
+    loadArray()
+  }
 }
 
 async function loadRecentAlerts() {
@@ -671,6 +724,11 @@ onUnmounted(() => {
 
 .issue-since {
   font-style: italic;
+}
+
+.issue-ack-btn {
+  margin-left: auto;
+  font-size: 12px;
 }
 
 .issues-empty {

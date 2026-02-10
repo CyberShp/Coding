@@ -102,14 +102,13 @@
                     Agent
                   </span>
                 </div>
-                <div class="tile-observers" v-if="arr.observer_status && Object.keys(arr.observer_status).length > 0">
-                  <span 
-                    v-for="(obs, name) in arr.observer_status" 
-                    :key="name"
-                    class="obs-dot"
-                    :class="`obs-${obs.status}`"
-                    :title="`${name}: ${obs.status}`"
-                  ></span>
+                <div class="tile-issues" v-if="(arr.active_issues || []).length > 0">
+                  <el-tag type="danger" size="small" effect="plain">
+                    {{ (arr.active_issues || []).length }} 个活跃问题
+                  </el-tag>
+                </div>
+                <div class="tile-issues" v-else-if="arr.state === 'connected'">
+                  <el-tag type="success" size="small" effect="plain">健康</el-tag>
                 </div>
               </div>
             </div>
@@ -145,6 +144,7 @@
               :show-array-id="true"
               :compact="true"
               @select="openAlertDrawer"
+              @ack="handleAck"
             />
           </div>
         </el-card>
@@ -152,7 +152,7 @@
     </el-row>
 
     <!-- 告警详情抽屉 -->
-    <AlertDetailDrawer v-model="drawerVisible" :alert="selectedAlert" />
+    <AlertDetailDrawer v-model="drawerVisible" :alert="selectedAlert" @ack-changed="onAckChanged" />
   </div>
 </template>
 
@@ -163,6 +163,7 @@ import { CanvasRenderer } from 'echarts/renderers'
 import { LineChart } from 'echarts/charts'
 import { GridComponent, TooltipComponent, LegendComponent } from 'echarts/components'
 import VChart from 'vue-echarts'
+import { ElMessage } from 'element-plus'
 import { Cpu, CircleCheck, Bell, Warning, Refresh } from '@element-plus/icons-vue'
 import { useArrayStore } from '../stores/arrays'
 import { useAlertStore } from '../stores/alerts'
@@ -226,16 +227,32 @@ function openAlertDrawer(alert) {
   drawerVisible.value = true
 }
 
+async function handleAck({ alertIds }) {
+  try {
+    await api.ackAlerts(alertIds)
+    ElMessage.success('已确认')
+    // Mark in-memory alerts as acked
+    alertStore.recentAlerts.forEach(a => {
+      if (alertIds.includes(a.id)) a.is_acked = true
+    })
+  } catch (e) {
+    ElMessage.error('确认失败: ' + (e.response?.data?.detail || e.message))
+  }
+}
 
-
+function onAckChanged({ alertId, acked }) {
+  const a = alertStore.recentAlerts.find(x => x.id === alertId)
+  if (a) a.is_acked = acked
+}
 
 function getArrayStatusClass(arr) {
   if (arr.state !== 'connected') return 'status-offline'
-  if (arr.observer_status) {
-    const hasError = Object.values(arr.observer_status).some(s => s.status === 'error')
+  // Use active_issues (which excludes acked and recovered alerts) as the primary health indicator
+  const issues = arr.active_issues || []
+  if (issues.length > 0) {
+    const hasError = issues.some(i => i.level === 'error' || i.level === 'critical')
     if (hasError) return 'status-error'
-    const hasWarning = Object.values(arr.observer_status).some(s => s.status === 'warning')
-    if (hasWarning) return 'status-warning'
+    return 'status-warning'
   }
   return 'status-ok'
 }
