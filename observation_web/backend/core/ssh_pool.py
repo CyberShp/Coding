@@ -84,17 +84,21 @@ class SSHConnection:
         return time.time() - self._connected_at
     
     def is_connected(self) -> bool:
-        """Check if connection is active, auto-reconnect if needed"""
+        """Check if connection is truly active using a real probe, auto-reconnect if needed"""
         if self._client is None:
             return False
         try:
             transport = self._client.get_transport()
-            if transport is not None and transport.is_active():
-                self._reconnect_attempts = 0  # Reset on successful check
-                return True
-            # Connection lost, try to reconnect
-            return self._try_reconnect()
-        except Exception:
+            if transport is None or not transport.is_active():
+                return self._try_reconnect()
+            # Probe the connection with a real command to detect stale sockets
+            # send_ignore is a lightweight SSH keepalive packet
+            transport.send_ignore()
+            self._reconnect_attempts = 0  # Reset on successful probe
+            return True
+        except (EOFError, OSError, Exception):
+            # Connection is truly dead — probe failed
+            logger.info(f"SSH probe failed for {self.host}, attempting reconnect")
             return self._try_reconnect()
     
     def _try_reconnect(self) -> bool:
@@ -216,9 +220,11 @@ class SSHConnection:
             stdin, stdout, stderr = self._client.exec_command(command, timeout=timeout)
             channel = stdout.channel
             channel.settimeout(timeout)  # Channel-level timeout for read operations
-            exit_code = channel.recv_exit_status()
+            # IMPORTANT: Read stdout/stderr BEFORE recv_exit_status() to avoid
+            # deadlock when the output buffer is full (paramiko known issue)
             out = stdout.read().decode('utf-8', errors='replace')
             err = stderr.read().decode('utf-8', errors='replace')
+            exit_code = channel.recv_exit_status()
             return (exit_code, out, err)
         except Exception as e:
             logger.error(f"Command execution failed: {e}")

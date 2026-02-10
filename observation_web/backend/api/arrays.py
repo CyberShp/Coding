@@ -947,27 +947,44 @@ async def refresh_array(
     if not conn or not conn.is_connected():
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Array not connected"
+            detail="阵列未连接或SSH连接已断开，请重新连接"
         )
     
     status_obj = _get_array_status(array_id)
     
-    # Check agent status
+    # Check agent status — wrap with timeout to prevent stale SSH hangs
     config = get_config()
     deployer = AgentDeployer(conn, config)
-    status_obj.agent_deployed = deployer.check_deployed()
-    status_obj.agent_running = deployer.check_running()
+    loop = asyncio.get_event_loop()
+    try:
+        status_obj.agent_deployed = await asyncio.wait_for(
+            loop.run_in_executor(None, deployer.check_deployed), timeout=10
+        )
+        status_obj.agent_running = await asyncio.wait_for(
+            loop.run_in_executor(None, deployer.check_running), timeout=10
+        )
+    except (asyncio.TimeoutError, Exception) as e:
+        logger.warning(f"Agent status check failed for {array_id}: {e}")
+        status_obj.agent_deployed = False
+        status_obj.agent_running = False
     
-    # Get detailed agent info
-    agent_info = deployer.get_agent_status()
-    status_obj.agent_running = agent_info.get("running", False)
+    # Get detailed agent info — also timeout-protected
+    try:
+        agent_info = await asyncio.wait_for(
+            loop.run_in_executor(None, deployer.get_agent_status), timeout=10
+        )
+        status_obj.agent_running = agent_info.get("running", False)
+    except (asyncio.TimeoutError, Exception) as e:
+        logger.warning(f"Agent info fetch failed for {array_id}: {e}")
+        agent_info = {"running": False}
+        status_obj.agent_running = False
     
     log_path = config.remote.agent_log_path
     new_alerts_count = 0
     
     try:
-        # Step 1: Get total line count of alerts.log
-        exit_code, total_str, _ = conn.execute(f"wc -l < {log_path} 2>/dev/null", timeout=5)
+        # Step 1: Get total line count of alerts.log (async with timeout protection)
+        exit_code, total_str, _ = await conn.execute_async(f"wc -l < {log_path} 2>/dev/null", timeout=5)
         if exit_code != 0:
             # File may not exist yet
             status_obj.last_refresh = datetime.now()
@@ -995,7 +1012,7 @@ async def refresh_array(
             # Step 2: Only read new lines using tail
             # Cap at 500 lines per sync to avoid large reads
             read_count = min(new_count, 500)
-            exit_code, content, _ = conn.execute(
+            exit_code, content, _ = await conn.execute_async(
                 f"tail -n {read_count} {log_path} 2>/dev/null", timeout=10
             )
         
@@ -1098,7 +1115,7 @@ async def refresh_array(
     try:
         from ..core.traffic_store import get_traffic_store
         traffic_path = config.remote.agent_log_path.replace('alerts.log', 'traffic.jsonl')
-        exit_code_t, traffic_content, _ = conn.execute(
+        exit_code_t, traffic_content, _ = await conn.execute_async(
             f"tail -n 200 {traffic_path} 2>/dev/null", timeout=10
         )
         if exit_code_t == 0 and traffic_content and traffic_content.strip():

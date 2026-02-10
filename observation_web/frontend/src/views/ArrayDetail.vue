@@ -336,7 +336,7 @@ async function handleAckIssue(issue) {
       )
     }
   } catch (e) {
-    ElMessage.error('确认失败: ' + (e.response?.data?.detail || e.message))
+    ElMessage.error('确认失败: ' + errMsg(e, '未知错误'))
   }
 }
 
@@ -385,7 +385,7 @@ async function handleAck({ alertIds }) {
       await loadArray()
     }
   } catch (e) {
-    ElMessage.error('确认失败: ' + (e.response?.data?.detail || e.message))
+    ElMessage.error('确认失败: ' + errMsg(e, '未知错误'))
   }
 }
 
@@ -441,6 +441,14 @@ function getStateText(state) {
     error: '错误',
   }
   return texts[state] || state
+}
+
+/** Safely extract error message string for ElMessage */
+function errMsg(error, fallback) {
+  const detail = error?.response?.data?.detail
+  if (typeof detail === 'string') return detail
+  if (typeof error?.message === 'string') return error.message
+  return fallback
 }
 
 function getLevelType(level) {
@@ -506,7 +514,7 @@ async function doConnect() {
     }
     await loadArray()
   } catch (error) {
-    ElMessage.error(error.response?.data?.detail || '连接失败')
+    ElMessage.error(errMsg(error, '连接失败'))
   } finally {
     connecting.value = false
   }
@@ -522,16 +530,23 @@ async function handleDisconnect() {
   }
 }
 
+// Mutex flag to prevent overlapping refreshes (manual + silent)
+let refreshInFlight = false
+
 async function handleRefresh() {
+  if (refreshInFlight) return
+  refreshInFlight = true
   refreshing.value = true
   try {
     await arrayStore.refreshArray(array.value.array_id)
     await loadArray()
     ElMessage.success('刷新成功')
   } catch (error) {
-    ElMessage.error('刷新失败')
+    const msg = error.response?.data?.detail || error.message || '刷新失败'
+    ElMessage.error(typeof msg === 'string' ? msg : '刷新失败')
   } finally {
     refreshing.value = false
+    refreshInFlight = false
   }
 }
 
@@ -542,7 +557,7 @@ async function handleDeployAgent() {
     ElMessage.success('部署成功')
     await loadArray()
   } catch (error) {
-    ElMessage.error(error.response?.data?.detail || '部署失败')
+    ElMessage.error(errMsg(error, '部署失败'))
   } finally {
     deploying.value = false
   }
@@ -555,7 +570,7 @@ async function handleStartAgent() {
     ElMessage.success('启动成功')
     await loadArray()
   } catch (error) {
-    ElMessage.error(error.response?.data?.detail || '启动失败')
+    ElMessage.error(errMsg(error, '启动失败'))
   } finally {
     starting.value = false
   }
@@ -568,7 +583,7 @@ async function handleRestartAgent() {
     ElMessage.success('重启成功')
     await loadArray()
   } catch (error) {
-    ElMessage.error(error.response?.data?.detail || '重启失败')
+    ElMessage.error(errMsg(error, '重启失败'))
   } finally {
     restarting.value = false
   }
@@ -581,7 +596,7 @@ async function handleStopAgent() {
     ElMessage.success('停止成功')
     await loadArray()
   } catch (error) {
-    ElMessage.error(error.response?.data?.detail || '停止失败')
+    ElMessage.error(errMsg(error, '停止失败'))
   } finally {
     stopping.value = false
   }
@@ -589,19 +604,32 @@ async function handleStopAgent() {
 
 // ───── Auto-refresh (30s silent) ─────
 let refreshTimer = null
+let silentRefreshFails = 0
+const MAX_SILENT_FAILS = 3
 
 async function silentRefresh() {
-  // Skip if page is hidden or a manual operation is in progress
+  // Skip if page is hidden, a manual operation is in progress, or another refresh is in flight
   if (document.hidden) return
   if (isOperating.value || refreshing.value || connecting.value) return
+  if (refreshInFlight) return
 
+  refreshInFlight = true
   try {
     const arrayId = route.params.id
     const response = await api.getArrayStatus(arrayId)
     array.value = response.data
     await loadRecentAlerts()
-  } catch {
-    // Silent — don't disturb the user
+    silentRefreshFails = 0 // reset on success
+  } catch (err) {
+    silentRefreshFails++
+    console.warn(`Silent refresh failed (${silentRefreshFails}/${MAX_SILENT_FAILS}):`, err.message)
+    if (silentRefreshFails >= MAX_SILENT_FAILS) {
+      // After repeated failures, show a non-intrusive warning and stop retrying until success
+      ElMessage.warning('自动刷新多次失败，请检查阵列连接状态')
+      silentRefreshFails = 0 // reset to allow future attempts
+    }
+  } finally {
+    refreshInFlight = false
   }
 }
 

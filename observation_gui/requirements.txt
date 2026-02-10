@@ -1,8 +1,0 @@
-# observation_gui 依赖
-# Tkinter 是 Python 内置，无需单独安装
-
-# SSH 连接
-paramiko>=2.7.0
-
-# Python 3.6 兼容 (如果需要在旧版本运行)
-dataclasses; python_version<'3.7'

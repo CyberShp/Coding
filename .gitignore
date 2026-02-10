@@ -29,3 +29,27 @@ dist/
 # 可选：若 config.json 含敏感信息可取消下一行注释
 # observation_points/config.json
 observation_web_advance/
+
+# 测试脚本与临时数据
+observation_web/seed_*.py
+observation_web/*.db
+observation_web/*.db-shm
+observation_web/*.db-wal
+
+# 覆盖率
+.coverage
+
+# 本地调试日志
+.cursor/debug.log
+
+# observation-manager 为独立仓库，不在主仓库跟踪
+observation-manager/
+
+# guitar-vocabulary 为独立项目
+guitar-vocabulary/
+
+# 旧版 GUI 项目（已迁移至 observation_web）
+observation_gui/
+
+# 旧测试报告
+测试评估报告.md
