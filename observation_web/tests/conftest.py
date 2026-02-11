@@ -42,15 +42,34 @@ async def db_session():
 
 @pytest_asyncio.fixture
 async def app_client():
-    """Create test client for API testing."""
+    """Create test client for API testing with a fresh in-memory database."""
+    import backend.db.database as db_mod
     from httpx import AsyncClient, ASGITransport
     from backend.main import create_app
 
-    # Initialize DB for the app
-    init_db()
-    await create_tables()
+    # Override engine to use in-memory DB so we always have the latest schema
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
+    session_factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+    # Patch the module-level globals used by the rest of the application
+    old_engine = db_mod._async_engine
+    old_session = db_mod.AsyncSessionLocal
+    db_mod._async_engine = engine
+    db_mod.AsyncSessionLocal = session_factory
+
+    # Import all models so Base.metadata is fully populated, then create tables
+    from backend.models import array, alert, query, lifecycle, scheduler, traffic, task_session, snapshot  # noqa: F401
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
 
     app = create_app()
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         yield client
+
+    # Teardown
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.drop_all)
+    await engine.dispose()
+    db_mod._async_engine = old_engine
+    db_mod.AsyncSessionLocal = old_session

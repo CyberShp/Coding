@@ -107,6 +107,9 @@
                     {{ (arr.active_issues || []).length }} 个活跃问题
                   </el-tag>
                 </div>
+                <div class="tile-issues" v-else-if="getArrayStatusClass(arr) === 'status-attention'">
+                  <el-tag type="warning" size="small" effect="plain">近期有告警，需关注</el-tag>
+                </div>
                 <div class="tile-issues" v-else-if="arr.state === 'connected'">
                   <el-tag type="success" size="small" effect="plain">健康</el-tag>
                 </div>
@@ -247,13 +250,19 @@ function onAckChanged({ alertId, acked }) {
 
 function getArrayStatusClass(arr) {
   if (arr.state !== 'connected') return 'status-offline'
-  // Use active_issues (which excludes acked and recovered alerts) as the primary health indicator
+  // Use active_issues as the primary health indicator
   const issues = arr.active_issues || []
   if (issues.length > 0) {
     const hasError = issues.some(i => i.level === 'error' || i.level === 'critical')
     if (hasError) return 'status-error'
     return 'status-warning'
   }
+  // Secondary: check recent alerts in last 2 hours for errors/warnings
+  const summary = arr.recent_alert_summary || {}
+  const recentErrors = (summary.error || 0) + (summary.critical || 0)
+  if (recentErrors > 0) return 'status-attention'
+  const recentWarnings = summary.warning || 0
+  if (recentWarnings > 0) return 'status-warning'
   return 'status-ok'
 }
 
@@ -420,6 +429,7 @@ onMounted(loadData)
 }
 
 .tile-status-bar.status-ok { background: #67c23a; }
+.tile-status-bar.status-attention { background: #f39c12; }
 .tile-status-bar.status-warning { background: #e6a23c; }
 .tile-status-bar.status-error { background: #f56c6c; }
 .tile-status-bar.status-offline { background: #dcdfe6; }

@@ -210,14 +210,22 @@
         <!-- Already acknowledged -->
         <div v-else-if="ackInfo" class="ack-details">
           <el-descriptions :column="1" border size="small">
+            <el-descriptions-item label="确认类型">
+              <el-tag size="small" :type="ackTypeTagType(ackInfo.ack_type)">
+                {{ ackTypeLabel(ackInfo.ack_type) }}
+              </el-tag>
+            </el-descriptions-item>
             <el-descriptions-item label="确认人 IP">
               <code>{{ ackInfo.acked_by_ip }}</code>
             </el-descriptions-item>
             <el-descriptions-item label="确认时间">
               {{ formatTime(ackInfo.acked_at) }}
             </el-descriptions-item>
-            <el-descriptions-item v-if="ackInfo.comment" label="备注">
-              {{ ackInfo.comment }}
+            <el-descriptions-item v-if="ackInfo.ack_expires_at" label="过期时间">
+              {{ formatTime(ackInfo.ack_expires_at) }}
+            </el-descriptions-item>
+            <el-descriptions-item v-if="ackInfo.comment || ackInfo.note" label="备注">
+              {{ ackInfo.note || ackInfo.comment }}
             </el-descriptions-item>
           </el-descriptions>
           <el-button
@@ -230,8 +238,21 @@
           >撤销确认</el-button>
         </div>
 
-        <!-- Not acknowledged -->
+        <!-- Not acknowledged — 3-type selector -->
         <div v-else class="ack-form">
+          <el-radio-group v-model="ackType" style="margin-bottom:10px">
+            <el-radio-button value="dismiss">暂时忽略 (24h)</el-radio-button>
+            <el-radio-button value="confirmed_ok">确认无问题</el-radio-button>
+            <el-radio-button value="deferred">延期处理</el-radio-button>
+          </el-radio-group>
+          <div v-if="ackType === 'deferred'" style="margin-bottom:10px">
+            <el-select v-model="deferHours" placeholder="延期时间" style="width:200px">
+              <el-option label="1 天后" :value="24" />
+              <el-option label="3 天后" :value="72" />
+              <el-option label="7 天后" :value="168" />
+              <el-option label="30 天后" :value="720" />
+            </el-select>
+          </div>
           <el-input
             v-model="ackComment"
             type="textarea"
@@ -244,7 +265,8 @@
             :loading="ackActing"
             @click="handleAck"
           >
-            <el-icon><Check /></el-icon> 确认非问题
+            <el-icon><Check /></el-icon>
+            {{ ackType === 'dismiss' ? '暂时忽略' : ackType === 'confirmed_ok' ? '确认无问题' : '延期处理' }}
           </el-button>
         </div>
       </el-card>
@@ -283,6 +305,20 @@ const ackInfo = ref(null)
 const ackLoading = ref(false)
 const ackActing = ref(false)
 const ackComment = ref('')
+const ackType = ref('dismiss')      // dismiss | confirmed_ok | deferred
+const deferHours = ref(72)          // default 3 days
+
+const ACK_TYPE_LABELS = {
+  dismiss: '暂时忽略',
+  confirmed_ok: '确认无问题',
+  deferred: '延期处理',
+}
+function ackTypeLabel(t) { return ACK_TYPE_LABELS[t] || t || '暂时忽略' }
+function ackTypeTagType(t) {
+  if (t === 'confirmed_ok') return 'success'
+  if (t === 'deferred') return 'warning'
+  return 'info'
+}
 
 const translated = computed(() => translateAlert(props.alert))
 const isAlarmType = computed(() => props.alert?.observer_name === 'alarm_type')
@@ -334,7 +370,13 @@ async function handleAck() {
   if (!alertId) return
   ackActing.value = true
   try {
-    await api.ackAlerts([alertId], ackComment.value)
+    const opts = {
+      ack_type: ackType.value,
+    }
+    if (ackType.value === 'deferred') {
+      opts.expires_hours = deferHours.value
+    }
+    await api.ackAlerts([alertId], ackComment.value, opts)
     ElMessage.success('已确认')
     await loadAckDetails(alertId)
     emit('ack-changed', { alertId, acked: true })

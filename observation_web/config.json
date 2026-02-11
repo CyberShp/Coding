@@ -19,6 +19,8 @@
   "remote": {
     "agent_deploy_path": "/OSM/coffer_data/observation_points",
     "agent_log_path": "/var/log/observation-points/alerts.log",
-    "python_cmd": "python3"
+    "python_cmd": "python3",
+    "upload_staging_path": "/home/permitdir",
+    "auto_redeploy": true
   }
 }

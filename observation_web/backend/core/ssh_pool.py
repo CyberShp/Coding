@@ -7,6 +7,7 @@ Supports auto-reconnect, idle timeout, and async command execution.
 
 import asyncio
 import logging
+import socket
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -30,6 +31,23 @@ except ImportError:
 
 # Thread pool for async SSH operations
 _executor = ThreadPoolExecutor(max_workers=20, thread_name_prefix="ssh-worker")
+
+
+def tcp_probe(host: str, port: int = 22, timeout: float = 2.0) -> bool:
+    """
+    Lightweight TCP connectivity check.
+
+    Attempts a TCP connect to *host:port*.  Returns ``True`` if the
+    three-way handshake succeeds within *timeout* seconds, ``False``
+    otherwise.  Much faster and cheaper than a full SSH handshake and
+    avoids blocking when the remote host is unreachable (e.g. during a
+    reboot).
+    """
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except (OSError, socket.timeout):
+        return False
 
 
 class SSHConnection:
@@ -84,36 +102,61 @@ class SSHConnection:
         return time.time() - self._connected_at
     
     def is_connected(self) -> bool:
-        """Check if connection is truly active using a real probe, auto-reconnect if needed"""
+        """
+        Lightweight, **non-blocking** connection check.
+
+        Returns ``True`` only when the underlying paramiko transport
+        reports *is_active()*.  Does **not** probe the connection or
+        attempt reconnect — use :meth:`check_alive` or
+        :meth:`ensure_connected` for that.
+        """
         if self._client is None:
             return False
         try:
             transport = self._client.get_transport()
-            if transport is None or not transport.is_active():
-                return self._try_reconnect()
-            # Probe the connection with a real command to detect stale sockets
-            # send_ignore is a lightweight SSH keepalive packet
+            return transport is not None and transport.is_active()
+        except Exception:
+            return False
+
+    def check_alive(self) -> bool:
+        """
+        Probe the connection with an SSH ``send_ignore`` packet.
+
+        Returns ``True`` when the probe succeeds.  On failure the
+        connection state is moved to ``DISCONNECTED`` so that
+        subsequent :meth:`is_connected` calls reflect reality.
+        Does **not** attempt reconnect.
+        """
+        if not self.is_connected():
+            return False
+        try:
+            transport = self._client.get_transport()
             transport.send_ignore()
-            self._reconnect_attempts = 0  # Reset on successful probe
+            self._reconnect_attempts = 0  # healthy probe
             return True
         except (EOFError, OSError, Exception):
-            # Connection is truly dead — probe failed
-            logger.info(f"SSH probe failed for {self.host}, attempting reconnect")
-            return self._try_reconnect()
-    
-    def _try_reconnect(self) -> bool:
-        """Attempt to reconnect if credentials are available"""
-        if self._reconnect_attempts >= self.MAX_RECONNECT_ATTEMPTS:
-            logger.warning(f"Max reconnect attempts reached for {self.host}")
+            logger.info(f"SSH probe failed for {self.host}")
+            self._mark_disconnected()
             return False
-        
-        if not self.password and not self.key_path:
-            return False
-        
-        self._reconnect_attempts += 1
-        logger.info(f"Attempting reconnect to {self.host} (attempt {self._reconnect_attempts})")
-        
-        # Close existing connection
+
+    def ensure_connected(self) -> bool:
+        """
+        Make sure the connection is alive, reconnecting if necessary.
+
+        Call this from **user-initiated** flows (connect button, manual
+        refresh) where blocking is acceptable.  Background / periodic
+        tasks should prefer :meth:`check_alive` + TCP probe instead.
+        """
+        if self.check_alive():
+            return True
+        return self._try_reconnect()
+
+    def _mark_disconnected(self):
+        """
+        Silently move state to DISCONNECTED and tear down the
+        transport.  Does **not** log at WARNING level — the caller
+        decides how to report.
+        """
         if self._sftp:
             try:
                 self._sftp.close()
@@ -126,15 +169,44 @@ class SSHConnection:
             except Exception:
                 pass
             self._client = None
+        self._state = ConnectionState.DISCONNECTED
+
+    def _try_reconnect(self) -> bool:
+        """Attempt to reconnect if credentials are available"""
+        if self._reconnect_attempts >= self.MAX_RECONNECT_ATTEMPTS:
+            logger.warning(f"Max reconnect attempts reached for {self.host}")
+            return False
+        
+        if not self.password and not self.key_path:
+            return False
+
+        # TCP pre-check: fail fast if the host is unreachable
+        if not tcp_probe(self.host, self.port, timeout=2.0):
+            logger.info(f"TCP probe failed for {self.host}:{self.port}, skipping SSH reconnect")
+            self._state = ConnectionState.DISCONNECTED
+            return False
+        
+        self._reconnect_attempts += 1
+        logger.info(f"Attempting reconnect to {self.host} (attempt {self._reconnect_attempts})")
+        
+        # Close existing connection
+        self._mark_disconnected()
         
         # Reconnect
         return self.connect()
     
     def connect(self) -> bool:
-        """Establish SSH connection"""
+        """Establish SSH connection (with TCP pre-check to fail fast)"""
         if not PARAMIKO_AVAILABLE:
             self._state = ConnectionState.ERROR
             self._last_error = "paramiko not installed"
+            return False
+
+        # TCP pre-check: avoid a long SSH timeout when host is unreachable
+        if not tcp_probe(self.host, self.port, timeout=2.0):
+            self._state = ConnectionState.DISCONNECTED
+            self._last_error = f"Host {self.host}:{self.port} unreachable (TCP probe failed)"
+            logger.info(self._last_error)
             return False
         
         with self._lock:
@@ -169,6 +241,7 @@ class SSHConnection:
                 self._last_error = ""
                 self._last_activity = time.time()
                 self._connected_at = time.time()
+                self._reconnect_attempts = 0  # reset on fresh connect
                 logger.info(f"SSH connected to {self.host}:{self.port}")
                 return True
                 
@@ -211,7 +284,7 @@ class SSHConnection:
         Returns:
             (exit_code, stdout, stderr)
         """
-        if not self.is_connected():
+        if not self.ensure_connected():
             return (-1, "", "Not connected")
         
         self._last_activity = time.time()
@@ -250,7 +323,7 @@ class SSHConnection:
     
     def read_file(self, remote_path: str) -> Optional[str]:
         """Read remote file content via SSH exec (avoids SFTP permission issues)"""
-        if not self.is_connected():
+        if not self.ensure_connected():
             return None
         
         try:
@@ -280,7 +353,7 @@ class SSHConnection:
 
     def upload_file(self, local_path: str, remote_path: str) -> Tuple[bool, str]:
         """Upload local file to remote path"""
-        if not self.is_connected():
+        if not self.ensure_connected():
             return (False, "Not connected")
 
         try:

@@ -103,6 +103,8 @@ class ArrayStatus(BaseModel):
     observer_status: Dict[str, Dict[str, str]] = {}
     active_issues: List[Dict[str, Any]] = []
     recent_alerts: List[Dict[str, Any]] = []
+    # Counts of alerts by level in the last 2 hours (populated by status endpoints)
+    recent_alert_summary: Dict[str, int] = {}
 
 
 class Array(ArrayBase):

@@ -1,11 +1,16 @@
 """
 Alert acknowledgement API endpoints.
 
-Allows users to acknowledge alerts as "confirmed non-issue",
-track who acknowledged (by client IP), and undo acknowledgements.
+Allows users to acknowledge alerts with different types:
+- dismiss:      Temporarily hide (default, auto-expires in 24h)
+- confirmed_ok: Permanently confirmed as non-issue
+- deferred:     Acknowledged but needs revisiting (user-set expiry)
+
+Track who acknowledged (by client IP), and undo acknowledgements.
 """
 
 import logging
+from datetime import datetime, timedelta
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -14,11 +19,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..db.database import get_db
 from ..models.alert import (
-    AlertModel, AlertAckModel, AlertAckCreate, AlertAckResponse,
+    AlertModel, AlertAckModel, AlertAckCreate, AlertAckResponse, AckType,
 )
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/alerts", tags=["acknowledgements"])
+
+# Default expiry hours for dismiss type
+_DISMISS_DEFAULT_HOURS = 24
 
 
 @router.post("/ack", response_model=List[AlertAckResponse])
@@ -41,6 +49,19 @@ async def ack_alerts(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="alert_ids must not be empty",
         )
+
+    # Validate ack_type
+    valid_types = {t.value for t in AckType}
+    ack_type = body.ack_type if body.ack_type in valid_types else AckType.DISMISS.value
+
+    # Compute expiry
+    expires_at = None
+    if ack_type == AckType.DISMISS.value:
+        expires_at = datetime.now() + timedelta(hours=_DISMISS_DEFAULT_HOURS)
+    elif ack_type == AckType.DEFERRED.value:
+        hours = body.expires_hours or 72  # default 3 days for deferred
+        expires_at = datetime.now() + timedelta(hours=hours)
+    # confirmed_ok has no expiry (None)
 
     # Verify all alert IDs exist
     result = await db.execute(
@@ -69,6 +90,9 @@ async def ack_alerts(
             alert_id=alert_id,
             acked_by_ip=client_ip,
             comment=body.comment,
+            ack_type=ack_type,
+            ack_expires_at=expires_at,
+            note=body.comment,
         )
         db.add(ack)
         created.append(ack)

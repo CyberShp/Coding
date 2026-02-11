@@ -95,7 +95,12 @@ export default {
   exportAlerts: (params) => http.get('/alerts/export', { params, responseType: 'blob' }),
 
   // Alert Acknowledgement
-  ackAlerts: (alertIds, comment = '') => http.post('/alerts/ack', { alert_ids: alertIds, comment }),
+  ackAlerts: (alertIds, comment = '', opts = {}) => http.post('/alerts/ack', {
+    alert_ids: alertIds,
+    comment,
+    ack_type: opts.ack_type || 'dismiss',
+    ...(opts.expires_hours ? { expires_hours: opts.expires_hours } : {}),
+  }),
   unackAlert: (alertId) => http.delete(`/alerts/ack/${alertId}`),
   getAlertAckDetails: (alertId) => http.get(`/alerts/${alertId}/ack`),
 

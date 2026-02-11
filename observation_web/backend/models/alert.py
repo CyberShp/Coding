@@ -103,6 +103,13 @@ class Alert(AlertBase):
 # Alert Acknowledgement
 # ---------------------------------------------------------------------------
 
+class AckType(str, Enum):
+    """Acknowledgement type"""
+    DISMISS = "dismiss"            # Temporarily hide (default, expires in 24h)
+    CONFIRMED_OK = "confirmed_ok"  # Permanently confirmed as non-issue
+    DEFERRED = "deferred"          # Acknowledged but revisit later (user-set expiry)
+
+
 class AlertAckModel(Base):
     """Alert acknowledgement record"""
     __tablename__ = "alert_acknowledgements"
@@ -112,6 +119,9 @@ class AlertAckModel(Base):
     acked_by_ip = Column(String(64), nullable=False)
     acked_at = Column(DateTime, server_default=func.now())
     comment = Column(Text, default="")
+    ack_type = Column(String(32), default="dismiss")       # dismiss | confirmed_ok | deferred
+    ack_expires_at = Column(DateTime, nullable=True)        # NULL = no expiry (confirmed_ok)
+    note = Column(Text, default="")                         # Detailed reason / notes
 
     __table_args__ = (
         Index('ix_ack_alert_id', 'alert_id'),
@@ -122,6 +132,8 @@ class AlertAckCreate(BaseModel):
     """Schema for creating acknowledgements (batch)"""
     alert_ids: List[int]
     comment: str = ""
+    ack_type: str = "dismiss"           # dismiss | confirmed_ok | deferred
+    expires_hours: Optional[int] = None  # For deferred: hours until expiry
 
 
 class AlertAckResponse(BaseModel):
@@ -131,5 +143,8 @@ class AlertAckResponse(BaseModel):
     acked_by_ip: str
     acked_at: datetime
     comment: str = ""
+    ack_type: str = "dismiss"
+    ack_expires_at: Optional[datetime] = None
+    note: str = ""
 
     model_config = ConfigDict(from_attributes=True)

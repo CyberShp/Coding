@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status, Body, Query
 from pydantic import BaseModel
-from sqlalchemy import select, exists
+from sqlalchemy import select, exists, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import get_config
@@ -108,6 +108,27 @@ def _get_array_status(array_id: str) -> ArrayStatus:
     return _array_status_cache[array_id]
 
 
+async def _compute_recent_alert_summary(
+    db: AsyncSession, array_id: str, hours: int = 2
+) -> Dict[str, int]:
+    """
+    Return alert counts by level for the last *hours* hours.
+
+    Example return: ``{"error": 3, "warning": 5, "info": 12}``
+    """
+    from ..models.alert import AlertModel
+    from datetime import timedelta
+
+    cutoff = datetime.now() - timedelta(hours=hours)
+    result = await db.execute(
+        select(AlertModel.level, func.count())
+        .where(AlertModel.array_id == array_id)
+        .where(AlertModel.timestamp >= cutoff)
+        .group_by(AlertModel.level)
+    )
+    return {level: count for level, count in result.all()}
+
+
 # ---------------------------------------------------------------------------
 # Active Issues helpers
 # ---------------------------------------------------------------------------
@@ -123,6 +144,31 @@ _OBSERVER_TITLES = {
     'card_info': '卡件异常',
 }
 
+# ---------------------------------------------------------------------------
+# Recovery tracking — "recovery invalidates ack"
+# ---------------------------------------------------------------------------
+# Tracks when an observer/key last recovered for each array.
+# Key: (array_id, issue_key) -> recovery timestamp (ISO string).
+# When a new problem alert arrives for a key with a recorded recovery
+# timestamp, any existing ack older than the recovery is stale and should
+# be auto-invalidated.
+_recovery_timestamps: Dict[str, Dict[str, str]] = {}  # array_id -> {issue_key -> iso_ts}
+
+
+def _record_recovery(array_id: str, keys: List[str], timestamp: str):
+    """Record that the given issue keys have recovered at *timestamp*."""
+    bucket = _recovery_timestamps.setdefault(array_id, {})
+    for key in keys:
+        bucket[key] = timestamp
+
+
+def _pop_recovery(array_id: str, key: str) -> Optional[str]:
+    """Pop and return the recovery timestamp for *key*, or None."""
+    bucket = _recovery_timestamps.get(array_id)
+    if bucket:
+        return bucket.pop(key, None)
+    return None
+
 
 def _update_active_issues(status_obj: ArrayStatus, alert: dict):
     """
@@ -130,7 +176,7 @@ def _update_active_issues(status_obj: ArrayStatus, alert: dict):
 
     Rules per observer:
     * cpu_usage / pcie_bandwidth / card_info — if ``details.recovered`` is
-      truthy, remove all matching issues; otherwise upsert.
+      truthy, remove all matching issues and record recovery; otherwise upsert.
     * memory_leak — always upsert (no self-recovery).
     * alarm_type — rebuild from ``details.active_alarms`` list each time.
     """
@@ -138,6 +184,7 @@ def _update_active_issues(status_obj: ArrayStatus, alert: dict):
     if observer not in _ACTIVE_ISSUE_OBSERVERS:
         return
 
+    array_id = status_obj.array_id
     details = alert.get('details', {}) or {}
     level = alert.get('level', 'info')
     message = alert.get('message', '')
@@ -148,6 +195,14 @@ def _update_active_issues(status_obj: ArrayStatus, alert: dict):
     if observer == 'alarm_type':
         # Rebuild from active_alarms in details
         active_alarms = details.get('active_alarms', [])
+
+        # Detect which alarm keys disappeared (recovered)
+        old_keys = {i['key'] for i in issues if i.get('observer') == 'alarm_type'}
+        new_keys = {f"alarm_type:{al.get('alarm_id', '?')}" for al in active_alarms}
+        recovered_keys = old_keys - new_keys
+        if recovered_keys:
+            _record_recovery(array_id, list(recovered_keys), timestamp)
+
         # Remove all old alarm_type issues
         status_obj.active_issues = [i for i in issues if i.get('observer') != 'alarm_type']
         # Re-add currently active alarms
@@ -155,6 +210,8 @@ def _update_active_issues(status_obj: ArrayStatus, alert: dict):
             aid = al.get('alarm_id', '?')
             otype = al.get('obj_type', '')
             key = f"alarm_type:{aid}"
+            # Check if this key had a recovery → it's a relapse
+            _pop_recovery(array_id, key)
             status_obj.active_issues.append({
                 'key': key,
                 'observer': 'alarm_type',
@@ -167,28 +224,22 @@ def _update_active_issues(status_obj: ArrayStatus, alert: dict):
             })
         return
 
-    # For observers with recovery logic
-    recovered = details.get('recovered', False)
-    if recovered:
-        status_obj.active_issues = [
-            i for i in issues if i.get('observer') != observer
-        ]
-        return
+    # ---- Observers that always rebuild from their detail payload ----
+    # These must be processed regardless of alert level, because an info-level
+    # report with an empty list means "everything recovered".
 
-    # Only track WARNING / ERROR level alerts as active issues
-    if level not in ('warning', 'error', 'critical'):
-        return
-
-    if observer == 'cpu_usage':
-        key = 'cpu_usage'
-        _upsert_issue(status_obj, key, observer, level, message, details, timestamp)
-
-    elif observer == 'memory_leak':
-        key = 'memory_leak'
-        _upsert_issue(status_obj, key, observer, level, message, details, timestamp)
-
-    elif observer == 'pcie_bandwidth':
+    if observer == 'pcie_bandwidth':
         downgrades = details.get('downgrades', [])
+        # Detect recovered keys
+        old_keys = {i['key'] for i in status_obj.active_issues if i.get('observer') == 'pcie_bandwidth'}
+        new_keys = set()
+        for dg in downgrades:
+            dev = dg.split(' ')[0] if isinstance(dg, str) else '?'
+            new_keys.add(f"pcie_bandwidth:{dev}")
+        recovered_keys = old_keys - new_keys
+        if recovered_keys:
+            _record_recovery(array_id, list(recovered_keys), timestamp)
+
         # Remove old entries, re-add current ones
         status_obj.active_issues = [
             i for i in status_obj.active_issues if i.get('observer') != 'pcie_bandwidth'
@@ -196,6 +247,7 @@ def _update_active_issues(status_obj: ArrayStatus, alert: dict):
         for dg in downgrades:
             dev = dg.split(' ')[0] if isinstance(dg, str) else '?'
             key = f"pcie_bandwidth:{dev}"
+            _pop_recovery(array_id, key)  # relapse → invalidate ack
             status_obj.active_issues.append({
                 'key': key,
                 'observer': 'pcie_bandwidth',
@@ -206,9 +258,21 @@ def _update_active_issues(status_obj: ArrayStatus, alert: dict):
                 'since': timestamp,
                 'latest': timestamp,
             })
+        return
 
-    elif observer == 'card_info':
+    if observer == 'card_info':
         card_alerts = details.get('alerts', [])
+        # Detect recovered card keys
+        old_keys = {i['key'] for i in status_obj.active_issues if i.get('observer') == 'card_info'}
+        new_keys = set()
+        for ca in card_alerts:
+            card = ca.get('card', '?')
+            field = ca.get('field', '?')
+            new_keys.add(f"card_info:{card}:{field}")
+        recovered_keys = old_keys - new_keys
+        if recovered_keys:
+            _record_recovery(array_id, list(recovered_keys), timestamp)
+
         # Remove old entries, re-add current ones
         status_obj.active_issues = [
             i for i in status_obj.active_issues if i.get('observer') != 'card_info'
@@ -217,6 +281,7 @@ def _update_active_issues(status_obj: ArrayStatus, alert: dict):
             card = ca.get('card', '?')
             field = ca.get('field', '?')
             key = f"card_info:{card}:{field}"
+            _pop_recovery(array_id, key)  # relapse → invalidate ack
             board_id = ca.get('board_id', '')
             label = f"{card}"
             if board_id:
@@ -231,6 +296,32 @@ def _update_active_issues(status_obj: ArrayStatus, alert: dict):
                 'since': timestamp,
                 'latest': timestamp,
             })
+        return
+
+    # ---- Observers that use generic recovery logic ----
+
+    # For observers with recovery logic
+    recovered = details.get('recovered', False)
+    if recovered:
+        recovered_keys = [i['key'] for i in issues if i.get('observer') == observer]
+        _record_recovery(array_id, recovered_keys, timestamp)
+        status_obj.active_issues = [
+            i for i in issues if i.get('observer') != observer
+        ]
+        return
+
+    # Only track WARNING / ERROR level alerts as active issues
+    if level not in ('warning', 'error', 'critical'):
+        return
+
+    if observer == 'cpu_usage':
+        key = 'cpu_usage'
+        _pop_recovery(array_id, key)  # relapse after recovery → invalidate ack
+        _upsert_issue(status_obj, key, observer, level, message, details, timestamp)
+
+    elif observer == 'memory_leak':
+        key = 'memory_leak'
+        _upsert_issue(status_obj, key, observer, level, message, details, timestamp)
 
 
 def _upsert_issue(
@@ -261,7 +352,9 @@ async def _derive_active_issues_from_db(db: AsyncSession, array_id: str) -> List
     """
     Derive active issues from the DB when the in-memory cache is empty.
     Looks at the LATEST alert per relevant observer and checks its details.
-    Filters out alerts that have been acknowledged.
+    Filters out alerts that have been acknowledged — **unless** there is an
+    intermediate recovery event between the ack and the latest alert (the
+    "recovery invalidates ack" rule).
     Includes ``alert_id`` in each issue for frontend ack operations.
     """
     from ..models.alert import AlertModel, AlertAckModel
@@ -269,19 +362,20 @@ async def _derive_active_issues_from_db(db: AsyncSession, array_id: str) -> List
     issues: List[Dict[str, Any]] = []
 
     for obs_name in _ACTIVE_ISSUE_OBSERVERS:
-        # Get the LATEST alert for this observer (regardless of ack status)
+        # Get the 2 most recent alerts to detect intermediate recovery
         stmt = (
             select(AlertModel)
             .where(AlertModel.array_id == array_id)
             .where(AlertModel.observer_name == obs_name)
             .order_by(AlertModel.timestamp.desc())
-            .limit(1)
+            .limit(2)
         )
         row_result = await db.execute(stmt)
-        alert_row = row_result.scalar_one_or_none()
-        if not alert_row:
+        recent_rows = row_result.scalars().all()
+        if not recent_rows:
             continue
 
+        alert_row = recent_rows[0]  # latest
         alert_id = alert_row.id
 
         # Parse details
@@ -296,12 +390,49 @@ async def _derive_active_issues_from_db(db: AsyncSession, array_id: str) -> List
         if details.get('recovered'):
             continue
 
-        # Skip if the latest alert has been acknowledged
+        # Check ack on the latest alert
         ack_result = await db.execute(
-            select(AlertAckModel.id).where(AlertAckModel.alert_id == alert_id).limit(1)
+            select(AlertAckModel).where(AlertAckModel.alert_id == alert_id).limit(1)
         )
-        if ack_result.scalar_one_or_none() is not None:
-            continue
+        ack_row = ack_result.scalar_one_or_none()
+        if ack_row is not None:
+            # Ack exists — but check if there was an intermediate recovery
+            # If the second-most-recent alert shows recovery, the ack is stale
+            ack_is_stale = False
+            if len(recent_rows) >= 2:
+                prev_row = recent_rows[1]
+                prev_details = {}
+                if prev_row.details:
+                    try:
+                        prev_details = json.loads(prev_row.details) if isinstance(prev_row.details, str) else prev_row.details
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+                if prev_details.get('recovered'):
+                    ack_is_stale = True
+                # For card_info: if previous alert had fewer/different cards → recovery happened
+                if obs_name == 'card_info' and prev_row.level == 'info':
+                    ack_is_stale = True
+
+            # Also check in-memory recovery cache
+            recovery_ts = _recovery_timestamps.get(array_id, {}).get(obs_name)
+            if recovery_ts and ack_row.acked_at:
+                try:
+                    rec_dt = datetime.fromisoformat(recovery_ts)
+                    if rec_dt > ack_row.acked_at:
+                        ack_is_stale = True
+                except (ValueError, TypeError):
+                    pass
+
+            if not ack_is_stale:
+                continue  # ack is valid, skip this observer
+
+            # Ack is stale — auto-delete it so the alert resurfaces
+            try:
+                await db.delete(ack_row)
+                await db.flush()
+                logger.info(f"Auto-invalidated stale ack for alert {alert_id} (recovery detected)")
+            except Exception:
+                logger.debug(f"Failed to auto-delete stale ack for alert {alert_id}")
 
         level = alert_row.level or 'info'
         message = alert_row.message or ''
@@ -437,6 +568,9 @@ async def list_array_statuses(
         # Derive active_issues from DB if cache is empty
         if not status_obj.active_issues:
             status_obj.active_issues = await _derive_active_issues_from_db(db, array.array_id)
+
+        # Populate recent alert summary for dashboard health classification
+        status_obj.recent_alert_summary = await _compute_recent_alert_summary(db, array.array_id)
         
         statuses.append(status_obj)
     
@@ -775,10 +909,10 @@ async def get_array_status(
     status_obj.name = array.name
     status_obj.host = array.host
     
-    # Get connection state
+    # Get connection state — lightweight read, no SSH probe or reconnect
     conn = ssh_pool.get_connection(array_id)
     if conn:
-        status_obj.state = conn.state
+        status_obj.state = conn.state  # cached state, no network I/O
         status_obj.last_error = conn.last_error
     
     # If observer_status is empty, derive it from DB alerts
@@ -813,6 +947,9 @@ async def get_array_status(
     # Derive active_issues from DB if cache is empty
     if not status_obj.active_issues:
         status_obj.active_issues = await _derive_active_issues_from_db(db, array_id)
+
+    # Populate recent alert summary (last 2 hours) for health classification
+    status_obj.recent_alert_summary = await _compute_recent_alert_summary(db, array_id)
     
     return status_obj
 
@@ -942,13 +1079,35 @@ async def refresh_array(
     from ..models.alert import AlertCreate, AlertLevel
     from .websocket import broadcast_alert
     
+    from ..core.ssh_pool import tcp_probe
+
     conn = ssh_pool.get_connection(array_id)
-    
-    if not conn or not conn.is_connected():
+
+    if not conn:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="阵列未连接或SSH连接已断开，请重新连接"
+            detail="阵列未连接，请先添加并连接阵列"
         )
+
+    # Fast-fail: TCP probe before attempting any SSH operation
+    if not tcp_probe(conn.host, conn.port, timeout=2.0):
+        conn._mark_disconnected()
+        status_obj = _get_array_status(array_id)
+        status_obj.state = conn.state
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"阵列 {conn.host} 网络不可达，请检查阵列是否在线"
+        )
+
+    if not conn.check_alive():
+        # TCP OK but SSH dead — try one reconnect
+        if not conn._try_reconnect():
+            status_obj = _get_array_status(array_id)
+            status_obj.state = conn.state
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="SSH连接已断开且重连失败，请手动重新连接"
+            )
     
     status_obj = _get_array_status(array_id)
     

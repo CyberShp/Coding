@@ -127,16 +127,18 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { Search, Download, ArrowRight } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import api from '../api'
+import { useAlertStore } from '@/stores/alerts'
 import AlertDetailDrawer from '@/components/AlertDetailDrawer.vue'
 import FoldedAlertList from '@/components/FoldedAlertList.vue'
 import { translateAlert, getObserverName, OBSERVER_NAMES, LEVEL_LABELS, LEVEL_TAG_TYPES } from '@/utils/alertTranslator'
 
 const route = useRoute()
+const alertStore = useAlertStore()
 const loading = ref(false)
 const exporting = ref(false)
 const alerts = ref([])
@@ -263,6 +265,57 @@ async function exportAlerts() {
   }
 }
 
+// ───── Auto-refresh (60s) ─────
+let refreshTimer = null
+
+async function silentReloadAlerts() {
+  if (document.hidden || loading.value) return
+  try {
+    await loadAlerts()
+  } catch {
+    // Silent fail — next cycle will retry
+  }
+}
+
+// ───── WebSocket: prepend new alerts in real-time ─────
+// Watch the store's recentAlerts — when the store receives a WebSocket
+// alert it pushes to recentAlerts; we mirror new entries into our list.
+const _seenIds = new Set()
+
+watch(
+  () => alertStore.recentAlerts,
+  (newList) => {
+    if (!newList || newList.length === 0) return
+    const latest = newList[0]
+    if (!latest || _seenIds.has(latest.id)) return
+    _seenIds.add(latest.id)
+
+    // Apply current filter — skip if it doesn't match
+    if (filters.level && latest.level !== filters.level) return
+    if (filters.observer && latest.observer_name !== filters.observer) return
+
+    // Prepend to the alert list (only in flat mode)
+    if (!aggregateMode.value) {
+      alerts.value.unshift(latest)
+      // Keep list length within page size
+      if (alerts.value.length > pagination.size) {
+        alerts.value.pop()
+      }
+      pagination.total += 1
+    }
+
+    // Bump stats counters
+    if (stats.value) {
+      stats.value.total = (stats.value.total || 0) + 1
+      if (stats.value.by_level) {
+        const lvl = latest.level || 'info'
+        stats.value.by_level[lvl] = (stats.value.by_level[lvl] || 0) + 1
+      }
+    }
+  },
+  { deep: true }
+)
+
 onMounted(() => {
   // Apply filter from URL query params (e.g. ?level=error)
   if (route.query.level) {
@@ -272,6 +325,19 @@ onMounted(() => {
     filters.observer = route.query.observer
   }
   loadAlerts()
+
+  // Ensure WebSocket is connected (idempotent)
+  alertStore.connectWebSocket()
+
+  // Periodic full reload every 60 seconds
+  refreshTimer = setInterval(silentReloadAlerts, 60000)
+})
+
+onUnmounted(() => {
+  if (refreshTimer) {
+    clearInterval(refreshTimer)
+    refreshTimer = null
+  }
 })
 </script>
 

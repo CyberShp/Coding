@@ -15,7 +15,7 @@ from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from .config import get_config
-from .core.system_alert import sys_error, sys_warning
+from .core.system_alert import sys_error, sys_warning, sys_info
 from .db.database import init_db, create_tables
 from .api import arrays_router, alerts_router, query_router, ws_router
 from .api.system_alerts import router as system_alerts_router
@@ -42,6 +42,7 @@ logger = logging.getLogger(__name__)
 async def _idle_connection_cleaner():
     """Background task to clean up idle SSH connections and check agent health"""
     from .core.agent_deployer import AgentDeployer
+    from .core.ssh_pool import tcp_probe
     check_count = 0
     while True:
         try:
@@ -60,6 +61,28 @@ async def _idle_connection_cleaner():
             except Exception as e:
                 logger.debug(f"Traffic cleanup error: {e}")
 
+            # Every cycle: cleanup expired alert acknowledgements
+            try:
+                from .db.database import AsyncSessionLocal
+                from .models.alert import AlertAckModel
+                from sqlalchemy import delete as sa_delete
+                from datetime import datetime as _dt
+                if AsyncSessionLocal:
+                    async with AsyncSessionLocal() as session:
+                        result = await session.execute(
+                            sa_delete(AlertAckModel).where(
+                                AlertAckModel.ack_expires_at.isnot(None),
+                                AlertAckModel.ack_expires_at <= _dt.now(),
+                            )
+                        )
+                        if result.rowcount > 0:
+                            await session.commit()
+                            logger.info(f"Cleaned up {result.rowcount} expired alert acknowledgements")
+                        else:
+                            await session.commit()
+            except Exception as e:
+                logger.debug(f"Expired ack cleanup error: {e}")
+
             # Every 5 minutes (3rd iteration), check agent health on connected arrays
             check_count += 1
             if check_count % 3 == 0:  # 120s * 3 = ~360s ≈ 5 minutes
@@ -68,7 +91,29 @@ async def _idle_connection_cleaner():
                 for array_id, status_obj in list(_array_status_cache.items()):
                     try:
                         conn = ssh_pool.get_connection(array_id)
-                        if conn and conn.is_connected() and status_obj.agent_running:
+                        if not conn:
+                            continue
+
+                        # TCP pre-check: skip SSH entirely if host unreachable
+                        reachable = await asyncio.get_event_loop().run_in_executor(
+                            None, tcp_probe, conn.host, conn.port, 2.0
+                        )
+                        if not reachable:
+                            if conn.state.value == 'connected':
+                                conn._mark_disconnected()
+                                status_obj.state = conn.state
+                                logger.info(f"Array {array_id} ({conn.host}) unreachable (TCP), marked disconnected")
+                            continue
+
+                        # TCP OK → single SSH probe (no reconnect attempts)
+                        alive = conn.check_alive()
+                        if not alive:
+                            status_obj.state = conn.state
+                            logger.info(f"SSH probe failed for {array_id} despite TCP success")
+                            continue
+
+                        # SSH alive → check agent health
+                        if status_obj.agent_running:
                             deployer = AgentDeployer(conn, config)
                             still_running = deployer.check_running()
                             if not still_running:
@@ -79,6 +124,35 @@ async def _idle_connection_cleaner():
                                     f"Agent stopped unexpectedly on {array_id}",
                                     {"array_id": array_id, "host": status_obj.host}
                                 )
+
+                                # Auto-redeploy if enabled
+                                if config.remote.auto_redeploy:
+                                    try:
+                                        logger.info(f"Attempting auto-redeploy for {array_id}")
+                                        # Try start first (files may still exist)
+                                        if deployer.check_deployed():
+                                            result = deployer.start_agent()
+                                        else:
+                                            # Files missing (reboot cleared them) → full deploy
+                                            result = deployer.deploy()
+                                        if result.get("ok"):
+                                            status_obj.agent_running = True
+                                            status_obj.agent_deployed = True
+                                            logger.info(f"Auto-redeploy succeeded for {array_id}")
+                                            sys_info(
+                                                "health_check",
+                                                f"Agent auto-redeployed on {array_id}",
+                                                {"array_id": array_id, "host": status_obj.host}
+                                            )
+                                        else:
+                                            logger.warning(f"Auto-redeploy failed for {array_id}: {result.get('error')}")
+                                            sys_warning(
+                                                "health_check",
+                                                f"Agent auto-redeploy failed on {array_id}",
+                                                {"array_id": array_id, "error": result.get("error", "unknown")}
+                                            )
+                                    except Exception as e:
+                                        logger.warning(f"Auto-redeploy error for {array_id}: {e}")
                     except Exception as e:
                         logger.debug(f"Agent health check failed for {array_id}: {e}")
         except asyncio.CancelledError:

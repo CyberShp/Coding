@@ -38,31 +38,45 @@ class AgentDeployer:
             local_package = self._build_package()
             deploy_path = self.config.remote.agent_deploy_path
             deploy_parent = posixpath.dirname(deploy_path)
-            remote_package = posixpath.join(deploy_parent, "observation_points.tar.gz")
+            staging_dir = getattr(self.config.remote, 'upload_staging_path', '') or '/home/permitdir'
+            pkg_name = "observation_points.tar.gz"
+            staging_package = posixpath.join(staging_dir, pkg_name)
+            final_package = posixpath.join(deploy_parent, pkg_name)
 
-            # Step 1: Clean up old agent folder and old package before uploading
+            # Step 1: Clean up old agent folder and old package
             cleanup_commands = [
                 f"mkdir -p {deploy_parent}",
-                f"rm -f {remote_package}",
+                f"mkdir -p {staging_dir}",
+                f"rm -f {final_package}",
+                f"rm -f {staging_package}",
                 f"rm -rf {deploy_path}",
             ]
             ok, error = self._run_commands(cleanup_commands)
             if not ok:
                 return {"ok": False, "error": f"Cleanup failed: {error}"}
 
-            # Step 2: Upload new package
-            ok, error = self.conn.upload_file(local_package, remote_package)
+            # Step 2: Two-step upload — SFTP to staging, then cp to deploy dir
+            # This works around permission issues on /OSM/coffer_data
+            ok, error = self.conn.upload_file(local_package, staging_package)
             if not ok:
                 sys_error(
                     "agent_deployer",
-                    "Agent package upload failed",
-                    {"host": self.conn.host, "remote_path": remote_package, "error": error}
+                    "Agent package upload to staging failed",
+                    {"host": self.conn.host, "staging_path": staging_package, "error": error}
                 )
-                return {"ok": False, "error": f"Upload failed: {error}"}
+                return {"ok": False, "error": f"Upload to staging failed: {error}"}
+
+            # Copy from staging to final deploy directory
+            ok, error = self._run_commands([
+                f"cp {staging_package} {final_package}",
+                f"rm -f {staging_package}",  # cleanup staging
+            ])
+            if not ok:
+                return {"ok": False, "error": f"Copy from staging failed: {error}"}
 
             # Step 3: Extract and configure
             commands = [
-                f"tar -xzf {remote_package} -C {deploy_parent}",
+                f"tar -xzf {final_package} -C {deploy_parent}",
                 f"mkdir -p /etc/observation-points",
                 f"cp {deploy_path}/config.json /etc/observation-points/config.json",
             ]

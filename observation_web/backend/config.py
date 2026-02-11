@@ -39,6 +39,8 @@ class RemoteConfig:
     agent_deploy_path: str = "/OSM/coffer_data/observation_points"
     agent_log_path: str = "/var/log/observation-points/alerts.log"
     python_cmd: str = "python3"
+    upload_staging_path: str = "/home/permitdir"   # Staging dir for SFTP uploads (permission workaround)
+    auto_redeploy: bool = True                      # Auto-redeploy agent when it goes offline
 
 
 @dataclass
@@ -108,6 +110,8 @@ class AppConfig:
                 'agent_deploy_path': self.remote.agent_deploy_path,
                 'agent_log_path': self.remote.agent_log_path,
                 'python_cmd': self.remote.python_cmd,
+                'upload_staging_path': self.remote.upload_staging_path,
+                'auto_redeploy': self.remote.auto_redeploy,
             },
         }
         
