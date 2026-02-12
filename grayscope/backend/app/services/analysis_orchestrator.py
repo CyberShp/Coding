@@ -18,6 +18,7 @@ from app.analyzers import (
     boundary_value_analyzer,
     error_path_analyzer,
     call_graph_builder,
+    data_flow_analyzer,
     concurrency_analyzer,
     diff_impact_analyzer,
     coverage_mapper,
@@ -28,20 +29,25 @@ from app.analyzers.base import AnalyzeContext, ModuleResult
 from app.analyzers.code_parser import CodeParser
 from app.analyzers.registry import get_display_name
 from app.repositories import task_repo
-from app.services.ai_enrichment import enrich_module
+from app.services.ai_enrichment import enrich_module, synthesize_cross_module
 
 logger = logging.getLogger(__name__)
 
 # ── 模块依赖图 ──────────────────────────────────────────────────────────
 MODULE_DEPS: dict[str, list[str]] = {
+    # Phase A: 基础分析
     "branch_path": [],
     "boundary_value": [],
     "error_path": [],
     "call_graph": [],
-    "concurrency": ["call_graph"],
-    "diff_impact": ["call_graph"],
+    # Phase B: 数据流基础设施
+    "data_flow": ["call_graph"],
+    # Phase C: 上下文感知分析
+    "concurrency": ["call_graph", "data_flow"],
+    "diff_impact": ["call_graph", "data_flow"],
     "coverage_map": ["branch_path", "boundary_value", "error_path"],
-    "postmortem": [],        # 事后分析可独立运行（依赖缺陷输入，非上游模块）
+    # 事后分析
+    "postmortem": [],
     "knowledge_pattern": ["postmortem"],
 }
 
@@ -51,6 +57,7 @@ MODULE_WEIGHTS: dict[str, float] = {
     "boundary_value": 0.9,
     "error_path": 1.1,
     "call_graph": 0.6,
+    "data_flow": 1.2,
     "concurrency": 1.3,
     "diff_impact": 1.2,
     "coverage_map": 1.2,
@@ -64,6 +71,7 @@ _ANALYZER_REGISTRY: dict[str, Any] = {
     "boundary_value": boundary_value_analyzer,
     "error_path": error_path_analyzer,
     "call_graph": call_graph_builder,
+    "data_flow": data_flow_analyzer,
     "concurrency": concurrency_analyzer,
     "diff_impact": diff_impact_analyzer,
     "coverage_map": coverage_mapper,
@@ -202,22 +210,44 @@ def run_task(db: Session, task_id: str) -> None:
             artifacts = module_result["artifacts"]
             warnings = module_result["warnings"]
 
-            # AI 增强分析（尽力而为，不阻塞主流程）
+            # AI 增强分析
             ai_summary_data: dict[str, Any] = {}
-            if findings and ai_config:
+            ai_provider = ai_config.get("provider", "") if ai_config else ""
+            ai_model = ai_config.get("model", "") if ai_config else ""
+            ai_skip = not ai_provider or ai_provider.lower() in ("none", "", "skip")
+
+            if findings and not ai_skip:
+                logger.info(
+                    "开始 AI 增强 [%s] provider=%s model=%s findings=%d",
+                    get_display_name(mod_id), ai_provider, ai_model, len(findings),
+                )
                 try:
                     snippets = _collect_source_snippets(
                         ctx["workspace_path"], ctx["target"]
                     )
                     ai_summary_data = enrich_module(
-                        mod_id, findings, snippets, ai_config
+                        mod_id, findings, snippets, ai_config,
+                        upstream_results=upstream,
                     )
+                    if ai_summary_data.get("success"):
+                        logger.info("AI 增强成功 [%s]", get_display_name(mod_id))
+                    else:
+                        err = ai_summary_data.get("error") or ai_summary_data.get("ai_summary", "")
+                        logger.warning("AI 增强未成功 [%s]: %s", get_display_name(mod_id), err)
                 except Exception as ai_exc:
-                    logger.warning("AI 增强失败 [%s]: %s", get_display_name(mod_id), ai_exc)
+                    logger.warning("AI 增强异常 [%s]: %s", get_display_name(mod_id), ai_exc)
                     ai_summary_data = {
-                        "ai_summary": f"AI 增强不可用: {ai_exc}",
+                        "ai_summary": f"AI 增强失败: {ai_exc}",
                         "success": False,
+                        "error": str(ai_exc),
                     }
+            elif ai_skip:
+                logger.info("跳过 AI 增强 [%s]: provider=%s", get_display_name(mod_id), ai_provider)
+                ai_summary_data = {
+                    "ai_summary": "未启用 AI 增强（未选择 AI 模型）",
+                    "success": False,
+                    "skipped": True,
+                }
 
             task_repo.update_module_result(
                 db, mr.id,
@@ -242,6 +272,33 @@ def run_task(db: Session, task_id: str) -> None:
                 status="failed",
                 error_json=json.dumps({"error": str(exc)}),
             )
+
+    # ── 跨模块 AI 综合分析 ────────────────────────────────────────────
+    options = json.loads(task.options_json) if task.options_json else {}
+    enable_cross_ai = options.get("enable_cross_module_ai", True)
+    ai_provider = ai_config.get("provider", "") if ai_config else ""
+    ai_skip = not ai_provider or ai_provider.lower() in ("none", "", "skip")
+
+    if upstream and enable_cross_ai and not ai_skip and len(upstream) >= 2:
+        try:
+            logger.info("开始跨模块 AI 综合分析 (模块数=%d)", len(upstream))
+            ctx_for_snippets = _build_context(task, upstream)
+            snippets = _collect_source_snippets(
+                ctx_for_snippets["workspace_path"], ctx_for_snippets["target"]
+            )
+            cross_result = synthesize_cross_module(upstream, snippets, ai_config)
+
+            # 保存跨模块综合结果（作为特殊的模块结果）
+            cross_mr = result_map.get("_cross_module_synthesis")
+            if cross_mr is None:
+                # 如果没有预创建的结果行，通过 task_repo 创建一个或存到 task 级别
+                task_repo.set_cross_module_ai(
+                    db, task_id,
+                    json.dumps(cross_result, ensure_ascii=False, default=str),
+                )
+            logger.info("跨模块综合分析完成 success=%s", cross_result.get("success"))
+        except Exception as exc:
+            logger.warning("跨模块 AI 综合分析失败: %s", exc)
 
     # 聚合风险评分
     refreshed = task_repo.get_module_results(db, task.id)

@@ -55,30 +55,29 @@ def project_summary(project_id: int, db: Session = Depends(get_db)) -> dict:
     )
     task_count = len(tasks)
 
-    # 所有发现
-    all_findings = []
-    module_results_all = []
-    for task in tasks:
-        for mr in task.module_results:
-            module_results_all.append(mr)
-            try:
-                findings = json.loads(mr.findings_json) if mr.findings_json else []
-                for f in findings:
-                    f["task_id"] = task.task_id
-                    f["project_id"] = project_id
-                all_findings.extend(findings)
-            except (json.JSONDecodeError, TypeError):
-                pass
-
-    finding_count = len(all_findings)
-    s0_count = sum(1 for f in all_findings if f.get("severity") == "S0")
-    s1_count = sum(1 for f in all_findings if f.get("severity") == "S1")
-
     # 平均风险评分（基于最近一个成功任务）
     latest_success = next(
         (t for t in tasks if t.status == "success" and t.aggregate_risk_score is not None),
         None,
     )
+
+    # 发现统计 — 仅基于最近一个成功任务（避免跨任务累计导致重复膨胀）
+    latest_findings = []
+    if latest_success:
+        for mr in latest_success.module_results:
+            try:
+                findings = json.loads(mr.findings_json) if mr.findings_json else []
+                for f in findings:
+                    f["task_id"] = latest_success.task_id
+                    f["project_id"] = project_id
+                latest_findings.extend(findings)
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+    finding_count = len(latest_findings)
+    s0_count = sum(1 for f in latest_findings if f.get("severity") == "S0")
+    s1_count = sum(1 for f in latest_findings if f.get("severity") == "S1")
+
     avg_risk_score = latest_success.aggregate_risk_score if latest_success else None
 
     # 模块概要（来自最近一个成功任务）
@@ -139,22 +138,24 @@ def project_findings(
     module_id: Optional[str] = None,
     db: Session = Depends(get_db),
 ) -> dict:
-    """项目所有发现列表，支持筛选。"""
-    tasks = (
+    """项目发现列表 — 仅显示最近一个成功任务的去重发现，支持筛选。"""
+    # 取最近一个成功任务（避免跨任务重复）
+    latest = (
         db.query(AnalysisTask)
-        .filter(AnalysisTask.project_id == project_id)
-        .all()
+        .filter(AnalysisTask.project_id == project_id, AnalysisTask.status == "success")
+        .order_by(desc(AnalysisTask.created_at))
+        .first()
     )
 
     all_findings = []
-    for task in tasks:
-        for mr in task.module_results:
+    if latest:
+        for mr in latest.module_results:
             if module_id and mr.module_id != module_id:
                 continue
             try:
                 findings = json.loads(mr.findings_json) if mr.findings_json else []
                 for f in findings:
-                    f["task_id"] = task.task_id
+                    f["task_id"] = latest.task_id
                     f["project_id"] = project_id
                     if severity and f.get("severity") != severity:
                         continue
@@ -162,10 +163,18 @@ def project_findings(
             except (json.JSONDecodeError, TypeError):
                 pass
 
-    # 按 risk_score 降序排序
-    all_findings.sort(key=lambda x: x.get("risk_score", 0), reverse=True)
+    # 按 (file_path, line_start, risk_type, module_id) 去重，保留风险最高的
+    seen: dict[tuple, dict] = {}
+    for f in all_findings:
+        key = (f.get("file_path", ""), f.get("line_start", 0), f.get("risk_type", ""), f.get("module_id", ""))
+        if key not in seen or f.get("risk_score", 0) > seen[key].get("risk_score", 0):
+            seen[key] = f
+    deduped = list(seen.values())
 
-    return ok({"findings": all_findings, "total": len(all_findings)})
+    # 按 risk_score 降序排序
+    deduped.sort(key=lambda x: x.get("risk_score", 0), reverse=True)
+
+    return ok({"findings": deduped, "total": len(deduped)})
 
 
 @router.get("/projects/{project_id}/tasks")
@@ -216,9 +225,9 @@ def project_measures(project_id: int, db: Session = Depends(get_db)) -> dict:
         .all()
     )
 
-    # 按文件聚合发现
+    # 按文件聚合发现（仅最近一个成功任务，避免重复计数）
     file_map = {}  # file_path -> {risk_scores, findings, modules, functions}
-    for task in tasks[:3]:  # 最近 3 个成功任务
+    for task in tasks[:1]:  # 仅最近一个成功任务
         for mr in task.module_results:
             try:
                 findings = json.loads(mr.findings_json) if mr.findings_json else []
@@ -364,15 +373,28 @@ def global_findings(
     page_size: int = Query(default=50, ge=1, le=200),
     db: Session = Depends(get_db),
 ) -> dict:
-    """全局发现查询，支持多维筛选。"""
-    query = db.query(AnalysisTask)
+    """全局发现查询 — 每个项目仅取最近成功任务的发现，支持多维筛选。"""
+    from sqlalchemy import distinct
+
+    # 每个项目仅取最近一个成功任务
+    query = db.query(AnalysisTask).filter(AnalysisTask.status == "success")
     if project_id:
         query = query.filter(AnalysisTask.project_id == project_id)
 
-    tasks = query.order_by(desc(AnalysisTask.created_at)).limit(50).all()
+    tasks_all = query.order_by(desc(AnalysisTask.created_at)).all()
+
+    # 按 project_id 去重，仅保留每个项目的最新任务
+    seen_projects: set[int] = set()
+    latest_tasks = []
+    for t in tasks_all:
+        if t.project_id not in seen_projects:
+            seen_projects.add(t.project_id)
+            latest_tasks.append(t)
+        if len(latest_tasks) >= 50:
+            break
 
     all_findings = []
-    for task in tasks:
+    for task in latest_tasks:
         for mr in task.module_results:
             if module_id and mr.module_id != module_id:
                 continue
@@ -389,10 +411,18 @@ def global_findings(
             except (json.JSONDecodeError, TypeError):
                 pass
 
-    all_findings.sort(key=lambda x: x.get("risk_score", 0), reverse=True)
-    total = len(all_findings)
+    # 按 (project_id, file_path, line_start, risk_type, module_id) 去重
+    seen: dict[tuple, dict] = {}
+    for f in all_findings:
+        key = (f.get("project_id", 0), f.get("file_path", ""), f.get("line_start", 0), f.get("risk_type", ""), f.get("module_id", ""))
+        if key not in seen or f.get("risk_score", 0) > seen[key].get("risk_score", 0):
+            seen[key] = f
+    deduped = list(seen.values())
+
+    deduped.sort(key=lambda x: x.get("risk_score", 0), reverse=True)
+    total = len(deduped)
     start = (page - 1) * page_size
-    paginated = all_findings[start : start + page_size]
+    paginated = deduped[start : start + page_size]
 
     return ok({"findings": paginated, "total": total, "page": page, "page_size": page_size})
 
