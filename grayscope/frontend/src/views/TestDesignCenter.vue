@@ -86,7 +86,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted, computed } from 'vue'
+import { ref, reactive, onMounted, computed, toRaw } from 'vue'
 import { useRouter } from 'vue-router'
 import { ArrowRight, Aim, RefreshRight } from '@element-plus/icons-vue'
 import api from '../api.js'
@@ -120,10 +120,11 @@ function priorityClass(p) {
 }
 
 function openDetail(tc) {
+  const plainTc = JSON.parse(JSON.stringify(toRaw(tc)))
   router.push({
     name: 'TestCaseDetail',
     params: { testCaseId: tc.test_case_id },
-    state: { tc },
+    state: { tc: plainTc },
   })
 }
 
