@@ -252,6 +252,8 @@ function stripNumber(s) {
   background: var(--gs-surface); border: 1px solid var(--gs-border);
   border-radius: var(--gs-radius-md); padding: 20px 24px;
   margin-bottom: 12px;
+  overflow: hidden;
+  min-width: 0;
 }
 .gs-tc-card-title {
   display: flex; align-items: center; gap: 8px;
@@ -284,7 +286,8 @@ function stripNumber(s) {
 /* ── 证据区域（全宽展示） ── */
 .gs-tc-evidence-full {
   background: var(--gs-bg); border-radius: var(--gs-radius-sm); padding: 16px;
-  overflow-x: auto;
+  overflow: hidden;
+  min-width: 0;
 }
 
 /* ── 来源发现 ── */

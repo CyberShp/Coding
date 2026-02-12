@@ -342,7 +342,7 @@
         </div>
         <div v-if="evidence.affected_data_flow_chains" class="gs-ev-row">
           <span class="gs-ev-label">影响数据流链</span>
-          <el-tag type="danger" size="small">{{ evidence.affected_data_flow_chains }} 条传播链受影响</el-tag>
+          <el-tag type="danger" size="small">{{ typeof evidence.affected_data_flow_chains === 'number' ? evidence.affected_data_flow_chains : Array.isArray(evidence.affected_data_flow_chains) ? evidence.affected_data_flow_chains.length : 1 }} 条传播链受影响</el-tag>
         </div>
         <div v-if="evidence.direction" class="gs-ev-row">
           <span class="gs-ev-label">传播方向</span>
@@ -463,6 +463,9 @@ function pathTypeLabel(pt) {
 <style scoped>
 .gs-evidence-renderer {
   font-size: 13px;
+  overflow: hidden;
+  word-break: break-word;
+  overflow-wrap: break-word;
 }
 
 /* ── 通用行 ─────────────────────────── */
@@ -471,6 +474,8 @@ function pathTypeLabel(pt) {
   align-items: flex-start;
   gap: 10px;
   margin-bottom: 10px;
+  min-width: 0;
+  max-width: 100%;
 }
 .gs-ev-label {
   display: inline-block;
@@ -488,6 +493,8 @@ function pathTypeLabel(pt) {
   padding: 2px 8px;
   border-radius: 4px;
   color: var(--gs-text-primary);
+  word-break: break-all;
+  overflow-wrap: break-word;
 }
 .gs-ev-highlight {
   background: rgba(229, 127, 0, 0.1);
@@ -581,8 +588,10 @@ function pathTypeLabel(pt) {
   flex-wrap: wrap;
   align-items: center;
   gap: 4px;
+  min-width: 0;
+  flex: 1;
 }
-.gs-ev-chain-item { display: flex; align-items: center; gap: 4px; }
+.gs-ev-chain-item { display: flex; align-items: center; gap: 4px; min-width: 0; word-break: break-all; }
 .gs-ev-chain-arrow { color: var(--gs-text-muted); font-size: 14px; }
 .gs-ev-chain-danger .gs-ev-chain-arrow { color: var(--gs-danger); }
 .gs-ev-chain-danger code { color: var(--gs-danger); }
@@ -590,7 +599,7 @@ function pathTypeLabel(pt) {
 .gs-ev-gap-arrow { color: var(--gs-danger) !important; font-weight: bold; }
 
 /* ── 函数标签 ───────────────────────── */
-.gs-ev-chip-list { display: flex; flex-wrap: wrap; gap: 4px; }
+.gs-ev-chip-list { display: flex; flex-wrap: wrap; gap: 4px; min-width: 0; flex: 1; }
 .gs-ev-func-chip {
   display: inline-block;
   padding: 2px 8px;
@@ -599,6 +608,9 @@ function pathTypeLabel(pt) {
   font-family: var(--gs-font-mono);
   font-size: 12px;
   color: var(--gs-text-primary);
+  word-break: break-all;
+  overflow-wrap: break-word;
+  max-width: 100%;
 }
 .gs-ev-chip-more {
   display: inline-flex;
