@@ -323,6 +323,8 @@ def project_source(
     repos = db.query(Repository).filter(Repository.project_id == project_id).all()
     content = None
     for repo in repos:
+        if not repo.local_mirror_path:
+            continue
         full_path = os.path.join(repo.local_mirror_path, path)
         if os.path.isfile(full_path):
             try:
