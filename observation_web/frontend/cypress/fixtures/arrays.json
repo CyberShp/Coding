@@ -1,0 +1,26 @@
+[
+  {
+    "id": "test-array-001",
+    "name": "测试阵列 1",
+    "ip": "192.168.1.100",
+    "status": "online",
+    "last_seen": "2026-02-28T10:00:00Z",
+    "active_issues_count": 0
+  },
+  {
+    "id": "test-array-002",
+    "name": "测试阵列 2",
+    "ip": "192.168.1.101",
+    "status": "online",
+    "last_seen": "2026-02-28T10:00:00Z",
+    "active_issues_count": 1
+  },
+  {
+    "id": "test-array-003",
+    "name": "测试阵列 3",
+    "ip": "192.168.1.102",
+    "status": "offline",
+    "last_seen": "2026-02-28T09:30:00Z",
+    "active_issues_count": 2
+  }
+]

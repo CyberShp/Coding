@@ -265,15 +265,19 @@ async function exportAlerts() {
   }
 }
 
-// ───── Auto-refresh (60s) ─────
+// ───── Auto-refresh (30s) ─────
 let refreshTimer = null
+let isRefreshing = false  // Lock to prevent concurrent refreshes
 
 async function silentReloadAlerts() {
-  if (document.hidden || loading.value) return
+  if (document.hidden || loading.value || isRefreshing) return
+  isRefreshing = true
   try {
     await loadAlerts()
   } catch {
     // Silent fail — next cycle will retry
+  } finally {
+    isRefreshing = false
   }
 }
 
@@ -281,6 +285,16 @@ async function silentReloadAlerts() {
 // Watch the store's recentAlerts — when the store receives a WebSocket
 // alert it pushes to recentAlerts; we mirror new entries into our list.
 const _seenIds = new Set()
+const MAX_SEEN_IDS = 500  // Prevent unbounded growth
+
+function cleanupSeenIds() {
+  if (_seenIds.size > MAX_SEEN_IDS) {
+    // Keep only the most recent half
+    const idsArray = Array.from(_seenIds)
+    const toRemove = idsArray.slice(0, idsArray.length - MAX_SEEN_IDS / 2)
+    toRemove.forEach(id => _seenIds.delete(id))
+  }
+}
 
 watch(
   () => alertStore.recentAlerts,
@@ -289,6 +303,7 @@ watch(
     const latest = newList[0]
     if (!latest || _seenIds.has(latest.id)) return
     _seenIds.add(latest.id)
+    cleanupSeenIds()  // Prevent unbounded growth
 
     // Apply current filter — skip if it doesn't match
     if (filters.level && latest.level !== filters.level) return
@@ -329,8 +344,8 @@ onMounted(() => {
   // Ensure WebSocket is connected (idempotent)
   alertStore.connectWebSocket()
 
-  // Periodic full reload every 60 seconds
-  refreshTimer = setInterval(silentReloadAlerts, 60000)
+  // Periodic full reload every 30 seconds
+  refreshTimer = setInterval(silentReloadAlerts, 30000)
 })
 
 onUnmounted(() => {

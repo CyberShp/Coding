@@ -1,0 +1,32 @@
+[
+  {
+    "timestamp": "2026-02-28T09:50:00Z",
+    "cpu_percent": 82.3,
+    "memory_mb": 510
+  },
+  {
+    "timestamp": "2026-02-28T09:51:00Z",
+    "cpu_percent": 84.1,
+    "memory_mb": 512
+  },
+  {
+    "timestamp": "2026-02-28T09:52:00Z",
+    "cpu_percent": 85.5,
+    "memory_mb": 515
+  },
+  {
+    "timestamp": "2026-02-28T09:53:00Z",
+    "cpu_percent": 83.2,
+    "memory_mb": 512
+  },
+  {
+    "timestamp": "2026-02-28T09:54:00Z",
+    "cpu_percent": 81.8,
+    "memory_mb": 508
+  },
+  {
+    "timestamp": "2026-02-28T09:55:00Z",
+    "cpu_percent": 85.5,
+    "memory_mb": 512
+  }
+]

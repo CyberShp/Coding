@@ -1,5 +1,14 @@
 <template>
   <div class="dashboard">
+    <!-- Page Header with Refresh -->
+    <div class="dashboard-header">
+      <h2>仪表盘</h2>
+      <el-button size="small" @click="manualRefresh" :loading="loading">
+        <el-icon><Refresh /></el-icon>
+        刷新
+      </el-button>
+    </div>
+
     <!-- Stats Cards -->
     <el-row :gutter="20" class="stats-row">
       <el-col :span="6">
@@ -160,7 +169,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { use } from 'echarts/core'
 import { CanvasRenderer } from 'echarts/renderers'
 import { LineChart } from 'echarts/charts'
@@ -186,6 +195,8 @@ const activeTask = ref(null)
 const taskDuration = ref('')
 const drawerVisible = ref(false)
 const selectedAlert = ref(null)
+const loading = ref(false)
+let refreshTimer = null
 
 const trendChartOption = computed(() => ({
   tooltip: {
@@ -319,12 +330,57 @@ async function loadData() {
   await Promise.all(tasks)
 }
 
-onMounted(loadData)
+async function silentRefresh() {
+  if (document.hidden || loading.value) return
+  loading.value = true
+  try {
+    await loadData()
+  } catch {
+    // Silent fail
+  } finally {
+    loading.value = false
+  }
+}
+
+async function manualRefresh() {
+  loading.value = true
+  try {
+    await loadData()
+  } finally {
+    loading.value = false
+  }
+}
+
+onMounted(() => {
+  loadData()
+  // Auto-refresh every 30 seconds
+  refreshTimer = setInterval(silentRefresh, 30000)
+})
+
+onUnmounted(() => {
+  if (refreshTimer) {
+    clearInterval(refreshTimer)
+    refreshTimer = null
+  }
+})
 </script>
 
 <style scoped>
 .dashboard {
   padding: 20px;
+}
+
+.dashboard-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+}
+
+.dashboard-header h2 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
 }
 
 /* Active test task banner */

@@ -1,0 +1,21 @@
+{
+  "total": 10,
+  "items": [
+    {
+      "id": "alert-array-001",
+      "observer": "cpu_usage",
+      "level": "warning",
+      "message": "CPU 使用率过高",
+      "details": {"cpu_percent": 85.5},
+      "timestamp": "2026-02-28T09:55:00Z"
+    },
+    {
+      "id": "alert-array-002",
+      "observer": "memory_leak",
+      "level": "info",
+      "message": "内存使用正常",
+      "details": {"memory_mb": 512, "recovered": true},
+      "timestamp": "2026-02-28T09:45:00Z"
+    }
+  ]
+}

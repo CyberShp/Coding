@@ -1,0 +1,25 @@
+[
+  {
+    "id": "alert-001",
+    "array_id": "test-array-001",
+    "observer": "cpu_usage",
+    "level": "warning",
+    "message": "CPU 使用率过高",
+    "details": {
+      "cpu_percent": 85.5
+    },
+    "timestamp": "2026-02-28T09:55:00Z"
+  },
+  {
+    "id": "alert-002",
+    "array_id": "test-array-002",
+    "observer": "memory_leak",
+    "level": "critical",
+    "message": "检测到内存泄漏",
+    "details": {
+      "memory_mb": 1024,
+      "consecutive_increases": 8
+    },
+    "timestamp": "2026-02-28T09:50:00Z"
+  }
+]

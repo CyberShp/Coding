@@ -16,6 +16,13 @@ export const useAlertStore = defineStore('alerts', () => {
   // Critical event banner state
   const criticalEvents = ref([])  // unacknowledged critical events
 
+  // WebSocket reconnection state
+  let heartbeatTimer = null
+  let reconnectTimer = null
+  let reconnectAttempts = 0
+  const MAX_RECONNECT_ATTEMPTS = 10
+  const BASE_RECONNECT_DELAY = 1000  // 1 second
+
   // Getters
   const recentCount = computed(() => {
     return recentAlerts.value.filter(a => 
@@ -88,8 +95,36 @@ export const useAlertStore = defineStore('alerts', () => {
     }
   }
 
+  function cleanupTimers() {
+    if (heartbeatTimer) {
+      clearInterval(heartbeatTimer)
+      heartbeatTimer = null
+    }
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer)
+      reconnectTimer = null
+    }
+  }
+
+  function scheduleReconnect() {
+    if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+      console.warn('WebSocket max reconnect attempts reached, stopping reconnection')
+      return
+    }
+    
+    // Exponential backoff: 1s, 2s, 4s, 8s, 16s, max 30s
+    const delay = Math.min(BASE_RECONNECT_DELAY * Math.pow(2, reconnectAttempts), 30000)
+    reconnectAttempts++
+    
+    console.log(`WebSocket reconnecting in ${delay}ms (attempt ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})`)
+    reconnectTimer = setTimeout(connectWebSocket, delay)
+  }
+
   function connectWebSocket() {
     if (ws.value) return
+
+    // Clean up any existing timers
+    cleanupTimers()
 
     // Request notification permission on first connect
     requestNotificationPermission()
@@ -101,7 +136,15 @@ export const useAlertStore = defineStore('alerts', () => {
       
       ws.value.onopen = () => {
         wsConnected.value = true
+        reconnectAttempts = 0  // Reset on successful connection
         console.log('WebSocket connected')
+        
+        // Start heartbeat
+        heartbeatTimer = setInterval(() => {
+          if (ws.value && ws.value.readyState === WebSocket.OPEN) {
+            ws.value.send(JSON.stringify({ type: 'ping' }))
+          }
+        }, 30000)
       }
 
       ws.value.onmessage = (event) => {
@@ -119,26 +162,23 @@ export const useAlertStore = defineStore('alerts', () => {
       ws.value.onclose = () => {
         wsConnected.value = false
         ws.value = null
-        setTimeout(connectWebSocket, 5000)
+        cleanupTimers()
+        scheduleReconnect()
       }
 
       ws.value.onerror = (error) => {
         console.error('WebSocket error:', error)
       }
 
-      // Heartbeat every 30 seconds
-      setInterval(() => {
-        if (ws.value && ws.value.readyState === WebSocket.OPEN) {
-          ws.value.send(JSON.stringify({ type: 'ping' }))
-        }
-      }, 30000)
-
     } catch (error) {
       console.error('Failed to connect WebSocket:', error)
+      scheduleReconnect()
     }
   }
 
   function disconnectWebSocket() {
+    cleanupTimers()
+    reconnectAttempts = MAX_RECONNECT_ATTEMPTS  // Prevent auto-reconnect
     if (ws.value) {
       ws.value.close()
       ws.value = null

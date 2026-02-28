@@ -25,14 +25,28 @@
     <div class="chart-section">
       <h4>CPU0 利用率</h4>
       <v-chart v-if="cpuData.length > 0" :option="cpuChartOption" autoresize style="height: 220px" />
-      <el-empty v-else description="暂无 CPU 数据" :image-size="60" />
+      <div v-else class="empty-hint">
+        <el-empty description="暂无 CPU 数据" :image-size="60">
+          <template #description>
+            <p>暂无 CPU 数据</p>
+            <p class="hint-text">请确保 Agent 已部署并正在运行，数据将自动刷新</p>
+          </template>
+        </el-empty>
+      </div>
     </div>
 
     <!-- Memory Chart -->
     <div class="chart-section">
       <h4>内存使用量</h4>
       <v-chart v-if="memData.length > 0" :option="memChartOption" autoresize style="height: 220px" />
-      <el-empty v-else description="暂无内存数据" :image-size="60" />
+      <div v-else class="empty-hint">
+        <el-empty description="暂无内存数据" :image-size="60">
+          <template #description>
+            <p>暂无内存数据</p>
+            <p class="hint-text">请确保 Agent 已部署并正在运行，数据将自动刷新</p>
+          </template>
+        </el-empty>
+      </div>
     </div>
 
     <!-- Current Stats -->
@@ -81,7 +95,7 @@ const props = defineProps({
 
 const timeRange = ref(60)
 const loading = ref(false)
-const autoRefresh = ref(false)
+const autoRefresh = ref(true)  // Default to auto-refresh enabled
 const metrics = ref([])
 let refreshTimer = null
 
@@ -243,11 +257,18 @@ function toggleAutoRefresh(enabled) {
   }
 }
 
-onMounted(loadMetrics)
+onMounted(() => {
+  loadMetrics()
+  // Start auto-refresh if enabled by default
+  if (autoRefresh.value) {
+    toggleAutoRefresh(true)
+  }
+})
 
 onUnmounted(() => {
   if (refreshTimer) {
     clearInterval(refreshTimer)
+    refreshTimer = null
   }
 })
 </script>
@@ -302,4 +323,18 @@ onUnmounted(() => {
 .stat-value.status-ok { color: #67c23a; }
 .stat-value.status-warning { color: #e6a23c; }
 .stat-value.status-error { color: #f56c6c; }
+
+.empty-hint {
+  padding: 20px;
+  text-align: center;
+}
+
+.empty-hint p {
+  margin: 4px 0;
+}
+
+.hint-text {
+  font-size: 12px;
+  color: #909399;
+}
 </style>

@@ -23,7 +23,7 @@ class MemoryLeakObserver(BaseObserver):
     功能：
     - 定期执行 free -m 获取内存使用量
     - 连续 N 次（默认8次，即12小时）增长则告警
-    - 告警后持续报告（sticky_alert），直到线程退出
+    - 连续 M 次（默认3次）下降则自动恢复
     """
     
     def __init__(self, name: str, config: Dict[str, Any]):
@@ -32,8 +32,12 @@ class MemoryLeakObserver(BaseObserver):
         # 连续增长阈值（默认8次 = 12小时，间隔1.5h）
         self.consecutive_threshold = config.get('consecutive_threshold', 8)
         
-        # 历史数据
-        self._history = deque(maxlen=self.consecutive_threshold)  # type: deque
+        # 连续下降恢复阈值（默认3次）
+        self.recovery_threshold = config.get('recovery_threshold', 3)
+        
+        # 历史数据（保留足够长度用于恢复判断）
+        max_len = max(self.consecutive_threshold, self.recovery_threshold + 1)
+        self._history = deque(maxlen=max_len)  # type: deque
         
         # 是否已触发告警（sticky状态）
         self._alert_triggered = False
@@ -67,14 +71,18 @@ class MemoryLeakObserver(BaseObserver):
         })
         
         # 构建详情
+        consecutive_increases = self._count_consecutive_increases()
+        consecutive_decreases = self._count_consecutive_decreases()
         details = {
             'current_used_mb': used_mb,
             'history': list(self._history),
             'consecutive_threshold': self.consecutive_threshold,
-            'consecutive_increases': self._count_consecutive_increases(),
+            'recovery_threshold': self.recovery_threshold,
+            'consecutive_increases': consecutive_increases,
+            'consecutive_decreases': consecutive_decreases,
         }
         
-        # 检查是否连续增长
+        # 检查是否连续增长 -> 触发告警
         if self._is_continuous_increase():
             self._alert_triggered = True
             message = (
@@ -91,7 +99,25 @@ class MemoryLeakObserver(BaseObserver):
                 sticky=True,
             )
         
-        # 如果之前触发过告警，持续报告
+        # 检查是否连续下降 -> 恢复
+        if self._alert_triggered and self._is_continuous_decrease():
+            self._alert_triggered = False
+            details['recovered'] = True
+            message = (
+                f"内存泄漏已恢复: 连续 {self.recovery_threshold} 次采集内存下降 "
+                f"(当前: {used_mb}MB)"
+            )
+            logger.info(message)
+            
+            return self.create_result(
+                has_alert=True,
+                alert_level=AlertLevel.INFO,
+                message=message,
+                details=details,
+                sticky=False,
+            )
+        
+        # 如果之前触发过告警且未恢复，持续报告
         if self._alert_triggered:
             message = f"内存泄漏告警持续中 (当前: {used_mb}MB)"
             
@@ -170,6 +196,36 @@ class MemoryLeakObserver(BaseObserver):
         
         for i in range(len(values) - 1, 0, -1):
             if values[i] > values[i - 1]:
+                count += 1
+            else:
+                break
+        
+        return count
+    
+    def _is_continuous_decrease(self) -> bool:
+        """检查是否连续下降（用于恢复判断）"""
+        if len(self._history) < self.recovery_threshold:
+            return False
+        
+        # 只检查最近 recovery_threshold 次采集
+        values = [h['used_mb'] for h in self._history][-self.recovery_threshold:]
+        
+        for i in range(1, len(values)):
+            if values[i] >= values[i - 1]:
+                return False
+        
+        return True
+    
+    def _count_consecutive_decreases(self) -> int:
+        """计算当前连续下降次数"""
+        if len(self._history) < 2:
+            return 0
+        
+        values = [h['used_mb'] for h in self._history]
+        count = 0
+        
+        for i in range(len(values) - 1, 0, -1):
+            if values[i] < values[i - 1]:
                 count += 1
             else:
                 break

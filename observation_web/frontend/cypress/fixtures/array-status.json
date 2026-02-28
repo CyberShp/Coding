@@ -1,0 +1,23 @@
+{
+  "id": "test-array-001",
+  "name": "测试阵列 1",
+  "ip": "192.168.1.100",
+  "status": "online",
+  "last_seen": "2026-02-28T10:00:00Z",
+  "active_issues": [
+    {
+      "key": "cpu_usage",
+      "observer": "cpu_usage",
+      "level": "warning",
+      "message": "CPU 使用率过高",
+      "details": {"cpu_percent": 85.5},
+      "since": "2026-02-28T09:30:00Z",
+      "last_updated": "2026-02-28T10:00:00Z"
+    }
+  ],
+  "metrics": {
+    "cpu_percent": 85.5,
+    "memory_mb": 512,
+    "uptime_hours": 168
+  }
+}

@@ -1,0 +1,37 @@
+{
+  "total": 50,
+  "page": 1,
+  "per_page": 20,
+  "items": [
+    {
+      "id": "alert-001",
+      "array_id": "test-array-001",
+      "array_name": "测试阵列 1",
+      "observer": "cpu_usage",
+      "level": "warning",
+      "message": "CPU 使用率过高",
+      "details": {"cpu_percent": 85.5},
+      "timestamp": "2026-02-28T09:55:00Z"
+    },
+    {
+      "id": "alert-002",
+      "array_id": "test-array-002",
+      "array_name": "测试阵列 2",
+      "observer": "memory_leak",
+      "level": "critical",
+      "message": "检测到内存泄漏",
+      "details": {"memory_mb": 1024, "consecutive_increases": 8},
+      "timestamp": "2026-02-28T09:50:00Z"
+    },
+    {
+      "id": "alert-003",
+      "array_id": "test-array-001",
+      "array_name": "测试阵列 1",
+      "observer": "pcie_bandwidth",
+      "level": "info",
+      "message": "PCIe 带宽正常",
+      "details": {"bandwidth_gbps": 12.5},
+      "timestamp": "2026-02-28T09:45:00Z"
+    }
+  ]
+}

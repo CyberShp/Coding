@@ -175,9 +175,8 @@ def _update_active_issues(status_obj: ArrayStatus, alert: dict):
     Process a single parsed alert and update ``status_obj.active_issues``.
 
     Rules per observer:
-    * cpu_usage / pcie_bandwidth / card_info — if ``details.recovered`` is
+    * cpu_usage / pcie_bandwidth / card_info / memory_leak — if ``details.recovered`` is
       truthy, remove all matching issues and record recovery; otherwise upsert.
-    * memory_leak — always upsert (no self-recovery).
     * alarm_type — rebuild from ``details.active_alarms`` list each time.
     """
     observer = alert.get('observer_name', '')
@@ -321,6 +320,7 @@ def _update_active_issues(status_obj: ArrayStatus, alert: dict):
 
     elif observer == 'memory_leak':
         key = 'memory_leak'
+        _pop_recovery(array_id, key)  # relapse after recovery → invalidate ack
         _upsert_issue(status_obj, key, observer, level, message, details, timestamp)
 
 
