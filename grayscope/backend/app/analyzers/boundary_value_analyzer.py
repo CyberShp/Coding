@@ -98,6 +98,8 @@ def analyze(ctx: AnalyzeContext) -> ModuleResult:
                     "variable": var_name,
                     "bound_value": comp.get("bound", ""),
                     "candidates": candidates,
+                    "expected_failure": "边界值或边界±1触发错误分支或越界",
+                    "unacceptable_outcomes": ["越界", "溢出", "错误逻辑"],
                 }
 
                 # 添加传播链上下文
@@ -169,6 +171,8 @@ def analyze(ctx: AnalyzeContext) -> ModuleResult:
                     "array_name": aa["array"],
                     "index_expr": aa["index"],
                     "candidates": [0, -1, "max_size-1", "max_size", "max_size+1"],
+                    "expected_failure": "非法下标经调用链传入导致越界",
+                    "unacceptable_outcomes": ["缓冲区溢出", "段错误", "崩溃"],
                 }
 
                 if propagation_context:

@@ -496,6 +496,9 @@ def analyze(ctx: AnalyzeContext) -> ModuleResult:
                 "sensitive_ops": chain.sensitive_ops,
                 "max_depth": chain.max_depth,
                 "has_transform": has_transform,
+                "related_functions": [s.function for s in chain.steps][:6],
+                "expected_failure": "入口值经多层调用变换后触发敏感操作或边界条件",
+                "unacceptable_outcomes": ["越界访问", "溢出", "安全漏洞"],
             },
         })
 
@@ -536,6 +539,9 @@ def analyze(ctx: AnalyzeContext) -> ModuleResult:
                 "is_external_input": True,
                 "sensitive_ops": chain.sensitive_ops,
                 "max_depth": chain.max_depth,
+                "related_functions": [s.function for s in chain.steps][:6],
+                "expected_failure": "未校验的外部输入直达敏感操作",
+                "unacceptable_outcomes": ["缓冲区溢出", "注入", "崩溃"],
             },
         })
 
@@ -579,6 +585,9 @@ def analyze(ctx: AnalyzeContext) -> ModuleResult:
                     {"function": t.function, "type": t.transform, "expr": t.transform_expr}
                     for t in transforms
                 ],
+                "related_functions": [s.function for s in chain.steps if s.transform and s.transform != "none"][:6] or [chain.steps[0].function, chain.steps[-1].function],
+                "expected_failure": "算术变换导致溢出或非法值",
+                "unacceptable_outcomes": ["整数溢出", "越界", "错误结果"],
             },
         })
 

@@ -88,29 +88,36 @@
             <span class="gs-card-title">API Key 配置</span>
           </div>
           <p style="font-size: 13px; color: var(--gs-text-secondary); margin-bottom: 16px;">
-            为云端 AI 提供商配置 API Key（本地 Ollama 无需配置）
+            为 AI 提供商配置 API Key 和端点地址
           </p>
           <el-form label-width="140px" style="max-width: 600px;">
-            <el-form-item label="DeepSeek API Key">
+            <el-divider content-position="left">DeepSeek</el-divider>
+            <el-form-item label="API Key">
               <el-input v-model="apiKeys.deepseek" placeholder="sk-..." type="password" show-password clearable>
                 <template #append>
                   <el-button @click="saveApiKey('deepseek')" :loading="savingKey === 'deepseek'">保存</el-button>
                 </template>
               </el-input>
             </el-form-item>
-            <el-form-item label="通义千问 API Key">
-              <el-input v-model="apiKeys.qwen" placeholder="sk-..." type="password" show-password clearable>
+            <el-form-item label="API 端点">
+              <el-input v-model="baseUrls.deepseek" placeholder="https://api.deepseek.com" clearable />
+              <div style="font-size: 12px; color: var(--gs-text-muted); margin-top: 4px;">可填写内网镜像地址，留空使用官方 API</div>
+            </el-form-item>
+
+            <el-divider content-position="left">自定义接口（OpenAI 兼容）</el-divider>
+            <el-form-item label="API Key">
+              <el-input v-model="apiKeys.custom" placeholder="sk-... 或留空" type="password" show-password clearable>
                 <template #append>
-                  <el-button @click="saveApiKey('qwen')" :loading="savingKey === 'qwen'">保存</el-button>
+                  <el-button @click="saveApiKey('custom')" :loading="savingKey === 'custom'">保存</el-button>
                 </template>
               </el-input>
             </el-form-item>
-            <el-form-item label="OpenAI 兼容 Key">
-              <el-input v-model="apiKeys.openai_compat" placeholder="sk-..." type="password" show-password clearable>
-                <template #append>
-                  <el-button @click="saveApiKey('openai_compat')" :loading="savingKey === 'openai_compat'">保存</el-button>
-                </template>
-              </el-input>
+            <el-form-item label="API 端点">
+              <el-input v-model="baseUrls.custom" placeholder="内网 API 地址，如 http://192.168.1.100:8000" clearable />
+              <div style="font-size: 12px; color: var(--gs-text-muted); margin-top: 4px;">支持 vLLM、TGI、LMStudio 等 OpenAI 兼容接口</div>
+            </el-form-item>
+            <el-form-item label="默认模型">
+              <el-input v-model="customModel" placeholder="模型名称，如 qwen2.5-coder" clearable />
             </el-form-item>
           </el-form>
         </div>
@@ -157,7 +164,7 @@
               {{ systemHealthy ? '正常运行' : '离线' }}
             </el-descriptions-item>
             <el-descriptions-item label="数据库">SQLite / PostgreSQL</el-descriptions-item>
-            <el-descriptions-item label="分析模块">9 个（branch_path, boundary_value, error_path, call_graph, concurrency, diff_impact, coverage_map, postmortem, knowledge_pattern）</el-descriptions-item>
+            <el-descriptions-item label="分析模块">11 个核心（branch_path, boundary_value, error_path, call_graph, path_and_resource, exception, protocol, data_flow, concurrency, diff_impact, coverage_map）+ 2 个事后（postmortem, knowledge_pattern）</el-descriptions-item>
             <el-descriptions-item label="部署环境">X86 Linux 内网</el-descriptions-item>
             <el-descriptions-item label="API 基础路径">/api/v1</el-descriptions-item>
           </el-descriptions>
@@ -181,8 +188,8 @@ const activeTab = ref('models')
 const models = ref([])
 const testingAll = ref(false)
 const showAddProvider = ref(false)
-const defaultProvider = ref('ollama')
-const defaultModel = ref('qwen2.5-coder')
+const defaultProvider = ref('deepseek')
+const defaultModel = ref('deepseek-coder')
 
 const currentProviderModels = computed(() => {
   const p = models.value.find(m => m.provider_id === defaultProvider.value)
@@ -207,15 +214,32 @@ async function loadModels() {
   try {
     const data = await api.listModels()
     models.value = (data?.providers || data || []).map(m => ({ ...m, _testing: false }))
+    for (const m of models.value) {
+      const pid = m.provider_id || m.name
+      if (m.base_url && pid) baseUrls.value[pid] = m.base_url
+    }
   } catch {
     models.value = []
   }
 }
 
+async function loadSettings() {
+  try {
+    const data = await api.getSettings()
+    if (data?.quality_gate) {
+      qualityGate.value = { ...qualityGate.value, ...data.quality_gate }
+    }
+  } catch (_) {}
+}
+
 async function testProvider(m) {
   m._testing = true
+  const body = { provider: m.provider_id || m.name, model: m.models?.[0] || 'default' }
+  const pid = m.provider_id || m.name
+  if (apiKeys.value[pid]) body.api_key = apiKeys.value[pid]
+  if (baseUrls.value[pid]) body.base_url = baseUrls.value[pid]
   try {
-    await api.testModel({ provider: m.provider_id || m.name, model: m.models?.[0] || 'default' })
+    await api.testModel(body)
     m.healthy = true
     ElMessage.success(`${m.display_name || m.name} 连接成功`)
   } catch (e) {
@@ -240,22 +264,45 @@ function setDefault(m) {
   ElMessage.success(`已将 ${m.display_name} 设为默认提供商`)
 }
 
-function saveDefaultModel() {
-  localStorage.setItem('gs_default_provider', defaultProvider.value)
-  localStorage.setItem('gs_default_model', defaultModel.value)
-  ElMessage.success(`默认 AI 配置已保存: ${defaultProvider.value} / ${defaultModel.value}`)
+async function saveDefaultModel() {
+  try {
+    const payload = {
+      provider: defaultProvider.value,
+      default_provider: defaultProvider.value,
+      default_model: defaultModel.value,
+    }
+    const res = await fetch('/api/v1/models/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    })
+    const data = await res.json()
+    if (data.code === 'OK') {
+      localStorage.setItem('gs_default_provider', defaultProvider.value)
+      localStorage.setItem('gs_default_model', defaultModel.value)
+      ElMessage.success(`默认 AI 配置已保存: ${defaultProvider.value} / ${defaultModel.value}`)
+    } else {
+      ElMessage.error(data.message || '保存失败')
+    }
+  } catch (e) {
+    ElMessage.error(`保存失败: ${e.message}`)
+  }
 }
 
-const apiKeys = ref({ deepseek: '', qwen: '', openai_compat: '' })
+const apiKeys = ref({ deepseek: '', custom: '' })
+const baseUrls = ref({ deepseek: '', custom: '' })
+const customModel = ref('default')
 const savingKey = ref('')
 
 async function saveApiKey(provider) {
   savingKey.value = provider
   try {
+    const payload = { provider, api_key: apiKeys.value[provider] }
+    if (baseUrls.value[provider]) payload.base_url = baseUrls.value[provider]
     const res = await fetch('/api/v1/models/config', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ provider, api_key: apiKeys.value[provider] }),
+      body: JSON.stringify(payload),
     })
     const data = await res.json()
     if (data.code === 'OK') {
@@ -284,13 +331,33 @@ function resetQualityGate() {
   qualityGate.value = { max_risk_score: 60, max_s0_count: 0, max_s1_count: 3 }
 }
 
+async function loadDefaults() {
+  try {
+    const res = await fetch('/api/v1/models/defaults')
+    const data = await res.json()
+    if (data.code === 'OK' && data.data) {
+      if (data.data.default_provider) {
+        defaultProvider.value = data.data.default_provider
+        localStorage.setItem('gs_default_provider', data.data.default_provider)
+      }
+      if (data.data.default_model) {
+        defaultModel.value = data.data.default_model
+        localStorage.setItem('gs_default_model', data.data.default_model)
+      }
+    }
+  } catch (_) {
+    // Fall back to localStorage
+    const savedProvider = localStorage.getItem('gs_default_provider')
+    const savedModel = localStorage.getItem('gs_default_model')
+    if (savedProvider) defaultProvider.value = savedProvider
+    if (savedModel) defaultModel.value = savedModel
+  }
+}
+
 onMounted(() => {
   loadModels()
-  // Restore saved defaults
-  const savedProvider = localStorage.getItem('gs_default_provider')
-  const savedModel = localStorage.getItem('gs_default_model')
-  if (savedProvider) defaultProvider.value = savedProvider
-  if (savedModel) defaultModel.value = savedModel
+  loadSettings()
+  loadDefaults()
 })
 </script>
 

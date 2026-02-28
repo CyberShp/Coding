@@ -584,6 +584,20 @@ class TestTaskRetryCancel:
         res = client.post("/api/v1/analysis/tasks/no-such-task/retry", json={})
         assert res.status_code == 404
 
+    def test_059a_generate_sfmea(self, client, create_task):
+        """POST /analysis/tasks/{task_id}/sfmea returns 200 and generated count."""
+        _, _, task = create_task()
+        res = client.post(f"/api/v1/analysis/tasks/{task['task_id']}/sfmea", json={})
+        assert res.status_code == 200
+        data = res.json()
+        assert "data" in data
+        assert "generated" in data["data"]
+
+    def test_059b_generate_sfmea_not_found(self, client):
+        """POST sfmea for nonexistent task returns 404."""
+        res = client.post("/api/v1/analysis/tasks/no-such-task/sfmea", json={})
+        assert res.status_code == 404
+
 
 class TestTaskExport:
     def test_060_export_json(self, client, create_task):
@@ -605,6 +619,102 @@ class TestTaskExport:
         _, _, task = create_task()
         res = client.get(f"/api/v1/analysis/tasks/{task['task_id']}/export?fmt=findings")
         assert res.status_code == 200
+
+    def test_062a_export_critical(self, client, create_task):
+        """Export only critical combinations (JSON)."""
+        _, _, task = create_task()
+        res = client.get(f"/api/v1/analysis/tasks/{task['task_id']}/export?fmt=critical")
+        assert res.status_code == 200
+        assert "application/json" in res.headers.get("content-type", "")
+        data = res.json()
+        assert "critical_combinations" in data
+        assert "export_format" in data
+
+    def test_062a2_export_html(self, client, create_task):
+        """Export single-page HTML report."""
+        _, _, task = create_task()
+        res = client.get(f"/api/v1/analysis/tasks/{task['task_id']}/export?fmt=html")
+        assert res.status_code == 200
+        assert "text/html" in res.headers.get("content-type", "")
+        assert b"GrayScope" in res.content or "GrayScope" in res.text
+
+    def test_062a3_export_sfmea(self, client, create_task):
+        """Export SFMEA entries as CSV."""
+        _, _, task = create_task()
+        res = client.get(f"/api/v1/analysis/tasks/{task['task_id']}/export?fmt=sfmea")
+        assert res.status_code == 200
+        assert "text/csv" in res.headers.get("content-type", "")
+        assert b"failure_mode" in res.content or "failure_mode" in res.text
+
+    def test_062b_coverage_import_summary(self, client, create_task):
+        """北向接口：POST 写入 summary 格式覆盖率."""
+        _, _, task = create_task()
+        res = client.post(
+            f"/api/v1/analysis/tasks/{task['task_id']}/coverage",
+            json={
+                "source_system": "test_platform",
+                "revision": "abc123",
+                "format": "summary",
+                "files": {
+                    "src/storage/volume.c": {
+                        "lines_total": 100,
+                        "lines_hit": 65,
+                        "branches_total": 20,
+                        "branches_hit": 12,
+                        "functions": {"open_volume": True, "close_volume": False},
+                    }
+                },
+            },
+        )
+        assert res.status_code == 200
+        data = res.json()["data"]
+        assert data["import_id"] >= 1
+        assert data["task_id"] == task["task_id"]
+        assert data["format"] == "summary"
+        assert data["source_system"] == "test_platform"
+
+    def test_062c_coverage_import_granular(self, client, create_task):
+        """北向接口：POST 写入 granular 格式覆盖率."""
+        _, _, task = create_task()
+        res = client.post(
+            f"/api/v1/analysis/tasks/{task['task_id']}/coverage",
+            json={
+                "format": "granular",
+                "covered": [
+                    {"file": "src/foo.c", "symbol": "bar", "line": 10, "branch_id": "b0"}
+                ],
+            },
+        )
+        assert res.status_code == 200
+        assert res.json()["data"]["format"] == "granular"
+
+    def test_062d_coverage_get_no_import(self, client, create_task):
+        """北向接口：GET 无导入时返回 has_data false."""
+        _, _, task = create_task()
+        res = client.get(f"/api/v1/analysis/tasks/{task['task_id']}/coverage")
+        assert res.status_code == 200
+        assert res.json()["data"]["has_data"] is False
+        assert res.json()["data"]["latest"] is None
+
+    def test_062e_coverage_get_after_import(self, client, create_task):
+        """北向接口：GET 导入后有 latest 元数据."""
+        _, _, task = create_task()
+        client.post(
+            f"/api/v1/analysis/tasks/{task['task_id']}/coverage",
+            json={"format": "summary", "files": {"a.c": {"lines_total": 1, "lines_hit": 1}}},
+        )
+        res = client.get(f"/api/v1/analysis/tasks/{task['task_id']}/coverage")
+        assert res.status_code == 200
+        assert res.json()["data"]["has_data"] is True
+        assert res.json()["data"]["latest"]["format"] == "summary"
+
+    def test_062f_coverage_import_task_not_found(self, client):
+        """北向接口：POST 任务不存在返回 404."""
+        res = client.post(
+            "/api/v1/analysis/tasks/nonexistent-uuid/coverage",
+            json={"format": "summary", "files": {}},
+        )
+        assert res.status_code == 404
 
 
 # ═══════════════════════════════════════════════════════════════════

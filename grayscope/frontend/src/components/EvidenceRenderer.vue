@@ -320,14 +320,14 @@
           <span class="gs-ev-label">上游调用者 ({{ evidence.impacted_callers.length }})</span>
           <div class="gs-ev-chip-list">
             <code v-for="s in evidence.impacted_callers.slice(0, 8)" :key="s" class="gs-ev-func-chip gs-ev-impacted">{{ typeof s === 'string' ? s : s.name }}()</code>
-            <span v-if="evidence.impacted_callers.length > 8" class="gs-ev-chip-more">+{{ evidence.impacted_callers.length - 8 }} more</span>
+            <span v-if="evidence.impacted_callers.length > 8" class="gs-ev-chip-more">还有 {{ evidence.impacted_callers.length - 8 }} 个</span>
           </div>
         </div>
         <div v-if="evidence.impacted_callees?.length" class="gs-ev-row">
           <span class="gs-ev-label">下游被调用 ({{ evidence.impacted_callees.length }})</span>
           <div class="gs-ev-chip-list">
             <code v-for="s in evidence.impacted_callees.slice(0, 8)" :key="s" class="gs-ev-func-chip gs-ev-impacted">{{ typeof s === 'string' ? s : s.name }}()</code>
-            <span v-if="evidence.impacted_callees.length > 8" class="gs-ev-chip-more">+{{ evidence.impacted_callees.length - 8 }} more</span>
+            <span v-if="evidence.impacted_callees.length > 8" class="gs-ev-chip-more">还有 {{ evidence.impacted_callees.length - 8 }} 个</span>
           </div>
         </div>
         <div v-if="evidence.impacted_symbols?.length" class="gs-ev-row">

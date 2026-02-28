@@ -361,15 +361,18 @@
 
 **查询参数：**
 
-- `fmt`：`json` \| `csv` \| `findings`（必填或默认 `json`）
+- `fmt`：`json` \| `csv` \| `markdown` \| `findings` \| `critical` \| `html`（默认 `json`）
 
 **说明：**
 
-- `fmt=json`：结构化测试用例建议，`Content-Type: application/json`，附件下载
-- `fmt=csv`：测试用例表（CSV），可导入测试管理工具，`Content-Type: text/csv`
+- `fmt=json`：结构化测试用例（含多函数交汇临界点 + 用例），`Content-Type: application/json`
+- `fmt=csv`：测试用例表（先交汇临界点再用例，含 source/covered 等），`Content-Type: text/csv`
+- `fmt=markdown`：灰盒测试用例清单（步骤、预期、性能/时序要求），`Content-Type: text/markdown`
 - `fmt=findings`：原始发现及 AI 增强数据，`Content-Type: application/json`
+- `fmt=critical`：仅多函数交汇临界点（JSON），便于快速粘贴到测试系统
+- `fmt=html`：单页 HTML 报告（汇总与交汇临界点），`Content-Type: text/html`，建议 `inline` 打开
 
-**响应 200：** 直接返回文件流，带 `Content-Disposition` 附件头。
+**响应 200：** 直接返回文件流，带 `Content-Disposition` 附件头（html 为 inline）。
 
 ### POST `/api/v1/analysis/tasks/{task_id}/retry` — 重试
 
@@ -389,6 +392,25 @@
 ### POST `/api/v1/analysis/tasks/{task_id}/cancel` — 取消
 
 **响应 202：** 任务被取消。
+
+### POST `/api/v1/analysis/tasks/{task_id}/coverage` — 写入覆盖率（北向接口）
+
+**说明**：供内网覆盖率系统等外部数据源推送「已覆盖的路径/分支/函数」到 GrayScope。详见 [覆盖率北向接口](COVERAGE_NORTHBOUND.md)。
+
+**请求体**：
+
+- `source_system`（可选）：来源系统标识。
+- `revision`（可选）：版本/构建标识。
+- `format`（必填）：`summary` | `granular`。
+- **summary**：`files` — 键为文件路径，值为 `{ lines_total, lines_hit, branches_total, branches_hit, functions: { 函数名: true|false } }`。
+- **granular**：`covered` — 数组，项为 `{ file, symbol?, line?, branch_id? }`；可选 `tests` — 数组，项为 `{ test_id, name?, covered: [...] }`。
+
+**响应 200**：`{ "code": "OK", "data": { "import_id": 1, "task_id": "...", "format": "summary", "source_system": "..." } }`  
+**404**：任务不存在。**400**：body 格式错误。
+
+### GET `/api/v1/analysis/tasks/{task_id}/coverage` — 查询已导入覆盖率元数据
+
+**响应 200**：`{ "code": "OK", "data": { "latest": { "import_id", "source_system", "revision", "format", "created_at" } | null, "has_data": true|false } }`。
 
 ---
 

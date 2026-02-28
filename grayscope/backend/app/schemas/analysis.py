@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 class AnalysisTarget(BaseModel):
     path: str = ""
     functions: list[str] = []
+    target_files: list[str] = []  # 可选：仅分析这些文件（大仓增量/变更文件）
 
 
 class AnalysisRevision(BaseModel):
@@ -28,20 +29,38 @@ class AnalysisAI(BaseModel):
     prompt_profile: str = "default-v1"
 
 
+class MrDiffFile(BaseModel):
+    """MR/PR 单文件变更：修改前与修改后内容，供「代码变更」板块展示。"""
+    path: str = ""
+    old_content: Optional[str] = None
+    new_content: Optional[str] = None
+    unified_diff: Optional[str] = None  # 可选：直接存 unified diff 文本
+
+
 class AnalysisOptions(BaseModel):
     callgraph_depth: int = Field(default=12, ge=1, le=20)
     max_files: int = Field(default=500, ge=1)
     risk_threshold: float = Field(default=0.6, ge=0.0, le=1.0)
     enable_data_flow: bool = True
     enable_cross_module_ai: bool = True
+    # MR/PR 代码变更（可选）：链接与修改前/后内容，供前端「MR 代码变更」板块展示
+    mr_url: Optional[str] = Field(default=None, max_length=2048)
+    mr_diff: Optional[list[dict[str, Any]]] = None  # [{ path, old_content?, new_content?, unified_diff? }]
+    # V2: 任务来源 repo=仅仓库 / mr=仅MR / mr_repo=MR+关联仓库（推荐）
+    task_source: Optional[str] = Field(default="repo", max_length=16)
+    # V2: 分析支柱 exception/concurrency/protocol/full
+    pillar: Optional[str] = Field(default="full", max_length=32)
 
 
 SUPPORTED_MODULES = {
     "branch_path", "boundary_value", "error_path", "call_graph",
+    "path_and_resource", "exception", "protocol",
     "data_flow", "concurrency", "diff_impact", "coverage_map",
     "postmortem", "knowledge_pattern",
 }
 SUPPORTED_TASK_TYPES = {"full", "file", "function", "diff", "postmortem"}
+PILLAR_VALUES = {"exception", "concurrency", "protocol", "full"}
+TASK_SOURCE_VALUES = {"repo", "mr", "mr_repo"}
 
 
 class TaskCreateRequest(BaseModel):
@@ -58,6 +77,22 @@ class TaskCreateRequest(BaseModel):
 
 class RetryRequest(BaseModel):
     modules: list[str] = []
+
+
+class TaskMrUpdate(BaseModel):
+    """更新任务关联的 MR/PR 链接与代码变更（供「MR 代码变更」板块展示）。"""
+    mr_url: Optional[str] = Field(default=None, max_length=2048)
+    mr_diff: Optional[list[dict[str, Any]]] = None  # [{ path, old_content?, new_content?, unified_diff? }]
+
+
+class CoverageImportRequest(BaseModel):
+    """北向接口：写入覆盖率数据。format=summary 时需提供 files；format=granular 时需提供 covered 或 tests。"""
+    source_system: Optional[str] = Field(default="", max_length=128)
+    revision: Optional[str] = Field(default="", max_length=256)
+    format: str = Field(..., pattern="^(summary|granular)$")
+    files: Optional[dict[str, Any]] = None
+    covered: Optional[list[dict[str, Any]]] = None
+    tests: Optional[list[dict[str, Any]]] = None
 
 
 # ── 响应模型 ──────────────────────────────────────────────────────────
@@ -85,6 +120,9 @@ class TaskStatusOut(BaseModel):
     module_status: dict[str, str]
     created_at: datetime
     updated_at: datetime
+    error_json: Optional[str] = None  # 含 cross_module_ai 等扩展，供前端展示多函数交汇临界点
+    options: Optional[dict[str, Any]] = None  # 含 mr_url、mr_diff、task_source 等
+    pillar: Optional[str] = None  # V2 分析支柱
 
 
 class ModuleResultSummary(BaseModel):

@@ -98,7 +98,7 @@ const chartOption = computed(() => {
     })
 
     if (callerOverflow > 0) {
-      const overName = `+${callerOverflow} more`
+      const overName = `还有 ${callerOverflow} 个`
       nodes.push({
         name: overName, symbolSize: 18,
         itemStyle: { color: '#B0BEC5' },
@@ -126,7 +126,7 @@ const chartOption = computed(() => {
     })
 
     if (calleeOverflow > 0) {
-      const overName = `+${calleeOverflow} more ↓`
+      const overName = `还有 ${calleeOverflow} 个 ↓`
       nodes.push({
         name: overName, symbolSize: 18,
         itemStyle: { color: '#B0BEC5' },

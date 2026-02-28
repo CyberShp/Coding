@@ -32,19 +32,21 @@ class Settings(BaseSettings):
     artifact_dir: str = str(_PROJECT_ROOT / "artifacts")
 
     # --- AI defaults ---
-    default_provider: str = "ollama"
-    default_model: str = "qwen2.5-coder"
+    default_provider: str = "deepseek"
+    default_model: str = "deepseek-coder"
 
     # --- Provider endpoints ---
-    ollama_base_url: str = "http://localhost:11434"
+    # DeepSeek (can use custom base_url for internal mirrors)
     deepseek_base_url: str = "https://api.deepseek.com"
     deepseek_api_key: Optional[str] = None
-    qwen_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode"
-    qwen_api_key: Optional[str] = None
-    openai_compat_base_url: str = "http://localhost:8000"
-    openai_compat_api_key: Optional[str] = None
-    custom_rest_base_url: str = "http://localhost:9000"
-    custom_rest_api_key: Optional[str] = None
+    # Custom provider (any OpenAI-compatible API)
+    custom_base_url: str = "http://localhost:8000"
+    custom_api_key: Optional[str] = None
+    custom_model: str = "default"
+
+    # --- AI Proxy (for internal network environments) ---
+    # Supports HTTP/HTTPS/SOCKS5 proxy, e.g. "http://proxy:8080" or "socks5://proxy:1080"
+    ai_proxy: Optional[str] = None
 
     # --- Prompt ---
     prompt_template_dir: str = str(
@@ -53,6 +55,9 @@ class Settings(BaseSettings):
 
     # --- Task ---
     max_concurrent_tasks: int = 10
+
+    # --- 显示时间（部署环境时区，用于前端时间展示）---
+    display_timezone: str = "Asia/Shanghai"
 
 
 settings = Settings()

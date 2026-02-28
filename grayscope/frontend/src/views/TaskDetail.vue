@@ -16,12 +16,17 @@
           <el-icon><RefreshRight /></el-icon> 重试
         </el-button>
         <el-button v-if="['pending','running'].includes(task.status)" type="danger" size="small" plain @click="doCancel">取消</el-button>
+        <el-button v-if="['success','partial_failed'].includes(task.status)" size="small" @click="doGenerateSfmea" :loading="sfmeaLoading">生成 SFMEA</el-button>
         <el-dropdown trigger="click">
           <el-button size="small"><el-icon><Download /></el-icon> 导出</el-button>
           <template #dropdown>
             <el-dropdown-menu>
               <el-dropdown-item @click="doExport('json')">JSON 测试用例</el-dropdown-item>
               <el-dropdown-item @click="doExport('csv')">CSV 表格</el-dropdown-item>
+              <el-dropdown-item @click="doExport('sfmea')">SFMEA 条目 (CSV)</el-dropdown-item>
+              <el-dropdown-item @click="doExport('markdown')">Markdown 清单</el-dropdown-item>
+              <el-dropdown-item @click="doExport('critical')">仅交汇临界点</el-dropdown-item>
+              <el-dropdown-item @click="doExport('html')">HTML 报告</el-dropdown-item>
               <el-dropdown-item @click="doExport('findings')">原始发现</el-dropdown-item>
             </el-dropdown-menu>
           </template>
@@ -334,11 +339,20 @@
             <p>本次分析未启用 AI 增强，或 AI 模型不可用</p>
             <p style="font-size:12px;color:var(--gs-text-muted);">
               请在"设置 → AI 模型管理"中配置可用的 AI 模型（如 DeepSeek、Ollama 等），<br>
-              然后在新建分析时选择 AI 提供商和模型
+              然后在新建分析时选择 AI 提供商和模型；启用「跨模块 AI 综合」后，将在此展示<strong>多函数交汇临界点</strong>（灰盒核心：一次用例暴露不可接受结果）。
             </p>
           </div>
 
           <div v-else class="gs-ai-results">
+            <!-- 无跨模块结果时也展示「多函数交汇临界点」说明，便于用户理解灰盒核心 -->
+            <div v-if="!(crossModuleAi && crossModuleAi.success)" class="gs-ai-cross-module-card gs-critical-intersection">
+              <div class="gs-ai-section-title"><el-icon color="#8B5CF6"><Connection /></el-icon> 多函数交汇临界点</div>
+              <p class="gs-cc-what">
+                交汇 = 多个函数/分支在<strong>同一场景</strong>下同时参与（如：login 执行中 + 端口闪断/网卡下电处理被触发），不单指「同一变量」；包含执行路径、调用链、故障注入时机上的交汇。一次灰盒用例针对该交汇点即可暴露不可接受结果。
+              </p>
+              <p class="gs-cc-empty">需在<strong>新建分析时勾选「启用跨模块 AI 综合」</strong>并完成分析后，下方「跨模块综合分析」卡片会出现在此，并列出 AI 推断的交汇临界点。</p>
+            </div>
+
             <!-- 跨模块 AI 综合分析 -->
             <div v-if="crossModuleAi && crossModuleAi.success" class="gs-ai-cross-module-card">
               <div class="gs-ai-module-header">
@@ -347,6 +361,44 @@
                 <span v-if="crossModuleAi.provider" style="font-size:11px;color:var(--gs-text-muted);margin-left:auto;">
                   {{ crossModuleAi.provider }}/{{ crossModuleAi.model }}
                 </span>
+              </div>
+
+              <!-- 灰盒核心：多函数交汇临界点 — 一次用例即可暴露黑盒需 N 次才能撞出的不可接受结果 -->
+              <div class="gs-ai-cross-section gs-critical-intersection">
+                <div class="gs-ai-section-title">
+                  <el-icon color="#8B5CF6"><Connection /></el-icon>
+                  多函数交汇临界点
+                </div>
+                <p class="gs-cc-what">
+                  交汇 = 多个函数/分支在<strong>同一场景</strong>下同时参与（如：login 执行中 + 端口闪断处理被触发 + 网卡下电处理被触发），
+                  不是单指「同一个变量」；同一变量是并发分析里的共享变量竞态。这里指<strong>执行路径、调用链或故障注入时机</strong>上的交汇，
+                  一次灰盒用例针对该交汇点即可暴露不可接受结果，无需 N 次黑盒盲测。
+                </p>
+                <div v-if="criticalCombinations.length">
+                  <div v-for="(cc, i) in criticalCombinations" :key="'cc'+i" class="gs-ai-cross-item gs-critical-combo">
+                    <div class="gs-ai-cross-item-header">
+                      <strong>交汇点 {{ i + 1 }}</strong>
+                      <span v-if="cc.scenario_brief" class="gs-cc-brief">{{ cc.scenario_brief }}</span>
+                    </div>
+                    <div v-if="cc.related_functions && cc.related_functions.length" class="gs-cc-funcs">
+                      <span class="gs-cc-label">关联函数/分支：</span>
+                      <el-tag v-for="fn in cc.related_functions" :key="fn" size="small" type="primary" effect="plain" style="margin:2px;">{{ fn }}</el-tag>
+                    </div>
+                    <p v-if="(cc.expected_outcome || cc.expected_failure)" class="gs-cc-expected">
+                      <span class="gs-cc-label">预期结果（可成功或可接受失败）：</span>{{ cc.expected_outcome || cc.expected_failure }}
+                    </p>
+                    <p v-if="cc.unacceptable_outcomes && cc.unacceptable_outcomes.length" class="gs-cc-unacceptable">
+                      <span class="gs-cc-label">不可接受结果：</span>
+                      <el-tag v-for="(o, j) in cc.unacceptable_outcomes" :key="j" size="small" type="danger" effect="plain" style="margin:2px;">{{ o }}</el-tag>
+                    </p>
+                    <p v-if="cc.performance_requirement" class="gs-cc-perf">
+                      <span class="gs-cc-label">性能/时序要求：</span>{{ cc.performance_requirement }}
+                    </p>
+                  </div>
+                </div>
+                <p v-else class="gs-cc-empty">
+                  当前暂无 AI 识别的交汇临界点。请确保新建分析时<strong>启用了「跨模块 AI 综合」</strong>且分析已成功完成，AI 会从调用图+错误路径+数据流中推断多函数交汇场景并填入此处。
+                </p>
               </div>
 
               <div v-if="crossModuleAi.cross_module_risks && crossModuleAi.cross_module_risks.length" class="gs-ai-cross-section">
@@ -397,7 +449,7 @@
               </div>
 
               <div v-if="crossModuleAi.usage && crossModuleAi.usage.total_tokens" class="gs-ai-usage">
-                Token 用量: {{ crossModuleAi.usage.prompt_tokens || 0 }} + {{ crossModuleAi.usage.completion_tokens || 0 }} = {{ crossModuleAi.usage.total_tokens }}
+                Token 使用量：{{ crossModuleAi.usage.prompt_tokens || 0 }}（输入）+ {{ crossModuleAi.usage.completion_tokens || 0 }}（输出）= {{ crossModuleAi.usage.total_tokens }}
               </div>
             </div>
 
@@ -439,8 +491,96 @@
               </div>
 
               <div v-if="summary.usage && summary.usage.total_tokens" class="gs-ai-usage">
-                Token 用量: {{ summary.usage.prompt_tokens || 0 }} + {{ summary.usage.completion_tokens || 0 }} = {{ summary.usage.total_tokens }}
+                Token 使用量：{{ summary.usage.prompt_tokens || 0 }}（输入）+ {{ summary.usage.completion_tokens || 0 }}（输出）= {{ summary.usage.total_tokens }}
               </div>
+            </div>
+          </div>
+        </el-tab-pane>
+
+        <!-- MR 代码变更（与本次任务分析关联：MR 变更文件即本仓库中的变更，与发现联动） -->
+        <el-tab-pane label="MR 代码变更" name="mr">
+          <div class="gs-mr-block">
+            <div class="gs-mr-intro">
+              <p style="font-size:12px;color:var(--gs-text-muted);margin-bottom:12px;">
+                MR/PR 中的代码变更通常属于<strong>当前分析任务所在项目/仓库</strong>。下方会关联本次任务的发现：标出「MR 涉及文件」及「与 MR 变更文件相关的发现」，便于针对 MR 做灰盒测试设计。
+              </p>
+            </div>
+            <div v-if="taskOptions?.mr_url || (taskOptions?.mr_diff && taskOptions.mr_diff.length)" class="gs-mr-display">
+              <div class="gs-mr-section">
+                <div class="gs-ai-section-title">MR/PR 链接</div>
+                <p v-if="taskOptions?.mr_url">
+                  <a :href="taskOptions.mr_url" target="_blank" rel="noopener" class="gs-mr-link">{{ taskOptions.mr_url }}</a>
+                </p>
+                <p v-else class="gs-text-muted">未填写</p>
+              </div>
+              <!-- 与本次分析发现的关联：MR 涉及文件 + 落在这些文件上的发现 -->
+              <div v-if="mrDiffPaths.length" class="gs-mr-section gs-mr-linkage">
+                <div class="gs-ai-section-title">与本次分析发现的关联</div>
+                <p class="gs-mr-linkage-desc">本 MR 涉及 <strong>{{ mrDiffPaths.length }}</strong> 个文件；以下为<strong>本次任务</strong>分析结果中落在这些文件上的发现，便于结合 MR 变更做用例设计。</p>
+                <div class="gs-mr-paths">
+                  <span class="gs-mr-path-tag" v-for="p in mrDiffPaths" :key="p">{{ p }}</span>
+                </div>
+                <div v-if="findingsInMrFiles.length" class="gs-mr-findings">
+                  <el-table :data="findingsInMrFiles" size="small" class="gs-table" max-height="320">
+                    <el-table-column label="文件" min-width="200">
+                      <template #default="{ row }">
+                        <router-link v-if="taskProjectId && row.file_path" :to="`/projects/${taskProjectId}/code?path=${encodeURIComponent(row.file_path)}&line=${row.line_start || ''}`" class="gs-file-link">{{ shortenPath(row.file_path) }}</router-link>
+                        <span v-else>{{ shortenPath(row.file_path) }}</span>
+                      </template>
+                    </el-table-column>
+                    <el-table-column label="位置" width="80">
+                      <template #default="{ row }">L{{ row.line_start || '-' }}</template>
+                    </el-table-column>
+                    <el-table-column label="风险类型" width="140">
+                      <template #default="{ row }">{{ riskTypeLabel(row.risk_type) }}</template>
+                    </el-table-column>
+                    <el-table-column label="标题" min-width="180" show-overflow-tooltip>
+                      <template #default="{ row }">{{ row.title || '-' }}</template>
+                    </el-table-column>
+                  </el-table>
+                </div>
+                <p v-else class="gs-text-muted" style="margin-top:8px;">本次分析中暂无落在上述 MR 文件上的发现。</p>
+              </div>
+              <div v-if="taskOptions?.mr_diff && taskOptions.mr_diff.length" class="gs-mr-section">
+                <div class="gs-ai-section-title">修改前 / 修改后 代码变更</div>
+                <div v-for="(item, idx) in taskOptions.mr_diff" :key="idx" class="gs-mr-diff-file">
+                  <div class="gs-mr-diff-path">{{ item.path || `文件 ${idx + 1}` }}</div>
+                  <template v-if="item.unified_diff">
+                    <pre class="gs-mr-diff-unified">{{ item.unified_diff }}</pre>
+                  </template>
+                  <template v-else>
+                    <div class="gs-mr-diff-cols">
+                      <div class="gs-mr-diff-col">
+                        <div class="gs-mr-diff-col-title">修改前</div>
+                        <pre class="gs-mr-diff-pre">{{ item.old_content || '（无）' }}</pre>
+                      </div>
+                      <div class="gs-mr-diff-col">
+                        <div class="gs-mr-diff-col-title">修改后</div>
+                        <pre class="gs-mr-diff-pre">{{ item.new_content || '（无）' }}</pre>
+                      </div>
+                    </div>
+                  </template>
+                </div>
+              </div>
+            </div>
+            <div v-else class="gs-mr-empty">
+              <p>当前任务未关联 MR/PR 链接或代码变更。</p>
+              <p style="font-size:12px;color:var(--gs-text-muted);">可在下方填写 MR 链接或粘贴 unified diff（建议含文件路径，便于与本次分析发现关联）。</p>
+            </div>
+            <el-divider />
+            <div class="gs-mr-form">
+              <div class="gs-ai-section-title">填写 / 更新 MR 信息</div>
+              <el-form label-width="100px" style="max-width:720px">
+                <el-form-item label="MR/PR 链接">
+                  <el-input v-model="mrForm.url" placeholder="GitLab MR 或 GitHub PR 链接" clearable />
+                </el-form-item>
+                <el-form-item label="代码变更">
+                  <el-input v-model="mrForm.diffText" type="textarea" :rows="8" placeholder="可选：粘贴 unified diff 或修改前/后内容（多文件可多次保存）" />
+                </el-form-item>
+                <el-form-item>
+                  <el-button type="primary" @click="saveMrInfo" :loading="mrSaving">保存</el-button>
+                </el-form-item>
+              </el-form>
             </div>
           </div>
         </el-tab-pane>
@@ -448,17 +588,38 @@
         <!-- 导出 -->
         <el-tab-pane label="导出" name="export">
           <div style="padding: 48px; text-align: center;">
-            <p style="color: var(--gs-text-muted); margin-bottom: 24px;">选择导出格式下载分析结果</p>
-            <div style="display: flex; gap: 16px; justify-content: center;">
+            <p style="color: var(--gs-text-muted); margin-bottom: 8px;">导出文件均含多函数交汇临界点与按发现生成的用例；步骤与预期可复制加入回归套件。</p>
+            <p style="color: var(--gs-text-muted); margin-bottom: 24px;">选择格式下载或打开报告</p>
+            <div style="display: flex; flex-wrap: wrap; gap: 16px; justify-content: center;">
               <div class="gs-export-card" @click="doExport('json')">
                 <el-icon :size="32" color="#4B9FD5"><Document /></el-icon>
                 <div class="gs-export-label">JSON 测试用例</div>
-                <div class="gs-export-desc">结构化测试用例建议</div>
+                <div class="gs-export-desc">结构化用例 + 交汇临界点</div>
               </div>
               <div class="gs-export-card" @click="doExport('csv')">
                 <el-icon :size="32" color="#00AA00"><Grid /></el-icon>
                 <div class="gs-export-label">CSV 表格</div>
-                <div class="gs-export-desc">可导入测试管理工具</div>
+                <div class="gs-export-desc">先交汇点再用例，可导入测试管理</div>
+              </div>
+              <div class="gs-export-card" @click="doExport('sfmea')">
+                <el-icon :size="32" color="#7C3AED"><Document /></el-icon>
+                <div class="gs-export-label">SFMEA 条目 (CSV)</div>
+                <div class="gs-export-desc">RPN、严重度等</div>
+              </div>
+              <div class="gs-export-card" @click="doExport('markdown')">
+                <el-icon :size="32" color="#7C3AED"><Document /></el-icon>
+                <div class="gs-export-label">Markdown 清单</div>
+                <div class="gs-export-desc">含步骤、预期、如何执行</div>
+              </div>
+              <div class="gs-export-card" @click="doExport('critical')">
+                <el-icon :size="32" color="#D4333F"><Connection /></el-icon>
+                <div class="gs-export-label">仅交汇临界点</div>
+                <div class="gs-export-desc">JSON，快速粘贴到测试系统</div>
+              </div>
+              <div class="gs-export-card" @click="doExport('html')">
+                <el-icon :size="32" color="#0ea5e9"><Document /></el-icon>
+                <div class="gs-export-label">HTML 报告</div>
+                <div class="gs-export-desc">单页汇总，分享或归档</div>
               </div>
               <div class="gs-export-card" @click="doExport('findings')">
                 <el-icon :size="32" color="#EAB308"><DataLine /></el-icon>
@@ -485,6 +646,8 @@ import api from '../api.js'
 import { useRiskColor } from '../composables/useRiskColor.js'
 import { useModuleNames } from '../composables/useModuleNames.js'
 import { useTestSuggestion } from '../composables/useTestSuggestion.js'
+import { getRiskTypeName } from '../composables/useRiskTypeNames.js'
+import { useFormatDate } from '../composables/useFormatDate.js'
 import EvidenceRenderer from '../components/EvidenceRenderer.vue'
 
 use([CanvasRenderer, RadarChart, TitleComponent, TooltipComponent, LegendComponent])
@@ -497,7 +660,8 @@ export default {
     const { riskColor, riskLevel, severityType, statusType, statusLabel } = useRiskColor()
     const { getDisplayName } = useModuleNames()
     const { getTestObjective, getTestSteps, getTestExpected } = useTestSuggestion()
-    return { riskColor, riskLevel, severityType, statusType, statusLabel, getDisplayName, getTestObjective, getTestSteps, getTestExpected }
+    const { formatDate } = useFormatDate()
+    return { riskColor, riskLevel, severityType, statusType, statusLabel, getDisplayName, getTestObjective, getTestSteps, getTestExpected, formatDate }
   },
   data() {
     return {
@@ -510,9 +674,15 @@ export default {
       activeTab: 'modules',
       filterSeverity: '',
       filterModule: '',
+      mrForm: { url: '', diffText: '' },
+      mrSaving: false,
+      sfmeaLoading: false,
     }
   },
   computed: {
+    taskOptions() {
+      return this.task?.options || null
+    },
     filteredFindings() {
       let list = this.findings
       if (this.filterSeverity) list = list.filter(f => f.severity === this.filterSeverity)
@@ -544,6 +714,11 @@ export default {
     zeroCoverageCount() {
       return this.coverageFindings.filter(f => (f.line_coverage || 0) === 0).length
     },
+    /** 灰盒核心：多函数交汇临界点（来自跨模块 AI 的 critical_combinations），一次用例即可暴露不可接受结果 */
+    criticalCombinations() {
+      const list = this.crossModuleAi?.test_suggestions || []
+      return list.filter(s => s && (s.type === 'critical_combination' || (s.related_functions && s.related_functions.length)))
+    },
     aiEnabled() {
       return Object.keys(this.aiSummaries).length > 0
     },
@@ -570,6 +745,26 @@ export default {
         }],
       }
     },
+    /** MR 变更中的文件路径列表（与本次任务分析关联） */
+    mrDiffPaths() {
+      const diff = this.taskOptions?.mr_diff
+      if (!Array.isArray(diff)) return []
+      return diff.map(d => (d.path || '').trim()).filter(Boolean)
+    },
+    /** 本次任务发现中落在 MR 涉及文件上的项（联系起来分析） */
+    findingsInMrFiles() {
+      const paths = this.mrDiffPaths
+      if (!paths.length) return []
+      const norm = s => (s || '').replace(/^\/+/, '')
+      return this.findings.filter(f => {
+        const fp = norm(f.file_path || '')
+        if (!fp) return false
+        return paths.some(p => {
+          const pp = norm(p)
+          return fp === pp || fp.endsWith('/' + pp) || pp.endsWith('/' + fp)
+        })
+      })
+    },
   },
   async mounted() {
     await this.loadAll()
@@ -578,6 +773,8 @@ export default {
     async loadAll() {
       try {
         this.task = await api.getTaskStatus(this.taskId)
+        this.mrForm.url = this.task?.options?.mr_url || ''
+        this.mrForm.diffText = ''
         this.results = await api.getTaskResults(this.taskId)
         this.modules = this.results.modules || []
         // 尝试读取跨模块 AI 综合结果（存储在 task 的 error_json 中）
@@ -618,30 +815,7 @@ export default {
       return ''
     },
     riskTypeLabel(type) {
-      const map = {
-        branch_error: '错误处理分支',
-        branch_cleanup: '资源清理分支',
-        branch_boundary: '边界条件分支',
-        branch_state: '状态/模式判断',
-        branch_normal: '正常分支',
-        boundary_miss: '边界值缺失',
-        invalid_input_gap: '无效输入风险',
-        changed_core_path: '核心路径变更',
-        error_path_incomplete: '错误路径不完整',
-        error_no_check: '缺少错误检查',
-        race_condition: '竞态条件',
-        deadlock_risk: '死锁风险',
-        deep_param_propagation: '深层参数传播',
-        external_to_sensitive: '外部输入→敏感操作',
-        value_transform_risk: '值域变换风险',
-        cross_function_resource_leak: '跨函数资源泄漏',
-        cross_function_deadlock_risk: '跨函数死锁风险',
-        cross_function_race: '跨函数数据竞态',
-        transitive_impact: '传递性影响',
-        deep_impact_surface: '深层影响面',
-        race_write_without_lock: '无锁写入竞态',
-      }
-      return map[type] || type
+      return getRiskTypeName(type)
     },
     shortenPath(path) {
       if (!path) return '-'
@@ -678,9 +852,32 @@ export default {
       try { await api.cancelTask(this.taskId); ElMessage.success('已取消'); await this.loadAll() }
       catch (e) { ElMessage.error('取消失败: ' + e.message) }
     },
-    formatDate(d) {
-      if (!d) return '-'
-      return new Date(d).toLocaleString('zh-CN')
+    async doGenerateSfmea() {
+      this.sfmeaLoading = true
+      try {
+        const data = await api.generateSfmea(this.taskId)
+        ElMessage.success(data?.generated != null ? `已生成 ${data.generated} 条 SFMEA 条目` : 'SFMEA 已生成')
+      } catch (e) {
+        ElMessage.error('生成 SFMEA 失败: ' + e.message)
+      } finally {
+        this.sfmeaLoading = false
+      }
+    },
+    async saveMrInfo() {
+      this.mrSaving = true
+      try {
+        const payload = { mr_url: this.mrForm.url || null }
+        if (this.mrForm.diffText && this.mrForm.diffText.trim()) {
+          payload.mr_diff = [{ path: '', unified_diff: this.mrForm.diffText.trim() }]
+        }
+        await api.updateTaskMr(this.taskId, payload)
+        ElMessage.success('MR 信息已更新')
+        this.task = await api.getTaskStatus(this.taskId)
+      } catch (e) {
+        ElMessage.error('保存失败: ' + e.message)
+      } finally {
+        this.mrSaving = false
+      }
     },
   },
 }
@@ -751,6 +948,33 @@ export default {
 }
 .gs-export-label { font-weight: 600; font-size: 14px; }
 .gs-export-desc { font-size: 12px; color: var(--gs-text-muted); }
+
+/* ── MR 代码变更 ───────────────────── */
+.gs-mr-block { padding: 16px; }
+.gs-mr-display { margin-bottom: 20px; }
+.gs-mr-section { margin-bottom: 20px; }
+.gs-mr-link { color: var(--gs-primary); word-break: break-all; }
+.gs-mr-empty { color: var(--gs-text-muted); margin-bottom: 16px; }
+.gs-mr-diff-file { margin-bottom: 20px; border: 1px solid var(--gs-border); border-radius: 8px; overflow: hidden; }
+.gs-mr-diff-path { padding: 8px 12px; background: #f5f5f5; font-family: var(--gs-font-mono); font-size: 12px; }
+.gs-mr-diff-unified, .gs-mr-diff-pre {
+  margin: 0; padding: 12px; font-family: var(--gs-font-mono); font-size: 12px;
+  background: #1e1e1e; color: #d4d4d4; overflow-x: auto; white-space: pre-wrap; max-height: 400px; overflow-y: auto;
+}
+.gs-mr-diff-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 0; }
+.gs-mr-diff-col { border-right: 1px solid var(--gs-border); }
+.gs-mr-diff-col:last-child { border-right: none; }
+.gs-mr-diff-col-title { padding: 6px 12px; background: #eee; font-size: 12px; font-weight: 600; }
+.gs-mr-diff-col .gs-mr-diff-pre { max-height: 300px; }
+.gs-mr-form { margin-top: 16px; }
+.gs-mr-intro { margin-bottom: 16px; }
+.gs-mr-linkage { background: var(--gs-bg-subtle, #f8f9fa); border-radius: 8px; padding: 12px 16px; }
+.gs-mr-linkage-desc { font-size: 13px; color: var(--gs-text-secondary); margin-bottom: 10px; }
+.gs-mr-paths { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+.gs-mr-path-tag { font-family: var(--gs-font-mono); font-size: 11px; padding: 4px 8px; background: #e8eaed; border-radius: 4px; }
+.gs-mr-findings .gs-table { margin-top: 8px; }
+.gs-mr-findings .gs-file-link { color: var(--gs-primary); text-decoration: none; }
+.gs-mr-findings .gs-file-link:hover { text-decoration: underline; }
 
 /* ── 内联测试建议 ──────────────────── */
 .gs-inline-test-suggestion {
@@ -969,4 +1193,13 @@ export default {
 .gs-ai-cross-risk { border-left: 3px solid #D50000; }
 .gs-ai-cross-hidden { border-left: 3px solid #E57F00; }
 .gs-ai-cross-scenario { border-left: 3px solid #4B9FD5; }
+.gs-critical-intersection { border: 1px solid rgba(139, 92, 246, 0.25); border-radius: 8px; padding: 12px; background: rgba(139, 92, 246, 0.04); }
+.gs-ai-section-title .gs-ai-section-hint { font-size: 11px; font-weight: normal; color: var(--gs-text-muted); margin-left: 8px; }
+.gs-critical-combo { border-left: 3px solid #8B5CF6; }
+.gs-cc-funcs, .gs-cc-expected, .gs-cc-unacceptable { margin: 6px 0 0; font-size: 12px; }
+.gs-cc-label { font-weight: 600; color: var(--gs-text-secondary); margin-right: 6px; }
+.gs-cc-brief { font-size: 12px; color: var(--gs-text-muted); margin-left: 8px; font-weight: normal; }
+.gs-cc-what { margin: 0 0 12px; font-size: 12px; color: var(--gs-text-secondary); line-height: 1.7; }
+.gs-cc-what strong { color: var(--gs-text-primary); }
+.gs-cc-empty { margin: 8px 0 0; font-size: 12px; color: var(--gs-text-muted); line-height: 1.6; }
 </style>

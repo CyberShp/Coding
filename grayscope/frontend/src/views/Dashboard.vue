@@ -123,6 +123,7 @@ import { Plus, FolderOpened, DataAnalysis, Warning, TrendCharts } from '@element
 import api from '../api.js'
 import { useRiskColor } from '../composables/useRiskColor.js'
 import { useModuleNames } from '../composables/useModuleNames.js'
+import { useFormatDate } from '../composables/useFormatDate.js'
 
 use([CanvasRenderer, PieChart, BarChart, TitleComponent, TooltipComponent, LegendComponent, GridComponent])
 
@@ -132,7 +133,8 @@ export default {
   setup() {
     const { riskColor, statusType, statusLabel } = useRiskColor()
     const { getDisplayName } = useModuleNames()
-    return { riskColor, statusType, statusLabel, getDisplayName }
+    const { formatDate } = useFormatDate()
+    return { riskColor, statusType, statusLabel, getDisplayName, formatDate }
   },
   data() {
     return {
@@ -152,7 +154,7 @@ export default {
         { label: '项目数', value: this.stats.projects, icon: FolderOpened, color: '#409EFF' },
         { label: '分析任务', value: this.stats.tasks, icon: DataAnalysis, color: '#67C23A' },
         { label: '风险发现', value: this.stats.findings, icon: Warning, color: '#E6A23C' },
-        { label: '平均风险分', value: this.stats.avgRisk.toFixed(2), icon: TrendCharts, color: '#F56C6C' },
+        { label: '平均风险评分', value: this.stats.avgRisk.toFixed(2), icon: TrendCharts, color: '#F56C6C' },
       ]
     },
     pieOption() {
@@ -205,10 +207,6 @@ export default {
       } catch (e) {
         this.$message.error('创建失败: ' + e.message)
       } finally { this.creating = false }
-    },
-    formatDate(d) {
-      if (!d) return '-'
-      return new Date(d).toLocaleString('zh-CN')
     },
   },
 }

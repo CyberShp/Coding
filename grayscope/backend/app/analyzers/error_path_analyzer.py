@@ -307,6 +307,9 @@ def analyze(ctx: AnalyzeContext) -> ModuleResult:
                             "callee_error_returns": callee_errors[:5],
                             "return_value_checked": False,
                             "cross_function_chain": [sym.name, callee_name],
+                            "related_functions": [sym.name, callee_name],
+                            "expected_failure": "被调函数返回错误、调用方返回错误码",
+                            "unacceptable_outcomes": ["资源泄漏", "进程崩溃", "不可恢复状态"],
                         },
                     })
                 else:
@@ -358,6 +361,9 @@ def analyze(ctx: AnalyzeContext) -> ModuleResult:
                                 "return_value_checked": True,
                                 "error_cleanup_found": False,
                                 "cross_function_chain": [sym.name, callee_name],
+                                "related_functions": [sym.name, callee_name],
+                                "expected_failure": "被调函数失败后调用方返回错误",
+                                "unacceptable_outcomes": ["资源泄漏", "进程崩溃"],
                             },
                         })
 

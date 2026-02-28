@@ -33,9 +33,21 @@ async def _call_model_async(
     provider_name: str,
     model: str,
     messages: list[dict[str, str]],
+    *,
+    api_key: str | None = None,
+    base_url: str | None = None,
 ) -> dict:
-    """异步调用 AI 模型并返回解析后的响应。"""
-    provider = get_provider(provider_name, model=model)
+    """异步调用 AI 模型并返回解析后的响应。
+    
+    当显式传入 api_key/base_url 时，会使用这些值而非 settings 中的默认值。
+    """
+    provider_kwargs: dict[str, Any] = {"model": model}
+    if api_key is not None:
+        provider_kwargs["api_key"] = api_key
+    if base_url is not None:
+        provider_kwargs["base_url"] = base_url.rstrip("/")
+    
+    provider = get_provider(provider_name, **provider_kwargs)
     try:
         result = await provider.chat(messages, model=model)
         return {
@@ -57,13 +69,19 @@ def _call_model_sync(
     provider_name: str,
     model: str,
     messages: list[dict[str, str]],
+    *,
+    api_key: str | None = None,
+    base_url: str | None = None,
 ) -> dict:
     """同步调用 AI 模型。"""
     try:
         loop = asyncio.new_event_loop()
         try:
             return loop.run_until_complete(
-                _call_model_async(provider_name, model, messages)
+                _call_model_async(
+                    provider_name, model, messages,
+                    api_key=api_key, base_url=base_url,
+                )
             )
         finally:
             loop.close()
@@ -181,6 +199,8 @@ def enrich_module(
 
     provider_name = ai_config.get("provider", "ollama")
     model = ai_config.get("model", "qwen2.5-coder")
+    api_key = ai_config.get("api_key")
+    base_url = ai_config.get("base_url")
 
     # 从最高风险的发现中构建上下文
     top_findings = findings[:10]
@@ -240,7 +260,10 @@ def enrich_module(
 
     # 调用 AI 模型
     logger.info("正在调用 AI 模型: %s/%s (消息数=%d)", provider_name, model, len(messages))
-    ai_result = _call_model_sync(provider_name, model, messages)
+    ai_result = _call_model_sync(
+        provider_name, model, messages,
+        api_key=api_key, base_url=base_url,
+    )
 
     # 解析 AI 响应
     ai_content = ai_result.get("content", "")
@@ -276,13 +299,17 @@ def synthesize_cross_module(
     all_module_results: dict[str, dict],
     source_snippets: dict[str, str],
     ai_config: dict,
+    candidate_combinations: list[dict] | None = None,
 ) -> dict:
     """跨模块综合分析: 结合所有分析器的发现，生成全局视角的测试建议。
 
     在所有模块完成后调用，提供跨模块关联分析和端到端测试建议。
+    若传入 candidate_combinations（静态交汇候选），将纳入提示由 AI 排序/补全，并合并入最终 test_suggestions。
     """
     provider_name = ai_config.get("provider", "ollama")
     model = ai_config.get("model", "qwen2.5-coder")
+    api_key = ai_config.get("api_key")
+    base_url = ai_config.get("base_url")
 
     if not provider_name or provider_name.lower() in ("none", "", "skip"):
         return {
@@ -326,15 +353,18 @@ def synthesize_cross_module(
                 "sensitive": ev.get("sensitive_ops", []),
             })
 
-    # 构建综合提示
+    # 构建综合提示（灰盒核心：多函数交汇临界点）
     system_msg = (
-        "你是一个灰盒测试分析专家，擅长从多维度的静态分析结果中发现跨模块的隐藏风险，"
-        "并设计端到端的测试方案。你需要:\n"
-        "1. 关联不同分析器的发现（边界值 + 并发 + 错误路径 + 数据流），发现单模块无法看到的组合风险\n"
-        "2. 基于数据流传播链，设计从入口函数到风险点的端到端测试场景\n"
-        "3. 识别'看似正常的入口值经过多层调用变换后触发深层风险'的攻击路径\n"
-        "4. 给出可操作的灰盒测试指导，帮助测试人员提升技术水平\n\n"
-        "输出格式为 JSON。"
+        "你是一个灰盒测试分析专家。灰盒测试的核心价值是：**精准找到多个函数（或故障处理分支）交汇的临界点**，"
+        "用一次设计好的测试用例暴露黑盒需要 N 次才能撞出的问题。\n"
+        "例如：iSCSI login 时若叠加「端口闪断」或「网卡下电」（代码里各有对应处理函数），预期失败是「建联失败」；"
+        "但若出现「控制器下电」「进程崩溃」则为不可接受。灰盒要找出 login、端口闪断处理、网卡下电处理 等函数交汇的临界点。\n\n"
+        "你需要:\n"
+        "1. **多函数交汇临界点**：从调用图+错误路径+数据流中，找出 2 个或 3 个及以上函数/分支交汇的场景，"
+        "标明 related_functions、expected_failure（可接受的失败）、unacceptable_outcomes（不可接受结果）\n"
+        "2. 关联不同分析器的发现，发现单模块无法看到的组合风险\n"
+        "3. 基于数据流传播链，设计从入口到风险点的端到端测试场景\n"
+        "4. 输出 JSON，必须包含 critical_combinations: [{ related_functions: [], expected_failure: '', unacceptable_outcomes: [] }]"
     )
 
     # 按风险排序 top findings
@@ -352,23 +382,34 @@ def synthesize_cross_module(
         f"**模块分析概要:**\n" + "\n".join(module_summaries) + "\n\n"
         f"**数据流传播链（参数如何跨函数传播）:**\n{chains_text}\n\n"
         f"**所有高风险发现（跨模块汇总，按风险排序）:**\n{top_findings_text[:4000]}\n\n"
-        f"**代码片段:**\n"
     )
+    if candidate_combinations:
+        candidates_text = json.dumps(
+            [{"related_functions": c.get("related_functions"), "finding_ids": c.get("finding_ids", []), "source": c.get("source", "")} for c in candidate_combinations[:30]],
+            indent=2,
+            ensure_ascii=False,
+        )
+        user_msg += (
+            f"**静态交汇候选（基于调用图与发现图计算，请在此基础上排序、合并、补全 expected_outcome / unacceptable_outcomes / scenario_brief）:**\n{candidates_text[:3000]}\n\n"
+        )
+    user_msg += "**代码片段:**\n"
 
     for fn_name, src in list(source_snippets.items())[:3]:
         user_msg += f"\n// --- {fn_name} ---\n{src[:1500]}\n"
 
     user_msg += (
-        "\n\n请提供:\n"
-        "1. **跨模块风险关联**: 哪些发现来自不同模块但指向同一条调用链或同一个函数？"
-        "组合起来的风险是什么？\n"
-        "2. **隐藏风险路径**: 哪些看似不起眼的正常值入参，经过调用链变换后会触发深层风险？"
-        "请给出具体的入口参数值和预期的风险触发点。\n"
-        "3. **端到端测试方案**: 对于每个高风险链，设计从入口函数开始的完整测试用例，"
-        "包括输入值、执行路径、预期行为。\n"
-        "4. **灰盒测试改进建议**: 针对测试人员的技术提升，给出方法论层面的建议。\n\n"
-        "请以 JSON 格式返回: { cross_module_risks, hidden_risk_paths, "
-        "e2e_test_scenarios, methodology_advice }"
+        "\n\n请以 JSON 格式返回，且必须包含:\n"
+        "1. **critical_combinations** (数组): 多函数交汇临界点。每项含:\n"
+        "   - related_functions: [\"函数A\", \"函数B\", \"函数C\"] 交汇的 2～3 个函数或故障处理分支\n"
+        "   - expected_outcome: 预期结果（可成功或可接受失败）。例如「按规格成功完成」或「建联失败、返回错误码」\n"
+        "   - expected_failure: （可选）仅当预期为可接受失败时填写，如「建联失败」\n"
+        "   - unacceptable_outcomes: [\"不可接受结果1\", \"不可接受结果2\"] 如「控制器下电」「进程崩溃」\n"
+        "   - scenario_brief: 一句话场景描述\n"
+        "   - performance_requirement: （可选）性能/时序要求，如「响应时间 < 100ms」「IO 延迟 < 5ms」\n"
+        "2. **cross_module_risks**: 跨模块风险关联\n"
+        "3. **e2e_test_scenarios**: 端到端测试方案（含输入、路径、预期）\n"
+        "4. **methodology_advice**: 灰盒测试改进建议\n\n"
+        "返回格式: { critical_combinations, cross_module_risks, e2e_test_scenarios, methodology_advice }"
     )
 
     messages = [
@@ -377,16 +418,22 @@ def synthesize_cross_module(
     ]
 
     logger.info("正在执行跨模块 AI 综合分析: %s/%s", provider_name, model)
-    ai_result = _call_model_sync(provider_name, model, messages)
+    ai_result = _call_model_sync(
+        provider_name, model, messages,
+        api_key=api_key, base_url=base_url,
+    )
 
     ai_content = ai_result.get("content", "")
     test_suggestions = _extract_test_suggestions(ai_content)
+    test_suggestions = _merge_static_candidates_into_suggestions(
+        test_suggestions, candidate_combinations or []
+    )
 
     if not ai_result.get("success"):
         err_msg = ai_result.get("error", "未知错误")
         return {
             "ai_summary": f"跨模块综合分析失败: {err_msg}",
-            "test_suggestions": [],
+            "test_suggestions": test_suggestions,
             "success": False,
             "error": err_msg,
             "usage": ai_result.get("usage", {}),
@@ -404,8 +451,39 @@ def synthesize_cross_module(
     }
 
 
+def _merge_static_candidates_into_suggestions(
+    test_suggestions: list[dict],
+    candidate_combinations: list[dict],
+) -> list[dict]:
+    """将静态交汇候选合并入 test_suggestions；AI 已返回同 related_functions 的不重复添加。"""
+    if not candidate_combinations:
+        return test_suggestions
+    key_from_suggestion = lambda s: tuple(sorted(s.get("related_functions") or []))
+    ai_keys = {key_from_suggestion(s) for s in test_suggestions if key_from_suggestion(s)}
+    out = list(test_suggestions)
+    for c in candidate_combinations:
+        related = c.get("related_functions") or []
+        if len(related) < 2:
+            continue
+        key = tuple(sorted(related))
+        if key in ai_keys:
+            continue
+        ai_keys.add(key)
+        out.append({
+            "type": "critical_combination",
+            "related_functions": related,
+            "expected_outcome": c.get("expected_outcome") or "",
+            "expected_failure": c.get("expected_failure") or "",
+            "unacceptable_outcomes": c.get("unacceptable_outcomes") or [],
+            "scenario_brief": c.get("scenario_brief") or "",
+            "finding_ids": c.get("finding_ids", []),
+            "source": c.get("source", "static"),
+        })
+    return out
+
+
 def _extract_test_suggestions(ai_content: str) -> list[dict]:
-    """尝试从 AI 响应中提取结构化的测试建议。"""
+    """从 AI 响应中提取结构化测试建议，并合并 critical_combinations 为灰盒场景。"""
     if not ai_content:
         return []
 
@@ -413,14 +491,31 @@ def _extract_test_suggestions(ai_content: str) -> list[dict]:
         data = json.loads(ai_content)
         if isinstance(data, list):
             return data
-        if isinstance(data, dict):
-            for key in ("test_suggestions", "tests", "test_cases", "branches",
-                        "e2e_test_scenarios", "regression_tests", "test_scenarios"):
-                if key in data and isinstance(data[key], list):
-                    return data[key]
-            return [data]
+        if not isinstance(data, dict):
+            return []
+
+        out: list[dict] = []
+        for item in data.get("critical_combinations") or []:
+            if isinstance(item, dict) and (item.get("related_functions") or item.get("scenario_brief")):
+                out.append({
+                    "type": "critical_combination",
+                    "related_functions": item.get("related_functions", []),
+                    "expected_outcome": item.get("expected_outcome") or item.get("expected_failure", ""),
+                    "expected_failure": item.get("expected_failure", ""),
+                    "unacceptable_outcomes": item.get("unacceptable_outcomes", []),
+                    "scenario_brief": item.get("scenario_brief", ""),
+                    **{k: v for k, v in item.items() if k not in ("related_functions", "expected_outcome", "expected_failure", "unacceptable_outcomes", "scenario_brief")},
+                })
+        _KNOWN_KEYS = ("e2e_test_scenarios", "test_suggestions", "tests",
+                       "test_cases", "test_scenarios", "branches", "regression_tests")
+        for key in _KNOWN_KEYS:
+            if key in data and isinstance(data[key], list):
+                for x in data[key]:
+                    if isinstance(x, dict) and x not in out:
+                        out.append(x)
+        if out:
+            return out
+        return [data]
     except json.JSONDecodeError:
         pass
-
-    # 降级处理：返回原始文本块
     return [{"type": "raw_text", "content": ai_content[:3000]}]

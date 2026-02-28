@@ -247,6 +247,9 @@ def analyze(ctx: AnalyzeContext) -> ModuleResult:
                 "impacted_callees": callees[:10],
                 "depth": smart_depth,
                 "direction": "bidirectional",
+                "related_functions": [fn] + callers[:5] + callees[:5],
+                "expected_failure": "变更导致行为或契约变化，调用者未适配",
+                "unacceptable_outcomes": ["功能回归", "崩溃", "错误返回值"],
             }
 
             if affected_chains:
@@ -334,6 +337,9 @@ def analyze(ctx: AnalyzeContext) -> ModuleResult:
                 "direction": info["direction"],
                 "changed_by": info["changed_by"],
                 "data_flow_chains_affected": len(sym_chains),
+                "related_functions": [sym, info.get("changed_by", "")],
+                "expected_failure": "传递性影响导致间接依赖行为变化",
+                "unacceptable_outcomes": ["回归", "契约违反"],
             },
         })
 

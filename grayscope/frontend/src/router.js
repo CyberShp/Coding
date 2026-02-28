@@ -37,6 +37,12 @@ const routes = [
     meta: { title: '新建分析' },
   },
   {
+    path: '/code-analysis',
+    name: 'CodeAnalysis',
+    component: () => import('./views/CodeAnalysis.vue'),
+    meta: { title: '代码分析流水线' },
+  },
+  {
     path: '/postmortem',
     name: 'Postmortem',
     component: () => import('./views/Postmortem.vue'),
@@ -60,6 +66,25 @@ const routes = [
     component: () => import('./views/TestCaseDetail.vue'),
     props: true,
     meta: { title: '测试用例详情' },
+  },
+  {
+    path: '/test-execution',
+    name: 'TestExecutionCenter',
+    component: () => import('./views/TestExecutionCenter.vue'),
+    meta: { title: '测试执行' },
+  },
+  {
+    path: '/test-execution/:runId',
+    name: 'TestRunDetail',
+    component: () => import('./views/TestRunDetail.vue'),
+    props: true,
+    meta: { title: '测试运行详情' },
+  },
+  {
+    path: '/execution-env',
+    name: 'ExecutionEnv',
+    component: () => import('./views/ExecutionEnv.vue'),
+    meta: { title: '执行环境' },
   },
   {
     path: '/settings',
@@ -126,6 +151,13 @@ const routes = [
         component: () => import('./views/project/ProjectTestDesign.vue'),
         props: true,
         meta: { title: '测试设计' },
+      },
+      {
+        path: 'test-execution',
+        name: 'ProjectTestExecution',
+        component: () => import('./views/TestExecutionCenter.vue'),
+        props: true,
+        meta: { title: '测试执行' },
       },
     ],
   },

@@ -188,9 +188,10 @@ def analyze(ctx: AnalyzeContext) -> ModuleResult:
         fid += 1
         # 增强: 检查这个变量是否通过调用链被其他函数访问
         other_accessors = [
-            a.func_name for a in shared_accesses
+            a for a in shared_accesses
             if a.var_name == sa.var_name and a.func_name != sa.func_name
         ]
+        other_accessor_names = [a.func_name for a in other_accessors]
 
         findings.append({
             "finding_id": f"CC-F{fid:04d}",
@@ -202,9 +203,9 @@ def analyze(ctx: AnalyzeContext) -> ModuleResult:
             "description": (
                 f"函数 {sa.func_name}() 在未持有任何锁的情况下写入全局/共享变量 '{sa.var_name}'。"
                 f"在多线程环境中，无锁写入是数据竞态的典型来源。"
-                + (f"该变量同时被以下函数访问: {', '.join(other_accessors[:5])}，"
+                + (f"该变量同时被以下函数访问: {', '.join(other_accessor_names[:5])}，"
                    f"增加了并发冲突的可能性。"
-                   if other_accessors else "")
+                   if other_accessor_names else "")
                 + f"需要：(1) 在写入前获取互斥锁；"
                 f"(2) 或使用原子操作替代；"
                 f"(3) 使用 ThreadSanitizer 进行运行时检测。"
@@ -218,7 +219,10 @@ def analyze(ctx: AnalyzeContext) -> ModuleResult:
                 "access": "write",
                 "lock_held": None,
                 "function": sa.func_name,
-                "other_accessors": other_accessors[:10],
+                "other_accessors": other_accessor_names[:10],
+                "related_functions": [sa.func_name] + [a for a in other_accessor_names[:5] if a != sa.func_name],
+                "expected_failure": "多线程同时写共享变量导致数据竞态",
+                "unacceptable_outcomes": ["数据损坏", "未定义行为", "崩溃"],
             },
         })
 
@@ -431,6 +435,9 @@ def analyze(ctx: AnalyzeContext) -> ModuleResult:
                             },
                             "call_relation": True,
                             "cross_function": True,
+                            "related_functions": list(dict.fromkeys([writer["func"], other["func"]])),
+                            "expected_failure": "调用链上无锁写与读/写并发",
+                            "unacceptable_outcomes": ["数据竞态", "未定义行为"],
                         },
                     })
                     break  # 每个 writer-variable 组合只报一次
