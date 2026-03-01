@@ -52,10 +52,12 @@
 
 **存储阵列观察点监控系统**是一套面向存储测试场景的轻量级监控工具，由两个核心组件构成：
 
-| 组件 | 运行位置 | 职责 |
-|------|---------|------|
-| **observation_points**（Agent） | 存储阵列上 | 在阵列本地运行，周期性检查各项指标，输出告警日志 |
-| **observation_web**（Web 平台） | 本地 PC / 测试服务器 | 管理阵列连接、采集告警数据、提供 Web 可视化界面 |
+| 组件 | 运行位置 | 职责 | 本地目录 |
+|------|---------|------|---------|
+| **Agent** | 存储阵列上 | 在阵列本地运行，周期性检查各项指标，输出告警日志 | `agent/` |
+| **Web 平台** | 本地 PC / 测试服务器 | 管理阵列连接、采集告警数据、提供 Web 可视化界面 | `backend/` + `frontend/` |
+
+> **项目结构**：Agent 和 Web 平台现已合并为统一项目。Agent 代码位于 `agent/` 目录，部署到阵列时会被打包为 `observation_points` 模块。
 
 ### 核心价值
 
@@ -147,8 +149,8 @@ Agent 可通过两种方式部署：
 #### 方式二：手动部署
 
 ```bash
-# 1. 将 observation_points 目录复制到阵列
-scp -r observation_points admin@阵列IP:/OSM/coffer_data/
+# 1. 将 agent 目录复制到阵列（需重命名为 observation_points）
+scp -r agent admin@阵列IP:/OSM/coffer_data/observation_points
 
 # 2. 登录阵列
 ssh admin@阵列IP
@@ -1046,19 +1048,19 @@ No002  HealthState: FAULT
 
 | 序号 | 文件路径 | 必须/可选 | 作用 |
 |------|----------|-----------|------|
-| 1 | `observation_points/observers/my_observer.py` | **必须** | 观察点实现文件（你编写的） |
-| 2 | `observation_points/observers/__init__.py` | **必须** | 注册导出，让模块能被发现 |
-| 3 | `observation_points/core/scheduler.py` | **必须** | 调度器映射，让调度器知道名称对应哪个类 |
-| 4 | `observation_points/config/loader.py` | **必须** | 默认配置，确保即使用户 config.json 未配置也有兜底 |
-| 5 | `observation_points/config.json` | **必须** | 用户配置文件，添加你的观察点配置项 |
-| 6 | `observation_web/frontend/src/utils/alertTranslator.js` | 可选(推荐) | Web 前端告警翻译，让告警以可读中文显示 |
-| 7 | `observation_web/backend/core/alert_aggregator.py` | 可选 | 告警聚合规则，如果需要与其他观察点做根因关联 |
+| 1 | `agent/observers/my_observer.py` | **必须** | 观察点实现文件（你编写的） |
+| 2 | `agent/observers/__init__.py` | **必须** | 注册导出，让模块能被发现 |
+| 3 | `agent/core/scheduler.py` | **必须** | 调度器映射，让调度器知道名称对应哪个类 |
+| 4 | `agent/config/loader.py` | **必须** | 默认配置，确保即使用户 config.json 未配置也有兜底 |
+| 5 | `agent/config.json` | **必须** | 用户配置文件，添加你的观察点配置项 |
+| 6 | `frontend/src/utils/alertTranslator.js` | 可选(推荐) | Web 前端告警翻译，让告警以可读中文显示 |
+| 7 | `backend/core/alert_aggregator.py` | 可选 | 告警聚合规则，如果需要与其他观察点做根因关联 |
 
 ### 12.2 步骤详解
 
 #### 第 1 步：编写观察点文件
 
-在 `observation_points/observers/` 目录下创建你的 `.py` 文件，必须满足以下规范：
+在 `agent/observers/` 目录下创建你的 `.py` 文件，必须满足以下规范：
 
 ```python
 """
@@ -1130,7 +1132,7 @@ class MyObserver(BaseObserver):
 
 #### 第 2 步：修改 `observers/__init__.py`
 
-打开 `observation_points/observers/__init__.py`，添加两处：
+打开 `agent/observers/__init__.py`，添加两处：
 
 ```python
 # 在文件顶部 import 区域，添加一行：
@@ -1145,7 +1147,7 @@ __all__ = [
 
 #### 第 3 步：修改 `core/scheduler.py`
 
-打开 `observation_points/core/scheduler.py`，在 `_get_observer_classes()` 方法中添加两处：
+打开 `agent/core/scheduler.py`，在 `_get_observer_classes()` 方法中添加两处：
 
 ```python
 def _get_observer_classes(self) -> Dict[str, type]:
@@ -1162,7 +1164,7 @@ def _get_observer_classes(self) -> Dict[str, type]:
 
 #### 第 4 步：修改 `config/loader.py`
 
-打开 `observation_points/config/loader.py`，在 `DEFAULT_CONFIG['observers']` 字典中添加你的默认配置：
+打开 `agent/config/loader.py`，在 `DEFAULT_CONFIG['observers']` 字典中添加你的默认配置：
 
 ```python
 DEFAULT_CONFIG = {
@@ -1182,7 +1184,7 @@ DEFAULT_CONFIG = {
 
 #### 第 5 步：修改 `config.json`
 
-打开 `observation_points/config.json`，在 `"observers"` 对象中添加配置：
+打开 `agent/config.json`，在 `"observers"` 对象中添加配置：
 
 ```json
 {
@@ -1199,7 +1201,7 @@ DEFAULT_CONFIG = {
 
 #### 第 6 步（可选但推荐）：添加前端告警翻译
 
-如果你希望在 Web 界面上以可读中文显示告警，需编辑 `observation_web/frontend/src/utils/alertTranslator.js`：
+如果你希望在 Web 界面上以可读中文显示告警，需编辑 `frontend/src/utils/alertTranslator.js`：
 
 ```javascript
 // 1. 在 OBSERVER_NAMES 对象中添加中文名称：
@@ -1234,13 +1236,13 @@ const TRANSLATORS = {
 
 #### 第 7 步（可选）：添加告警聚合规则
 
-如果你的观察点需要与其他观察点做根因关联（例如多个相关告警合并显示），编辑 `observation_web/backend/core/alert_aggregator.py` 中的 `CORRELATION_RULES` 列表。
+如果你的观察点需要与其他观察点做根因关联（例如多个相关告警合并显示），编辑 `backend/core/alert_aggregator.py` 中的 `CORRELATION_RULES` 列表。
 
 ### 12.3 快速检查清单
 
 添加完成后，请逐项确认：
 
-- [ ] 观察点 `.py` 文件放在 `observation_points/observers/` 目录下
+- [ ] 观察点 `.py` 文件放在 `agent/observers/` 目录下
 - [ ] 类继承自 `BaseObserver`，实现了 `check()` 方法
 - [ ] `observers/__init__.py` 中有 import 和 `__all__` 条目
 - [ ] `core/scheduler.py` 的 `_get_observer_classes()` 中有 import 和字典条目
@@ -1308,21 +1310,21 @@ const TRANSLATORS = {
 
 | 你要修改的内容 | 涉及文件 | 数据流阶段 |
 |--------------|---------|-----------|
-| **监测命令**（如改用另一个 CLI 命令） | `observation_points/observers/{观察点}.py` | ① |
-| **回显解析**（如命令输出格式变了） | `observation_points/observers/{观察点}.py` | ① |
-| **预期结果**（如阈值、告警条件） | `observation_points/observers/{观察点}.py` | ① |
-| **告警级别**（如 WARNING → ERROR） | `observation_points/observers/{观察点}.py` | ① |
-| **告警详情结构**（details 字典字段） | `observation_points/observers/{观察点}.py` | ① |
-| **默认配置值**（间隔、阈值等） | `observation_points/config/loader.py` + `config.json` | ① |
-| **恢复告警逻辑** | `observation_points/observers/{观察点}.py` | ① |
-| **活跃问题判断逻辑** | `observation_web/backend/api/arrays.py` — `_derive_active_issues_from_db()` | ⑤ |
-| **活跃问题显示文案** | `observation_web/backend/api/arrays.py` — `_derive_active_issues_from_db()` | ⑤ |
-| **Web 告警翻译**（中文事件/影响/建议） | `observation_web/frontend/src/utils/alertTranslator.js` | ⑦ |
-| **折叠分组逻辑** | `observation_web/frontend/src/composables/useAlertFolding.js` | ⑧ |
-| **告警列表样式/按钮** | `observation_web/frontend/src/components/FoldedAlertList.vue` | ⑨ |
-| **告警详情抽屉** | `observation_web/frontend/src/components/AlertDetailDrawer.vue` | ⑩ |
-| **仪表盘健康状态逻辑** | `observation_web/frontend/src/views/Dashboard.vue` | ⑩ |
-| **阵列详情页布局** | `observation_web/frontend/src/views/ArrayDetail.vue` | ⑩ |
+| **监测命令**（如改用另一个 CLI 命令） | `agent/observers/{观察点}.py` | ① |
+| **回显解析**（如命令输出格式变了） | `agent/observers/{观察点}.py` | ① |
+| **预期结果**（如阈值、告警条件） | `agent/observers/{观察点}.py` | ① |
+| **告警级别**（如 WARNING → ERROR） | `agent/observers/{观察点}.py` | ① |
+| **告警详情结构**（details 字典字段） | `agent/observers/{观察点}.py` | ① |
+| **默认配置值**（间隔、阈值等） | `agent/config/loader.py` + `config.json` | ① |
+| **恢复告警逻辑** | `agent/observers/{观察点}.py` | ① |
+| **活跃问题判断逻辑** | `backend/api/arrays.py` — `_derive_active_issues_from_db()` | ⑤ |
+| **活跃问题显示文案** | `backend/api/arrays.py` — `_derive_active_issues_from_db()` | ⑤ |
+| **Web 告警翻译**（中文事件/影响/建议） | `frontend/src/utils/alertTranslator.js` | ⑦ |
+| **折叠分组逻辑** | `frontend/src/composables/useAlertFolding.js` | ⑧ |
+| **告警列表样式/按钮** | `frontend/src/components/FoldedAlertList.vue` | ⑨ |
+| **告警详情抽屉** | `frontend/src/components/AlertDetailDrawer.vue` | ⑩ |
+| **仪表盘健康状态逻辑** | `frontend/src/views/Dashboard.vue` | ⑩ |
+| **阵列详情页布局** | `frontend/src/views/ArrayDetail.vue` | ⑩ |
 
 ### 13.3 场景一：修改监测命令
 
@@ -1332,7 +1334,7 @@ const TRANSLATORS = {
 
 | 文件 | 修改点 |
 |------|--------|
-| `observation_points/config.json` | 修改 `observers.card_info.command` 字段 |
+| `agent/config.json` | 修改 `observers.card_info.command` 字段 |
 
 如果新命令**输出格式不变**（仍然是 `No编号 字段名: 值` 的格式），那只需改配置即可。
 
@@ -1340,7 +1342,7 @@ const TRANSLATORS = {
 
 | 文件 | 修改点 |
 |------|--------|
-| `observation_points/observers/card_info.py` | 修改 `_parse_cards()` 方法中的解析逻辑 |
+| `agent/observers/card_info.py` | 修改 `_parse_cards()` 方法中的解析逻辑 |
 
 **验证方法**：
 1. 在阵列上手动执行新命令，确认输出格式
@@ -1356,7 +1358,7 @@ const TRANSLATORS = {
 
 | 文件 | 修改点 |
 |------|--------|
-| `observation_points/observers/card_info.py` | 修改 `_parse_cards()` 方法 |
+| `agent/observers/card_info.py` | 修改 `_parse_cards()` 方法 |
 
 **修改要点**：
 - `_parse_cards()` 中的正则表达式或字符串分割逻辑需要匹配新的格式
@@ -1365,7 +1367,7 @@ const TRANSLATORS = {
 
 **关键代码位置**：
 ```python
-# observation_points/observers/card_info.py
+# agent/observers/card_info.py
 def _parse_cards(self, output: str) -> dict:
     """解析命令输出，返回 {卡件编号: {字段: 值}} 的字典"""
     # ← 修改此处的解析逻辑
@@ -1381,7 +1383,7 @@ def _parse_cards(self, output: str) -> dict:
 
 | 文件 | 修改点 |
 |------|--------|
-| `observation_points/config.json` | 修改对应观察点的阈值参数 |
+| `agent/config.json` | 修改对应观察点的阈值参数 |
 
 示例：CPU 阈值改为 80%：
 ```json
@@ -1396,14 +1398,14 @@ def _parse_cards(self, output: str) -> dict:
 
 | 文件 | 修改点 | 何时需要 |
 |------|--------|---------|
-| `observation_points/observers/{观察点}.py` | `check()` 方法中的判断逻辑 | **必须** |
-| `observation_web/frontend/src/utils/alertTranslator.js` | 翻译函数 | 如果 details 字段名变了 |
-| `observation_web/backend/api/arrays.py` | `_derive_active_issues_from_db()` | 如果影响活跃问题判断 |
+| `agent/observers/{观察点}.py` | `check()` 方法中的判断逻辑 | **必须** |
+| `frontend/src/utils/alertTranslator.js` | 翻译函数 | 如果 details 字段名变了 |
+| `backend/api/arrays.py` | `_derive_active_issues_from_db()` | 如果影响活跃问题判断 |
 
 **示例**：给 `card_info` 新增 `Mode` 字段检查：
 
 ```python
-# observation_points/observers/card_info.py 的 check() 方法中
+# agent/observers/card_info.py 的 check() 方法中
 # 在现有的 RunningState/HealthState 检查后添加：
 mode = card_data.get('Mode', '')
 if not mode or mode.lower() == 'undefined':
@@ -1426,7 +1428,7 @@ if not mode or mode.lower() == 'undefined':
 
 | 文件 | 修改点 |
 |------|--------|
-| `observation_web/frontend/src/utils/alertTranslator.js` | 对应观察点的翻译函数 |
+| `frontend/src/utils/alertTranslator.js` | 对应观察点的翻译函数 |
 
 **文件结构**：
 

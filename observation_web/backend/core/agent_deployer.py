@@ -246,16 +246,24 @@ class AgentDeployer:
         return info
 
     def _build_package(self) -> str:
-        base_dir = Path(__file__).resolve().parents[2]
-        agent_dir = base_dir.parent / "observation_points"
+        """Build agent package from observation_web/agent directory.
+        
+        The package is created with arcname='observation_points' so that
+        when extracted on the array, the Python module can be run as:
+            python3 -m observation_points
+        """
+        base_dir = Path(__file__).resolve().parents[2]  # observation_web/
+        agent_dir = base_dir / "agent"  # observation_web/agent/
+        
         if not agent_dir.exists():
-            raise FileNotFoundError(f"observation_points not found at {agent_dir}")
+            raise FileNotFoundError(f"Agent directory not found at {agent_dir}")
 
         fd, package_path = tempfile.mkstemp(suffix=".tar.gz")
         os.close(fd)
         package_path = Path(package_path)
 
         with tarfile.open(package_path, "w:gz") as tar:
+            # Use arcname='observation_points' to maintain Python module compatibility
             tar.add(agent_dir, arcname="observation_points")
 
         return str(package_path)

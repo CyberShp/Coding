@@ -102,8 +102,15 @@ npm run dev
 ## 目录结构
 
 ```
-observation_web_advance/
-├── backend/                    # FastAPI 后端
+observation_web/
+├── agent/                      # Agent 端（部署到存储阵列）
+│   ├── __main__.py             # Agent 入口
+│   ├── config.json             # Agent 默认配置
+│   ├── core/                   # 核心模块（调度器、Reporter）
+│   ├── observers/              # 观察点实现（20+ 个）
+│   ├── config/                 # 配置加载器
+│   └── utils/                  # 工具函数
+├── backend/                    # FastAPI 后端（运行在本地 PC）
 │   ├── api/
 │   │   ├── arrays.py           # 阵列管理 + 批量操作 + 日志 + 指标
 │   │   ├── alerts.py           # 告警管理 + 导出
@@ -113,7 +120,7 @@ observation_web_advance/
 │   │   ├── websocket.py        # WebSocket 实时推送
 │   │   └── system_alerts.py    # 系统告警
 │   ├── core/
-│   │   ├── agent_deployer.py   # Agent 部署（含 PID 管理）
+│   │   ├── agent_deployer.py   # Agent 部署（从 agent/ 打包上传）
 │   │   ├── ssh_pool.py         # SSH 连接池（异步+回收）
 │   │   ├── data_lifecycle.py   # 历史导入/归档
 │   │   ├── scheduler.py        # APScheduler 任务调度
@@ -140,6 +147,8 @@ observation_web_advance/
 ├── offline_packages/           # 离线安装包
 └── requirements.txt            # Python 依赖
 ```
+
+> **注意**: `agent/` 目录在部署到阵列时会被打包为 `observation_points.tar.gz`，解压后目录名为 `observation_points`，以便 Python 模块导入正常工作。
 
 ## API 端点
 

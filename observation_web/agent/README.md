@@ -1,6 +1,8 @@
-# 观察点监控系统
+# 观察点监控系统（Agent）
 
 轻量级、可扩展的全局观察点监控服务，用于 Euler ARM 存储阵列。
+
+> **项目结构**：本目录 (`agent/`) 是 `observation_web` 项目的一部分。通过 Web 界面部署时，本目录会被打包为 `observation_points` 模块上传到阵列。
 
 ## 功能特性
 
@@ -23,18 +25,25 @@
 
 ## 快速开始
 
-### 安装
+### 方式一：通过 Web 界面部署（推荐）
+
+1. 在 Web 平台添加阵列并连接
+2. 点击「部署 Agent」按钮
+3. 部署完成后，点击「启动 Agent」
+
+### 方式二：手动安装
 
 ```bash
-# 克隆或复制项目到目标目录
-cp -r observation_points /opt/observation_points
+# 从 observation_web 项目复制 agent 目录到阵列（需重命名为 observation_points）
+scp -r agent admin@阵列IP:/opt/observation_points
 
+# 登录阵列后
 # 安装依赖（Python 3.6 需要 dataclasses）
-pip3 install -r requirements.txt
+pip3 install -r /opt/observation_points/requirements.txt
 
 # 复制配置文件（仅 JSON）
 mkdir -p /etc/observation-points
-cp observation_points/config.json /etc/observation-points/
+cp /opt/observation_points/config.json /etc/observation-points/
 ```
 
 ### 运行
