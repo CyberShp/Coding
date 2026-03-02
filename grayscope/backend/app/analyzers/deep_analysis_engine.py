@@ -17,7 +17,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
-from app.ai.prompt_templates import render_prompt
+from app.ai.prompt_templates import render_prompt_messages
 from app.ai.provider_registry import get_provider
 from app.analyzers.fused_graph_builder import FusedGraph, FusedNode
 from app.analyzers.semantic_indexer import (
@@ -427,7 +427,7 @@ class DeepAnalysisEngine:
         model = self._ai_config.get("model", "default")
         
         try:
-            messages = render_prompt(template_id, **variables)
+            messages = render_prompt_messages(template_id, **variables)
         except Exception as e:
             logger.warning("渲染深度分析 prompt 失败: %s", e)
             return None

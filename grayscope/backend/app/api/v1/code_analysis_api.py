@@ -118,11 +118,50 @@ def _load_result_from_json(result_json: str | None) -> AnalysisResult | None:
         result.risk_summary = data.get("risk_summary", {})
         result.narratives = data.get("narratives", {})
         result.protocol_state_machine = data.get("protocol_state_machine", {})
+        result.semantic_index = data.get("semantic_index", {})
         # fused_graph is stored as serialized dict; keep as-is for read paths
         result._serialized_fused_graph = data.get("fused_graph")
+
+        # Reconstruct deep_analysis if present
+        deep = data.get("deep_analysis")
+        if deep and isinstance(deep, dict):
+            result.deep_analysis = deep
+
+        # Compute risk_summary on-the-fly if stored value is empty
+        if not result.risk_summary and result.risk_findings:
+            result.risk_summary = _compute_risk_summary(result.risk_findings)
+
         return result
     except Exception:
         return None
+
+
+_SEVERITY_NORMALIZE = {
+    "S0": "critical", "s0": "critical",
+    "S1": "high", "s1": "high",
+    "S2": "medium", "s2": "medium",
+    "S3": "low", "s3": "low",
+    "critical": "critical", "high": "high", "medium": "medium", "low": "low",
+}
+
+
+def _compute_risk_summary(findings: list[dict]) -> dict[str, Any]:
+    """Compute risk summary statistics from findings list."""
+    severity_dist: dict[str, int] = {"critical": 0, "high": 0, "medium": 0, "low": 0}
+    type_dist: dict[str, int] = {}
+
+    for f in findings:
+        sev = f.get("severity", "unknown")
+        normalized = _SEVERITY_NORMALIZE.get(sev, sev)
+        severity_dist[normalized] = severity_dist.get(normalized, 0) + 1
+        rt = f.get("risk_type", "unknown")
+        type_dist[rt] = type_dist.get(rt, 0) + 1
+
+    return {
+        "total_findings": len(findings),
+        "severity_distribution": severity_dist,
+        "type_distribution": type_dist,
+    }
 
 
 # ---------------------------------------------------------------------------

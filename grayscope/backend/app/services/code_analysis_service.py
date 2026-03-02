@@ -465,7 +465,7 @@ class CodeAnalysisService:
         for finding in deep_findings:
             # 转换为标准风险发现格式
             risk_finding = {
-                "id": f"deep_{finding.finding_type}_{finding.file_path}_{finding.line}",
+                "id": f"deep_{finding.finding_type}_{finding.file_path}_{finding.line_start}",
                 "type": finding.finding_type,
                 "severity": finding.severity,
                 "confidence": finding.confidence,
@@ -473,12 +473,12 @@ class CodeAnalysisService:
                 "description": finding.description,
                 "file_path": finding.file_path,
                 "function_name": finding.function_name,
-                "line": finding.line,
+                "line_start": finding.line_start,
+                "line_end": finding.line_end,
                 "execution_path": finding.execution_path,
                 "evidence": finding.evidence,
                 "fix_suggestion": finding.fix_suggestion,
                 "source": "deep_analysis",
-                # 标记为深度分析发现，便于前端区分显示
                 "is_deep_finding": True,
             }
             merged.append(risk_finding)

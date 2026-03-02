@@ -37,8 +37,13 @@ def _get_jinja_env():
 
 
 def _is_jinja_template(text: str) -> bool:
-    """Check if text contains Jinja2 syntax."""
-    return bool(re.search(r"\{%|{{", text))
+    """Check if text contains Jinja2 syntax.
+    
+    Only detect {% %} control blocks as Jinja2 indicator.
+    Double braces {{ }} are ambiguous (also used in Python str.format()
+    to produce literal braces), so they are NOT sufficient.
+    """
+    return bool(re.search(r"\{%", text))
 
 
 def _render_template_string(template_str: str, variables: dict[str, Any]) -> str:
@@ -99,26 +104,34 @@ def get_user_prompt(template_id: str) -> str:
     return template.get("user", "")
 
 
-def render_prompt(template_id: str, **kwargs: Any) -> list[dict[str, str]]:
+def render_prompt(template_id: str, **kwargs: Any) -> tuple[str, str]:
     """Render a prompt template with given variables.
     
     Returns:
-        List of message dicts for chat API [{"role": "system", "content": ...}, ...]
+        (system_prompt, user_prompt) tuple of rendered strings.
     """
     template = _load_template(template_id)
     system_template = template.get("system", "")
     user_template = template.get("user", "")
     
-    # Render templates
     system = _render_template_string(system_template, kwargs)
     user = _render_template_string(user_template, kwargs)
     
+    return system, user
+
+
+def render_prompt_messages(template_id: str, **kwargs: Any) -> list[dict[str, str]]:
+    """Render a prompt template as chat API message dicts.
+    
+    Returns:
+        List of message dicts [{"role": "system", "content": ...}, ...]
+    """
+    system, user = render_prompt(template_id, **kwargs)
     messages = []
     if system:
         messages.append({"role": "system", "content": system})
     if user:
         messages.append({"role": "user", "content": user})
-    
     return messages
 
 
@@ -142,5 +155,6 @@ __all__ = [
     "get_system_prompt",
     "get_user_prompt",
     "render_prompt",
+    "render_prompt_messages",
     "list_templates",
 ]
