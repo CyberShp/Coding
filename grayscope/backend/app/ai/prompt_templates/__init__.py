@@ -39,11 +39,12 @@ def _get_jinja_env():
 def _is_jinja_template(text: str) -> bool:
     """Check if text contains Jinja2 syntax.
     
-    Only detect {% %} control blocks as Jinja2 indicator.
-    Double braces {{ }} are ambiguous (also used in Python str.format()
-    to produce literal braces), so they are NOT sufficient.
+    Detects {% %} control blocks OR {{ identifier }} variable expressions.
+    Python str.format() uses {{ to produce literal '{' — in that case
+    the double brace is followed by a newline or quote, not a word char.
+    Jinja2 {{ var }} always has a word character after the opening braces.
     """
-    return bool(re.search(r"\{%", text))
+    return bool(re.search(r"\{%|\{\{\s*\w", text))
 
 
 def _render_template_string(template_str: str, variables: dict[str, Any]) -> str:
