@@ -2,6 +2,7 @@
 Test Task Session API endpoints.
 
 CRUD for test tasks, start/stop management, summary generation.
+Array locking for multi-user exclusivity.
 """
 
 import json
@@ -9,8 +10,8 @@ import logging
 from datetime import datetime
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import select, func, and_
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from sqlalchemy import select, func, and_, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..db.database import get_db
@@ -19,6 +20,7 @@ from ..models.task_session import (
     TaskSummary, TASK_TYPES,
 )
 from ..models.alert import AlertModel
+from ..models.array_lock import ArrayLockModel, ArrayLockInfo, LockConflict
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/test-tasks", tags=["test-tasks"])
@@ -29,6 +31,63 @@ _active_task_id: Optional[int] = None
 
 def get_active_task_id() -> Optional[int]:
     return _active_task_id
+
+
+async def _check_lock_conflicts(
+    db: AsyncSession,
+    array_ids: List[str],
+    exclude_task_id: Optional[int] = None,
+) -> List[LockConflict]:
+    """Check if any of the arrays are locked by another task."""
+    if not array_ids:
+        return []
+
+    query = select(ArrayLockModel, TaskSessionModel).join(
+        TaskSessionModel, ArrayLockModel.task_id == TaskSessionModel.id
+    ).where(ArrayLockModel.array_id.in_(array_ids))
+
+    if exclude_task_id:
+        query = query.where(ArrayLockModel.task_id != exclude_task_id)
+
+    result = await db.execute(query)
+    rows = result.all()
+
+    conflicts = []
+    for lock, task in rows:
+        conflicts.append(LockConflict(
+            array_id=lock.array_id,
+            locked_by_task_id=lock.task_id,
+            locked_by_task_name=task.name,
+            locked_by_ip=lock.locked_by_ip or "",
+            locked_by_nickname=lock.locked_by_nickname or "",
+            locked_at=lock.locked_at,
+        ))
+    return conflicts
+
+
+async def _acquire_locks(
+    db: AsyncSession,
+    task_id: int,
+    array_ids: List[str],
+    user_ip: str = "",
+    user_nickname: str = "",
+):
+    """Acquire locks for all arrays."""
+    for array_id in array_ids:
+        lock = ArrayLockModel(
+            array_id=array_id,
+            task_id=task_id,
+            locked_by_ip=user_ip,
+            locked_by_nickname=user_nickname,
+        )
+        db.add(lock)
+
+
+async def _release_locks(db: AsyncSession, task_id: int):
+    """Release all locks held by a task."""
+    await db.execute(
+        delete(ArrayLockModel).where(ArrayLockModel.task_id == task_id)
+    )
 
 
 @router.get("", response_model=List[TaskSessionResponse])
@@ -93,7 +152,11 @@ async def get_task(task_id: int, db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/{task_id}/start", response_model=TaskSessionResponse)
-async def start_task(task_id: int, db: AsyncSession = Depends(get_db)):
+async def start_task(
+    task_id: int,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
     """Start a test task (mark begin timestamp)"""
     global _active_task_id
     task = await db.get(TaskSessionModel, task_id)
@@ -102,13 +165,37 @@ async def start_task(task_id: int, db: AsyncSession = Depends(get_db)):
     if task.status == 'running':
         raise HTTPException(400, "Task already running")
 
+    array_ids = _parse_array_ids(task.array_ids)
+
+    # Check for lock conflicts
+    conflicts = await _check_lock_conflicts(db, array_ids, exclude_task_id=task_id)
+    if conflicts:
+        conflict_info = [
+            f"{c.array_id} (被 {c.locked_by_nickname or c.locked_by_ip or '未知用户'} 的任务 '{c.locked_by_task_name}' 锁定)"
+            for c in conflicts
+        ]
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": f"阵列被其他任务锁定: {', '.join(conflict_info)}",
+                "conflicts": [c.model_dump() for c in conflicts],
+            }
+        )
+
+    # Get user info from request
+    user_ip = getattr(request.state, 'user_ip', '') or ''
+    user_nickname = ''
+
+    # Acquire locks
+    await _acquire_locks(db, task.id, array_ids, user_ip, user_nickname)
+
     task.status = 'running'
     task.started_at = datetime.now()
     task.ended_at = None
     _active_task_id = task.id
     await db.commit()
     await db.refresh(task)
-    logger.info(f"Test task started: {task.name} (id={task.id})")
+    logger.info(f"Test task started: {task.name} (id={task.id}) by {user_ip}")
     return _to_response(task)
 
 
@@ -126,6 +213,9 @@ async def stop_task(task_id: int, db: AsyncSession = Depends(get_db)):
     task.ended_at = datetime.now()
     if _active_task_id == task.id:
         _active_task_id = None
+
+    # Release all locks held by this task
+    await _release_locks(db, task.id)
 
     # Tag alerts created during this task window
     arr_ids = _parse_array_ids(task.array_ids)
@@ -233,3 +323,93 @@ def _to_response(task: TaskSessionModel) -> TaskSessionResponse:
         created_at=task.created_at,
         duration_seconds=duration,
     )
+
+
+# ==================== Lock Management Endpoints ====================
+
+@router.get("/locks/all", response_model=List[ArrayLockInfo])
+async def get_all_locks(db: AsyncSession = Depends(get_db)):
+    """Get all current array locks."""
+    query = select(ArrayLockModel, TaskSessionModel).join(
+        TaskSessionModel, ArrayLockModel.task_id == TaskSessionModel.id
+    )
+    result = await db.execute(query)
+    rows = result.all()
+
+    return [
+        ArrayLockInfo(
+            array_id=lock.array_id,
+            task_id=lock.task_id,
+            task_name=task.name,
+            locked_by_ip=lock.locked_by_ip or "",
+            locked_by_nickname=lock.locked_by_nickname or "",
+            locked_at=lock.locked_at,
+        )
+        for lock, task in rows
+    ]
+
+
+@router.get("/locks/check")
+async def check_locks(
+    array_ids: str = Query(..., description="Comma-separated array IDs"),
+    db: AsyncSession = Depends(get_db),
+):
+    """Check if specific arrays are locked."""
+    ids = [a.strip() for a in array_ids.split(",") if a.strip()]
+    if not ids:
+        return {"conflicts": [], "all_available": True}
+
+    conflicts = await _check_lock_conflicts(db, ids)
+    return {
+        "conflicts": [c.model_dump() for c in conflicts],
+        "all_available": len(conflicts) == 0,
+        "locked_arrays": [c.array_id for c in conflicts],
+        "available_arrays": [a for a in ids if a not in [c.array_id for c in conflicts]],
+    }
+
+
+@router.get("/locks/array/{array_id}")
+async def get_array_lock(array_id: str, db: AsyncSession = Depends(get_db)):
+    """Get lock status for a specific array."""
+    query = select(ArrayLockModel, TaskSessionModel).join(
+        TaskSessionModel, ArrayLockModel.task_id == TaskSessionModel.id
+    ).where(ArrayLockModel.array_id == array_id)
+    result = await db.execute(query)
+    row = result.first()
+
+    if not row:
+        return {"locked": False, "array_id": array_id}
+
+    lock, task = row
+    return {
+        "locked": True,
+        "array_id": array_id,
+        "task_id": lock.task_id,
+        "task_name": task.name,
+        "locked_by_ip": lock.locked_by_ip or "",
+        "locked_by_nickname": lock.locked_by_nickname or "",
+        "locked_at": lock.locked_at.isoformat() if lock.locked_at else None,
+    }
+
+
+@router.delete("/locks/force/{array_id}")
+async def force_unlock(
+    array_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Force release a lock (admin operation)."""
+    result = await db.execute(
+        select(ArrayLockModel).where(ArrayLockModel.array_id == array_id)
+    )
+    lock = result.scalar_one_or_none()
+
+    if not lock:
+        raise HTTPException(404, "Array is not locked")
+
+    user_ip = getattr(request.state, 'user_ip', '') or 'unknown'
+    logger.warning(f"Force unlock: {array_id} by {user_ip} (was locked by task {lock.task_id})")
+
+    await db.delete(lock)
+    await db.commit()
+    return {"message": f"Lock for {array_id} forcefully released"}

@@ -12,6 +12,11 @@ const routes = [
     component: () => import('../views/Arrays.vue'),
   },
   {
+    path: '/arrays/tag/:tagId',
+    name: 'TagArrays',
+    component: () => import('../views/TagArrays.vue'),
+  },
+  {
     path: '/arrays/:id',
     name: 'ArrayDetail',
     component: () => import('../views/ArrayDetail.vue'),

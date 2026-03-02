@@ -507,31 +507,149 @@ async def _derive_active_issues_from_db(db: AsyncSession, array_id: str) -> List
 
 @router.get("", response_model=List[ArrayResponse])
 async def list_arrays(
+    tag_id: Optional[int] = Query(None, description="Filter by tag ID"),
     db: AsyncSession = Depends(get_db),
 ):
     """Get all arrays (database records only, no connection state)"""
-    result = await db.execute(select(ArrayModel))
+    from ..models.tag import TagModel
+
+    query = select(ArrayModel)
+    if tag_id is not None:
+        query = query.where(ArrayModel.tag_id == tag_id)
+
+    result = await db.execute(query)
     arrays = result.scalars().all()
-    return arrays
+
+    # Fetch tag info for each array
+    tag_ids = {a.tag_id for a in arrays if a.tag_id}
+    tags_map = {}
+    if tag_ids:
+        tag_result = await db.execute(
+            select(TagModel).where(TagModel.id.in_(tag_ids))
+        )
+        tags_map = {t.id: t for t in tag_result.scalars().all()}
+
+    responses = []
+    for arr in arrays:
+        tag = tags_map.get(arr.tag_id) if arr.tag_id else None
+        responses.append(ArrayResponse(
+            id=arr.id,
+            array_id=arr.array_id,
+            name=arr.name,
+            host=arr.host,
+            port=arr.port,
+            username=arr.username,
+            key_path=arr.key_path or "",
+            folder=arr.folder or "",
+            tag_id=arr.tag_id,
+            tag_name=tag.name if tag else None,
+            tag_color=tag.color if tag else None,
+            created_at=arr.created_at,
+            updated_at=arr.updated_at,
+        ))
+
+    return responses
+
+
+@router.get("/search")
+async def search_arrays(
+    ip: str = Query(..., description="IP address to search for"),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Search arrays by IP address.
+
+    Returns matching arrays with their tag information. Used for:
+    - Filtering tag cards on main page (shows only tags containing this IP)
+    - Filtering arrays within a tag (shows only matching arrays)
+    """
+    from ..models.tag import TagModel
+
+    result = await db.execute(
+        select(ArrayModel).where(ArrayModel.host.contains(ip))
+    )
+    arrays = result.scalars().all()
+
+    # Fetch tag info
+    tag_ids = {a.tag_id for a in arrays if a.tag_id}
+    tags_map = {}
+    if tag_ids:
+        tag_result = await db.execute(
+            select(TagModel).where(TagModel.id.in_(tag_ids))
+        )
+        tags_map = {t.id: t for t in tag_result.scalars().all()}
+
+    # Group arrays by tag
+    arrays_by_tag = {}
+    untagged_arrays = []
+    for arr in arrays:
+        tag = tags_map.get(arr.tag_id) if arr.tag_id else None
+        arr_info = {
+            "id": arr.id,
+            "array_id": arr.array_id,
+            "name": arr.name,
+            "host": arr.host,
+            "port": arr.port,
+            "tag_id": arr.tag_id,
+        }
+        if tag:
+            if tag.id not in arrays_by_tag:
+                arrays_by_tag[tag.id] = {
+                    "tag_id": tag.id,
+                    "tag_name": tag.name,
+                    "tag_color": tag.color,
+                    "arrays": [],
+                }
+            arrays_by_tag[tag.id]["arrays"].append(arr_info)
+        else:
+            untagged_arrays.append(arr_info)
+
+    return {
+        "search_ip": ip,
+        "total_count": len(arrays),
+        "tags": list(arrays_by_tag.values()),
+        "untagged_arrays": untagged_arrays,
+    }
 
 
 @router.get("/statuses", response_model=List[ArrayStatus])
 async def list_array_statuses(
+    tag_id: Optional[int] = Query(None, description="Filter by tag ID"),
     db: AsyncSession = Depends(get_db),
     ssh_pool: SSHPool = Depends(get_ssh_pool),
 ):
     """Get all array statuses with connection state"""
     from ..models.alert import AlertModel
+    from ..models.tag import TagModel
 
-    result = await db.execute(select(ArrayModel))
+    query = select(ArrayModel)
+    if tag_id is not None:
+        query = query.where(ArrayModel.tag_id == tag_id)
+
+    result = await db.execute(query)
     arrays = result.scalars().all()
-    
+
+    # Fetch tag info
+    tag_ids = {a.tag_id for a in arrays if a.tag_id}
+    tags_map = {}
+    if tag_ids:
+        tag_result = await db.execute(
+            select(TagModel).where(TagModel.id.in_(tag_ids))
+        )
+        tags_map = {t.id: t for t in tag_result.scalars().all()}
+
     statuses = []
     for array in arrays:
         status_obj = _get_array_status(array.array_id)
         status_obj.name = array.name
         status_obj.host = array.host
         status_obj.has_saved_password = bool(getattr(array, 'saved_password', ''))
+
+        # Add tag info
+        tag = tags_map.get(array.tag_id) if array.tag_id else None
+        status_obj.tag_id = array.tag_id
+        status_obj.tag_name = tag.name if tag else None
+        status_obj.tag_color = tag.color if tag else None
         
         conn = ssh_pool.get_connection(array.array_id)
         if conn:
@@ -770,8 +888,9 @@ async def create_array(
         username=array.username,
         key_path=array.key_path,
         folder=array.folder,
+        tag_id=array.tag_id,
     )
-    
+
     db.add(db_array)
     await db.commit()
     await db.refresh(db_array)
@@ -823,26 +942,44 @@ async def update_array(
     update: ArrayUpdate,
     db: AsyncSession = Depends(get_db),
 ):
-    """Update array"""
+    """
+    Update array with optimistic locking support.
+
+    If expected_version is provided, the update will only succeed if
+    the current version matches. This prevents concurrent update conflicts.
+    """
     result = await db.execute(
         select(ArrayModel).where(ArrayModel.array_id == array_id)
     )
     array = result.scalar()
-    
+
     if not array:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Array {array_id} not found"
         )
-    
+
+    # Optimistic locking check
+    if update.expected_version is not None:
+        current_version = getattr(array, 'version', 1) or 1
+        if current_version != update.expected_version:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"数据已被其他用户修改，请刷新后重试 (expected version {update.expected_version}, current {current_version})"
+            )
+
     # Update fields
-    update_data = update.dict(exclude_unset=True)
+    update_data = update.model_dump(exclude_unset=True)
+    update_data.pop('expected_version', None)  # Don't set this as a field
     for field, value in update_data.items():
         setattr(array, field, value)
-    
+
+    # Increment version
+    array.version = (getattr(array, 'version', 1) or 1) + 1
+
     await db.commit()
     await db.refresh(array)
-    
+
     # Update status cache
     if array_id in _array_status_cache:
         if update.name:

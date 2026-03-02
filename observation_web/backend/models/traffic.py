@@ -1,5 +1,9 @@
 """
 Port traffic data model — stores raw traffic data for up to 2 hours.
+
+Supports multiple collection modes and protocols:
+- mode: ethtool, sysfs, rdma, toe, command, auto
+- protocol: ethernet, rdma, roce, toe, unknown
 """
 
 from sqlalchemy import Column, Integer, String, Float, BigInteger, DateTime, Index
@@ -20,6 +24,8 @@ class PortTrafficModel(Base):
     rx_bytes = Column(BigInteger, default=0)
     tx_rate_bps = Column(Float, default=0.0)
     rx_rate_bps = Column(Float, default=0.0)
+    mode = Column(String(32), default='auto')
+    protocol = Column(String(32), default='ethernet')
     created_at = Column(DateTime, server_default=func.now())
 
     __table_args__ = (

@@ -36,12 +36,15 @@ class AlertModel(Base):
     details = Column(Text, default="{}")  # JSON string
     timestamp = Column(DateTime, index=True, nullable=False)
     task_id = Column(Integer, nullable=True, index=True)  # Link to test task session
+    is_expected = Column(Integer, default=0, index=True)  # 0=unknown, 1=expected, -1=unexpected
+    matched_rule_id = Column(Integer, nullable=True)  # ID of the rule that matched
     created_at = Column(DateTime, server_default=func.now())
     
     __table_args__ = (
         Index('ix_alerts_array_timestamp', 'array_id', 'timestamp'),
         Index('ix_alerts_level_timestamp', 'level', 'timestamp'),
         Index('ix_alerts_array_observer_ts', 'array_id', 'observer_name', 'timestamp'),
+        Index('ix_alerts_is_expected', 'is_expected'),
     )
 
 
@@ -76,6 +79,9 @@ class AlertResponse(AlertBase):
     array_id: str
     array_name: Optional[str] = None
     is_acked: bool = False
+    is_expected: int = 0  # 0=unknown, 1=expected, -1=unexpected
+    matched_rule_id: Optional[int] = None
+    task_id: Optional[int] = None
     created_at: datetime
     
     model_config = ConfigDict(from_attributes=True)

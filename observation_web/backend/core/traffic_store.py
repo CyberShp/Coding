@@ -38,7 +38,7 @@ class TrafficStore:
         Args:
             db: Database session
             array_id: Array identifier
-            records: List of {ts, port, tx_bytes, rx_bytes, tx_rate_bps?, rx_rate_bps?}
+            records: List of {ts, port, tx_bytes, rx_bytes, tx_rate_bps?, rx_rate_bps?, mode?, protocol?}
 
         Returns:
             Number of records ingested
@@ -63,6 +63,8 @@ class TrafficStore:
                     rx_bytes=rec.get('rx_bytes', 0),
                     tx_rate_bps=rec.get('tx_rate_bps', 0.0),
                     rx_rate_bps=rec.get('rx_rate_bps', 0.0),
+                    mode=rec.get('mode', 'auto'),
+                    protocol=rec.get('protocol', 'ethernet'),
                 ))
             except Exception as e:
                 logger.debug(f"Skip bad traffic record: {e}")
@@ -116,6 +118,8 @@ class TrafficStore:
                 'rx_bytes': r.rx_bytes,
                 'tx_rate_bps': r.tx_rate_bps or 0.0,
                 'rx_rate_bps': r.rx_rate_bps or 0.0,
+                'mode': r.mode or 'auto',
+                'protocol': r.protocol or 'ethernet',
             }
             for r in rows
         ]

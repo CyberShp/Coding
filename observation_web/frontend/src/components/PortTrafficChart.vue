@@ -44,10 +44,70 @@
         <span class="bw-value rx">{{ formatBandwidth(latestBandwidth.rx) }}</span>
       </div>
       <div class="bw-item">
+        <span class="bw-label">采集模式</span>
+        <el-tag :type="getModeTagType(latestBandwidth.mode)" size="small" effect="plain">
+          {{ latestBandwidth.mode || 'auto' }}
+        </el-tag>
+      </div>
+      <div class="bw-item">
+        <span class="bw-label">协议类型</span>
+        <el-tag :type="getProtocolTagType(latestBandwidth.protocol)" size="small" effect="plain">
+          {{ getProtocolLabel(latestBandwidth.protocol) }}
+        </el-tag>
+      </div>
+      <div class="bw-item">
         <span class="bw-label">最后更新</span>
         <span class="bw-value time">{{ latestBandwidth.time || '--' }}</span>
       </div>
+      <el-button text type="info" size="small" @click="showDiagnostic" class="diagnostic-btn">
+        <el-icon><InfoFilled /></el-icon>
+        诊断
+      </el-button>
     </div>
+
+    <!-- Diagnostic dialog -->
+    <el-dialog v-model="diagnosticVisible" title="流量采集诊断" width="500px">
+      <div v-if="diagnosticInfo" class="diagnostic-content">
+        <el-descriptions :column="1" border size="small">
+          <el-descriptions-item label="RDMA 设备">
+            <el-tag v-if="diagnosticInfo.has_rdma" type="success">检测到</el-tag>
+            <el-tag v-else type="info">未检测到</el-tag>
+          </el-descriptions-item>
+          <el-descriptions-item label="TOE Offload">
+            <el-tag v-if="diagnosticInfo.has_toe" type="success">检测到</el-tag>
+            <el-tag v-else type="info">未检测到</el-tag>
+          </el-descriptions-item>
+          <el-descriptions-item label="推荐模式">
+            <el-tag type="primary">{{ diagnosticInfo.recommended_mode }}</el-tag>
+          </el-descriptions-item>
+          <el-descriptions-item label="检测协议">
+            {{ diagnosticInfo.detected_protocol }}
+          </el-descriptions-item>
+        </el-descriptions>
+
+        <div v-if="diagnosticInfo.rdma_devices && diagnosticInfo.rdma_devices.length" class="diag-section">
+          <h4>RDMA 设备</h4>
+          <el-tag v-for="dev in diagnosticInfo.rdma_devices" :key="dev.name" style="margin: 2px">
+            {{ dev.name }} ({{ dev.type || dev.link_layer }})
+          </el-tag>
+        </div>
+
+        <div v-if="diagnosticInfo.toe_ports && diagnosticInfo.toe_ports.length" class="diag-section">
+          <h4>TOE Offload 端口</h4>
+          <el-tag v-for="p in diagnosticInfo.toe_ports" :key="p" style="margin: 2px">{{ p }}</el-tag>
+        </div>
+
+        <div v-if="diagnosticInfo.notes && diagnosticInfo.notes.length" class="diag-section">
+          <h4>诊断说明</h4>
+          <ul>
+            <li v-for="(note, idx) in diagnosticInfo.notes" :key="idx">{{ note }}</li>
+          </ul>
+        </div>
+      </div>
+      <div v-else class="diagnostic-loading">
+        <el-skeleton :rows="5" animated />
+      </div>
+    </el-dialog>
 
     <div v-if="!selectedPort" class="no-port-hint">
       <el-empty description="请先选择一个端口以查看流量曲线" :image-size="80" />
@@ -67,7 +127,7 @@
 
 <script setup>
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
-import { Refresh } from '@element-plus/icons-vue'
+import { Refresh, InfoFilled } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import api from '../api'
 import * as echarts from 'echarts'
@@ -85,6 +145,8 @@ const loadingPorts = ref(false)
 const syncing = ref(false)
 const chartContainer = ref(null)
 const autoRefresh = ref(true)
+const diagnosticVisible = ref(false)
+const diagnosticInfo = ref(null)
 
 let chartInstance = null
 let refreshTimer = null
@@ -97,8 +159,55 @@ const latestBandwidth = computed(() => {
     tx: last.tx_rate_bps || 0,
     rx: last.rx_rate_bps || 0,
     time: formatTime(last.ts),
+    mode: last.mode || 'auto',
+    protocol: last.protocol || 'ethernet',
   }
 })
+
+function getModeTagType(mode) {
+  const types = {
+    rdma: 'warning',
+    toe: 'warning',
+    ethtool: '',
+    sysfs: 'info',
+    auto: 'success',
+    command: 'danger',
+  }
+  return types[mode] || ''
+}
+
+function getProtocolTagType(protocol) {
+  const types = {
+    rdma: 'warning',
+    roce: 'warning',
+    toe: 'warning',
+    ethernet: '',
+  }
+  return types[protocol] || 'info'
+}
+
+function getProtocolLabel(protocol) {
+  const labels = {
+    rdma: 'RDMA',
+    roce: 'RoCE',
+    toe: 'TOE/iSCSI',
+    ethernet: 'Ethernet',
+    unknown: '未知',
+  }
+  return labels[protocol] || protocol
+}
+
+async function showDiagnostic() {
+  diagnosticVisible.value = true
+  diagnosticInfo.value = null
+  try {
+    const res = await api.getTrafficDiagnostic(props.arrayId)
+    diagnosticInfo.value = res.data
+  } catch (e) {
+    ElMessage.error('获取诊断信息失败')
+    diagnosticInfo.value = { notes: ['获取诊断信息失败: ' + (e.message || '未知错误')] }
+  }
+}
 
 // Bandwidth auto-unit formatter
 function formatBandwidth(bps) {
@@ -405,5 +514,37 @@ onUnmounted(() => {
   font-size: 13px;
   font-weight: 400;
   color: var(--el-text-color-regular);
+}
+
+.diagnostic-btn {
+  margin-left: auto;
+}
+
+.diagnostic-content {
+  font-size: 14px;
+}
+
+.diag-section {
+  margin-top: 16px;
+}
+
+.diag-section h4 {
+  margin: 0 0 8px;
+  font-size: 14px;
+  color: var(--el-text-color-primary);
+}
+
+.diag-section ul {
+  margin: 0;
+  padding-left: 20px;
+}
+
+.diag-section li {
+  margin: 4px 0;
+  color: var(--el-text-color-regular);
+}
+
+.diagnostic-loading {
+  padding: 20px;
 }
 </style>

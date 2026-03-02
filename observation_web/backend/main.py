@@ -17,7 +17,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from .config import get_config
 from .core.system_alert import sys_error, sys_warning, sys_info
 from .db.database import init_db, create_tables
-from .api import arrays_router, alerts_router, query_router, ws_router
+from .api import arrays_router, alerts_router, query_router, ws_router, tags_router, alert_rules_router, audit_router
 from .api.system_alerts import router as system_alerts_router
 from .api.data_lifecycle import router as data_lifecycle_router
 from .api.scheduler import router as scheduler_router
@@ -27,6 +27,8 @@ from .api.task_session import router as task_session_router
 from .api.timeline import router as timeline_router
 from .api.snapshot import router as snapshot_router
 from .api.acknowledgements import router as ack_router
+from .api.users import router as users_router
+from .middleware.user_session import UserSessionMiddleware
 from .core.ssh_pool import get_ssh_pool
 from .core.scheduler import get_scheduler
 
@@ -262,6 +264,9 @@ def create_app() -> FastAPI:
     
     # Add error tracking middleware
     app.add_middleware(ErrorTrackingMiddleware)
+
+    # Add user session tracking middleware
+    app.add_middleware(UserSessionMiddleware)
     
     # Global exception handler
     @app.exception_handler(Exception)
@@ -281,6 +286,9 @@ def create_app() -> FastAPI:
     app.include_router(arrays_router, prefix="/api")
     app.include_router(alerts_router, prefix="/api")
     app.include_router(query_router, prefix="/api")
+    app.include_router(tags_router, prefix="/api")
+    app.include_router(users_router, prefix="/api")
+    app.include_router(alert_rules_router, prefix="/api")
     app.include_router(system_alerts_router, prefix="/api")
     app.include_router(data_lifecycle_router, prefix="/api")
     app.include_router(scheduler_router, prefix="/api")
@@ -290,6 +298,7 @@ def create_app() -> FastAPI:
     app.include_router(timeline_router, prefix="/api")
     app.include_router(snapshot_router, prefix="/api")
     app.include_router(ack_router, prefix="/api")
+    app.include_router(audit_router, prefix="/api")
     app.include_router(ws_router)
     
     # Health check endpoint
@@ -302,23 +311,26 @@ def create_app() -> FastAPI:
     async def api_info():
         return {
             "name": "Observation Web API",
-        "version": "2.1.0",
-        "endpoints": {
-            "arrays": "/api/arrays",
-            "alerts": "/api/alerts",
-            "alerts_aggregated": "/api/alerts/aggregated",
-            "query": "/api/query",
-            "system_alerts": "/api/system-alerts",
-            "data_lifecycle": "/api/data",
-            "tasks": "/api/tasks",
-            "test_tasks": "/api/test-tasks",
-            "timeline": "/api/timeline",
-            "snapshots": "/api/snapshots",
-            "ingest": "/api/ingest",
-            "traffic": "/api/traffic",
-            "websocket_alerts": "/ws/alerts",
-            "websocket_status": "/ws/status",
-        }
+            "version": "2.2.0",
+            "endpoints": {
+                "arrays": "/api/arrays",
+                "arrays_search": "/api/arrays/search",
+                "tags": "/api/tags",
+                "users": "/api/users",
+                "alerts": "/api/alerts",
+                "alerts_aggregated": "/api/alerts/aggregated",
+                "query": "/api/query",
+                "system_alerts": "/api/system-alerts",
+                "data_lifecycle": "/api/data",
+                "tasks": "/api/tasks",
+                "test_tasks": "/api/test-tasks",
+                "timeline": "/api/timeline",
+                "snapshots": "/api/snapshots",
+                "ingest": "/api/ingest",
+                "traffic": "/api/traffic",
+                "websocket_alerts": "/ws/alerts",
+                "websocket_status": "/ws/status",
+            }
         }
     
     return app

@@ -5,38 +5,24 @@
         <div class="card-header">
           <span>阵列管理</span>
           <div class="header-actions">
-            <!-- Batch Actions -->
-            <el-dropdown v-if="selectedArrays.length > 0" @command="handleBatchAction" trigger="click">
-              <el-button>
-                批量操作 ({{ selectedArrays.length }})
-                <el-icon class="el-icon--right"><ArrowDown /></el-icon>
-              </el-button>
-              <template #dropdown>
-                <el-dropdown-menu>
-                  <el-dropdown-item command="connect">
-                    <el-icon><Link /></el-icon> 批量连接
-                  </el-dropdown-item>
-                  <el-dropdown-item command="disconnect">
-                    <el-icon><SwitchButton /></el-icon> 批量断开
-                  </el-dropdown-item>
-                  <el-dropdown-item command="refresh" divided>
-                    <el-icon><Refresh /></el-icon> 批量刷新
-                  </el-dropdown-item>
-                  <el-dropdown-item command="deploy-agent" divided>
-                    <el-icon><Upload /></el-icon> 部署 Agent
-                  </el-dropdown-item>
-                  <el-dropdown-item command="start-agent">
-                    <el-icon><VideoPlay /></el-icon> 启动 Agent
-                  </el-dropdown-item>
-                  <el-dropdown-item command="stop-agent">
-                    <el-icon><VideoPause /></el-icon> 停止 Agent
-                  </el-dropdown-item>
-                  <el-dropdown-item command="restart-agent">
-                    <el-icon><RefreshRight /></el-icon> 重启 Agent
-                  </el-dropdown-item>
-                </el-dropdown-menu>
+            <el-input
+              v-model="searchIp"
+              placeholder="搜索 IP"
+              style="width: 200px"
+              clearable
+              @keyup.enter="handleSearch"
+              @clear="clearSearch"
+            >
+              <template #append>
+                <el-button @click="handleSearch">
+                  <el-icon><Search /></el-icon>
+                </el-button>
               </template>
-            </el-dropdown>
+            </el-input>
+            <el-button @click="showAddTagDialog">
+              <el-icon><Collection /></el-icon>
+              添加标签
+            </el-button>
             <el-button type="primary" @click="showAddDialog">
               <el-icon><Plus /></el-icon>
               添加阵列
@@ -45,13 +31,166 @@
         </div>
       </template>
 
-      <el-table 
-        :data="arrayStore.arrays" 
-        v-loading="arrayStore.loading" 
-        stripe
-        @selection-change="handleSelectionChange"
-      >
-        <el-table-column type="selection" width="55" />
+      <!-- Tags Grid View -->
+      <div v-loading="loading" class="tags-container">
+        <!-- Search results mode -->
+        <el-alert
+          v-if="isSearchMode"
+          :title="`搜索 '${activeSearchIp}' 的结果：找到 ${searchResult.total_count || 0} 个阵列`"
+          type="info"
+          show-icon
+          closable
+          @close="clearSearch"
+          class="search-alert"
+        />
+
+        <!-- Tags Grid -->
+        <div class="tags-grid">
+          <!-- Display filtered tags in search mode, all tags otherwise -->
+          <div
+            v-for="tag in displayTags"
+            :key="tag.id"
+            class="tag-card"
+            @click="goToTag(tag.id)"
+          >
+            <div class="tag-header" :style="{ borderLeftColor: tag.color }">
+              <span class="tag-name">{{ tag.name }}</span>
+              <el-dropdown @click.stop trigger="click" @command="(cmd) => handleTagAction(cmd, tag)">
+                <el-button text size="small" @click.stop>
+                  <el-icon><MoreFilled /></el-icon>
+                </el-button>
+                <template #dropdown>
+                  <el-dropdown-menu>
+                    <el-dropdown-item command="edit">
+                      <el-icon><Edit /></el-icon> 编辑
+                    </el-dropdown-item>
+                    <el-dropdown-item command="delete" divided>
+                      <el-icon><Delete /></el-icon> 删除
+                    </el-dropdown-item>
+                  </el-dropdown-menu>
+                </template>
+              </el-dropdown>
+            </div>
+            <div class="tag-body">
+              <div class="tag-stat">
+                <span class="stat-value">{{ tag.array_count }}</span>
+                <span class="stat-label">阵列</span>
+              </div>
+              <div class="tag-status" v-if="tagStatuses[tag.id]">
+                <el-tag v-if="tagStatuses[tag.id].connected > 0" type="success" size="small" effect="plain">
+                  {{ tagStatuses[tag.id].connected }} 已连接
+                </el-tag>
+                <el-tag v-if="tagStatuses[tag.id].error > 0" type="danger" size="small" effect="plain">
+                  {{ tagStatuses[tag.id].error }} 异常
+                </el-tag>
+              </div>
+              <!-- Show matching arrays in search mode -->
+              <div v-if="isSearchMode && getSearchTagArrays(tag.id).length" class="search-matches">
+                <div v-for="arr in getSearchTagArrays(tag.id)" :key="arr.array_id" class="match-item">
+                  <span class="match-name">{{ arr.name }}</span>
+                  <span class="match-ip">{{ arr.host }}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Untagged Arrays Card -->
+          <div
+            v-if="untaggedCount > 0 || (isSearchMode && searchResult.untagged_arrays?.length)"
+            class="tag-card untagged-card"
+            @click="goToUntagged"
+          >
+            <div class="tag-header">
+              <span class="tag-name">未分类阵列</span>
+            </div>
+            <div class="tag-body">
+              <div class="tag-stat">
+                <span class="stat-value">{{ isSearchMode ? searchResult.untagged_arrays?.length : untaggedCount }}</span>
+                <span class="stat-label">阵列</span>
+              </div>
+              <!-- Show matching untagged arrays in search mode -->
+              <div v-if="isSearchMode && searchResult.untagged_arrays?.length" class="search-matches">
+                <div v-for="arr in searchResult.untagged_arrays" :key="arr.array_id" class="match-item">
+                  <span class="match-name">{{ arr.name }}</span>
+                  <span class="match-ip">{{ arr.host }}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Empty state -->
+        <el-empty v-if="tags.length === 0 && untaggedCount === 0 && !loading" description="暂无阵列，点击右上角添加">
+          <el-button type="primary" @click="showAddDialog">添加阵列</el-button>
+        </el-empty>
+      </div>
+    </el-card>
+
+    <!-- Add Array Dialog -->
+    <el-dialog v-model="dialogVisible" title="添加阵列" width="500px" @keyup.enter="handleAdd">
+      <el-form :model="form" :rules="rules" ref="formRef" label-width="80px" @submit.prevent="handleAdd">
+        <el-form-item label="名称" prop="name">
+          <el-input v-model="form.name" placeholder="阵列名称" @keyup.enter="handleAdd" />
+        </el-form-item>
+        <el-form-item label="地址" prop="host">
+          <el-input v-model="form.host" placeholder="IP 地址或主机名" @keyup.enter="handleAdd" />
+        </el-form-item>
+        <el-form-item label="端口" prop="port">
+          <el-input-number v-model="form.port" :min="1" :max="65535" />
+        </el-form-item>
+        <el-form-item label="用户名" prop="username">
+          <el-input v-model="form.username" @keyup.enter="handleAdd" />
+        </el-form-item>
+        <el-form-item label="密码" prop="password">
+          <el-input v-model="form.password" type="password" show-password placeholder="SSH 密码" @keyup.enter="handleAdd" />
+        </el-form-item>
+        <el-form-item label="密钥路径">
+          <el-input v-model="form.key_path" placeholder="可选：SSH 密钥文件路径" @keyup.enter="handleAdd" />
+        </el-form-item>
+        <el-form-item label="标签">
+          <el-select v-model="form.tag_id" placeholder="选择标签（可选）" clearable style="width: 100%">
+            <el-option
+              v-for="tag in tags"
+              :key="tag.id"
+              :label="tag.name"
+              :value="tag.id"
+            >
+              <span class="tag-option">
+                <span class="tag-dot" :style="{ background: tag.color }"></span>
+                {{ tag.name }}
+              </span>
+            </el-option>
+          </el-select>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="dialogVisible = false">取消</el-button>
+        <el-button type="primary" @click="handleAdd" :loading="submitting">确定</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- Add Tag Dialog -->
+    <el-dialog v-model="tagDialogVisible" :title="editingTag ? '编辑标签' : '添加标签'" width="400px" @keyup.enter="handleAddTag">
+      <el-form :model="tagForm" :rules="tagRules" ref="tagFormRef" label-width="80px" @submit.prevent="handleAddTag">
+        <el-form-item label="名称" prop="name">
+          <el-input v-model="tagForm.name" placeholder="标签名称" @keyup.enter="handleAddTag" />
+        </el-form-item>
+        <el-form-item label="颜色">
+          <el-color-picker v-model="tagForm.color" />
+        </el-form-item>
+        <el-form-item label="描述">
+          <el-input v-model="tagForm.description" type="textarea" :rows="2" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="tagDialogVisible = false">取消</el-button>
+        <el-button type="primary" @click="handleAddTag" :loading="tagSubmitting">确定</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- Untagged Arrays Dialog -->
+    <el-dialog v-model="untaggedDialogVisible" title="未分类阵列" width="800px">
+      <el-table :data="untaggedArrays" v-loading="loadingUntagged" stripe max-height="400">
         <el-table-column label="状态" width="80">
           <template #default="{ row }">
             <el-tag :type="getStateType(row.state)" size="small">
@@ -61,176 +200,63 @@
         </el-table-column>
         <el-table-column prop="name" label="名称" />
         <el-table-column prop="host" label="地址" />
-        <el-table-column prop="port" label="端口" width="80" />
-        <el-table-column prop="username" label="用户名" width="100" />
-        <el-table-column prop="folder" label="分组" />
-        <el-table-column label="Agent" width="100">
+        <el-table-column label="分配标签" width="180">
           <template #default="{ row }">
-            <el-tag v-if="row.agent_running" type="success" size="small">运行中</el-tag>
-            <el-tag v-else-if="row.agent_deployed" type="warning" size="small">已部署</el-tag>
-            <el-tag v-else type="info" size="small">未部署</el-tag>
+            <el-select
+              :model-value="row.tag_id"
+              placeholder="选择标签"
+              size="small"
+              clearable
+              @change="(val) => assignTag(row, val)"
+            >
+              <el-option
+                v-for="tag in tags"
+                :key="tag.id"
+                :label="tag.name"
+                :value="tag.id"
+              />
+            </el-select>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="280">
+        <el-table-column label="操作" width="120">
           <template #default="{ row }">
-            <el-button-group>
-              <el-button 
-                v-if="row.state !== 'connected'"
-                size="small"
-                type="primary"
-                @click="handleConnect(row)"
-              >
-                连接
-              </el-button>
-              <el-button 
-                v-else
-                size="small"
-                @click="handleDisconnect(row)"
-              >
-                断开
-              </el-button>
-              <el-button 
-                size="small"
-                @click="$router.push(`/arrays/${row.array_id}`)"
-              >
-                详情
-              </el-button>
-              <el-button 
-                size="small"
-                type="danger"
-                @click="handleDelete(row)"
-              >
-                删除
-              </el-button>
-            </el-button-group>
+            <el-button size="small" @click="$router.push(`/arrays/${row.array_id}`)">详情</el-button>
           </template>
         </el-table-column>
       </el-table>
-    </el-card>
-
-    <!-- Add Array Dialog -->
-    <el-dialog v-model="dialogVisible" title="添加阵列" width="500px">
-      <el-form :model="form" :rules="rules" ref="formRef" label-width="80px">
-        <el-form-item label="名称" prop="name">
-          <el-input v-model="form.name" placeholder="阵列名称" />
-        </el-form-item>
-        <el-form-item label="地址" prop="host">
-          <el-input v-model="form.host" placeholder="IP 地址或主机名" />
-        </el-form-item>
-        <el-form-item label="端口" prop="port">
-          <el-input-number v-model="form.port" :min="1" :max="65535" />
-        </el-form-item>
-        <el-form-item label="用户名" prop="username">
-          <el-input v-model="form.username" />
-        </el-form-item>
-        <el-form-item label="密码" prop="password">
-          <el-input v-model="form.password" type="password" show-password placeholder="SSH 密码" />
-        </el-form-item>
-        <el-form-item label="密钥路径">
-          <el-input v-model="form.key_path" placeholder="可选：SSH 密钥文件路径" />
-        </el-form-item>
-        <el-form-item label="分组">
-          <el-input v-model="form.folder" placeholder="可选：分组名称" />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="dialogVisible = false">取消</el-button>
-        <el-button type="primary" @click="handleAdd" :loading="submitting">确定</el-button>
-      </template>
-    </el-dialog>
-
-    <!-- Connect Dialog -->
-    <el-dialog v-model="connectDialogVisible" title="连接阵列" width="400px">
-      <el-form :model="connectForm">
-        <el-form-item label="密码">
-          <el-input 
-            v-model="connectForm.password" 
-            type="password" 
-            show-password 
-            placeholder="输入 SSH 密码（如果已配置密钥可留空）" 
-          />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="connectDialogVisible = false">取消</el-button>
-        <el-button type="primary" @click="doConnect" :loading="connecting">连接</el-button>
-      </template>
-    </el-dialog>
-
-    <!-- Batch Connect Dialog -->
-    <el-dialog v-model="batchConnectDialogVisible" title="批量连接" width="400px">
-      <p class="batch-info">将连接 {{ selectedArrays.length }} 个阵列</p>
-      <el-form :model="batchConnectForm">
-        <el-form-item label="统一密码">
-          <el-input 
-            v-model="batchConnectForm.password" 
-            type="password" 
-            show-password 
-            placeholder="所有阵列使用相同的 SSH 密码" 
-          />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="batchConnectDialogVisible = false">取消</el-button>
-        <el-button type="primary" @click="doBatchConnect" :loading="batchOperating">连接</el-button>
-      </template>
-    </el-dialog>
-
-    <!-- Batch Result Dialog -->
-    <el-dialog v-model="batchResultDialogVisible" title="批量操作结果" width="500px">
-      <div class="batch-summary">
-        <el-tag type="success" size="large">成功: {{ batchResult.success_count }}</el-tag>
-        <el-tag type="danger" size="large">失败: {{ batchResult.total - batchResult.success_count }}</el-tag>
-      </div>
-      <el-table :data="batchResult.results" max-height="300" class="batch-results">
-        <el-table-column label="阵列" width="150">
-          <template #default="{ row }">
-            {{ getArrayName(row.array_id) }}
-          </template>
-        </el-table-column>
-        <el-table-column label="状态" width="80">
-          <template #default="{ row }">
-            <el-tag :type="row.success ? 'success' : 'danger'" size="small">
-              {{ row.success ? '成功' : '失败' }}
-            </el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column label="消息" prop="message" show-overflow-tooltip>
-          <template #default="{ row }">
-            {{ row.message || row.error || '-' }}
-          </template>
-        </el-table-column>
-      </el-table>
-      <template #footer>
-        <el-button type="primary" @click="batchResultDialogVisible = false">确定</el-button>
-      </template>
     </el-dialog>
   </div>
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted } from 'vue'
+import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { 
-  Plus, ArrowDown, Link, SwitchButton, Refresh, Upload, 
-  VideoPlay, VideoPause, RefreshRight 
+import {
+  Plus, Search, Collection, MoreFilled, Edit, Delete
 } from '@element-plus/icons-vue'
-import { useArrayStore } from '../stores/arrays'
 import api from '../api'
 
-const arrayStore = useArrayStore()
+const router = useRouter()
+
+const loading = ref(false)
+const tags = ref([])
+const allStatuses = ref([])
+const searchIp = ref('')
+const activeSearchIp = ref('')
+const searchResult = ref({})
+const isSearchMode = computed(() => !!activeSearchIp.value)
 
 const dialogVisible = ref(false)
-const connectDialogVisible = ref(false)
-const batchConnectDialogVisible = ref(false)
-const batchResultDialogVisible = ref(false)
+const tagDialogVisible = ref(false)
+const untaggedDialogVisible = ref(false)
 const submitting = ref(false)
-const connecting = ref(false)
-const batchOperating = ref(false)
+const tagSubmitting = ref(false)
+const loadingUntagged = ref(false)
 const formRef = ref(null)
-const currentArray = ref(null)
-const selectedArrays = ref([])
-const batchResult = ref({ total: 0, success_count: 0, results: [] })
+const tagFormRef = ref(null)
+const editingTag = ref(null)
+const untaggedArrays = ref([])
 
 const form = reactive({
   name: '',
@@ -239,15 +265,13 @@ const form = reactive({
   username: 'root',
   password: '',
   key_path: '',
-  folder: '',
+  tag_id: null,
 })
 
-const connectForm = reactive({
-  password: '',
-})
-
-const batchConnectForm = reactive({
-  password: '',
+const tagForm = reactive({
+  name: '',
+  color: '#409eff',
+  description: '',
 })
 
 const rules = {
@@ -256,24 +280,122 @@ const rules = {
   username: [{ required: true, message: '请输入用户名', trigger: 'blur' }],
 }
 
-function getStateType(state) {
-  const types = {
-    connected: 'success',
-    connecting: 'warning',
-    disconnected: 'info',
-    error: 'danger',
+const tagRules = {
+  name: [{ required: true, message: '请输入标签名称', trigger: 'blur' }],
+}
+
+const displayTags = computed(() => {
+  if (!isSearchMode.value) return tags.value
+  const tagIds = new Set((searchResult.value.tags || []).map(t => t.tag_id))
+  return tags.value.filter(t => tagIds.has(t.id))
+})
+
+const tagStatuses = computed(() => {
+  const result = {}
+  for (const s of allStatuses.value) {
+    const tid = s.tag_id || 0
+    if (!result[tid]) {
+      result[tid] = { connected: 0, disconnected: 0, error: 0 }
+    }
+    if (s.state === 'connected') result[tid].connected++
+    else if (s.state === 'error') result[tid].error++
+    else result[tid].disconnected++
   }
+  return result
+})
+
+const untaggedCount = computed(() => {
+  return allStatuses.value.filter(s => !s.tag_id).length
+})
+
+function getSearchTagArrays(tagId) {
+  const tagData = (searchResult.value.tags || []).find(t => t.tag_id === tagId)
+  return tagData?.arrays || []
+}
+
+function getStateType(state) {
+  const types = { connected: 'success', connecting: 'warning', disconnected: 'info', error: 'danger' }
   return types[state] || 'info'
 }
 
 function getStateText(state) {
-  const texts = {
-    connected: '已连接',
-    connecting: '连接中',
-    disconnected: '未连接',
-    error: '错误',
-  }
+  const texts = { connected: '已连接', connecting: '连接中', disconnected: '未连接', error: '错误' }
   return texts[state] || state
+}
+
+async function loadTags() {
+  try {
+    const res = await api.getTags()
+    tags.value = res.data || []
+  } catch (e) {
+    console.error('Failed to load tags:', e)
+  }
+}
+
+async function loadStatuses() {
+  try {
+    const res = await api.getArrayStatuses()
+    allStatuses.value = res.data || []
+  } catch (e) {
+    console.error('Failed to load statuses:', e)
+  }
+}
+
+async function loadData() {
+  loading.value = true
+  try {
+    await Promise.all([loadTags(), loadStatuses()])
+  } finally {
+    loading.value = false
+  }
+}
+
+async function handleSearch() {
+  const ip = searchIp.value.trim()
+  if (!ip) {
+    clearSearch()
+    return
+  }
+  activeSearchIp.value = ip
+  try {
+    const res = await api.searchArrays(ip)
+    searchResult.value = res.data
+  } catch (e) {
+    ElMessage.error('搜索失败')
+  }
+}
+
+function clearSearch() {
+  searchIp.value = ''
+  activeSearchIp.value = ''
+  searchResult.value = {}
+}
+
+function goToTag(tagId) {
+  router.push(`/arrays/tag/${tagId}`)
+}
+
+async function goToUntagged() {
+  untaggedDialogVisible.value = true
+  loadingUntagged.value = true
+  try {
+    const res = await api.getArrayStatuses()
+    untaggedArrays.value = (res.data || []).filter(a => !a.tag_id)
+  } finally {
+    loadingUntagged.value = false
+  }
+}
+
+async function assignTag(array, tagId) {
+  try {
+    await api.updateArray(array.array_id, { tag_id: tagId || null })
+    ElMessage.success('标签已更新')
+    await loadData()
+    // Refresh untagged list
+    untaggedArrays.value = untaggedArrays.value.filter(a => a.array_id !== array.array_id)
+  } catch (e) {
+    ElMessage.error('更新失败')
+  }
 }
 
 function showAddDialog() {
@@ -284,19 +406,24 @@ function showAddDialog() {
     username: 'root',
     password: '',
     key_path: '',
-    folder: '',
+    tag_id: null,
   })
   dialogVisible.value = true
 }
 
 async function handleAdd() {
-  await formRef.value.validate()
-  
+  try {
+    await formRef.value.validate()
+  } catch {
+    return
+  }
+
   submitting.value = true
   try {
-    await arrayStore.createArray(form)
+    await api.createArray(form)
     ElMessage.success('添加成功')
     dialogVisible.value = false
+    await loadData()
   } catch (error) {
     ElMessage.error(error.response?.data?.detail || '添加失败')
   } finally {
@@ -304,145 +431,60 @@ async function handleAdd() {
   }
 }
 
-async function handleConnect(row) {
-  currentArray.value = row
-  
-  // 如果有保存的密码，先尝试自动连接
-  if (row.has_saved_password) {
-    connecting.value = true
-    try {
-      await arrayStore.connectArray(row.array_id, '')  // 后端自动使用已保存密码
-      ElMessage.success('自动连接成功')
-      return
-    } catch (error) {
-      // 自动连接失败，弹出密码框让用户重新输入
-      ElMessage.warning('已保存的密码连接失败，请重新输入密码')
-    } finally {
-      connecting.value = false
-    }
-  }
-  
-  connectForm.password = ''
-  connectDialogVisible.value = true
+function showAddTagDialog() {
+  editingTag.value = null
+  Object.assign(tagForm, { name: '', color: '#409eff', description: '' })
+  tagDialogVisible.value = true
 }
 
-async function doConnect() {
-  connecting.value = true
-  try {
-    await arrayStore.connectArray(currentArray.value.array_id, connectForm.password)
-    ElMessage.success('连接成功')
-    connectDialogVisible.value = false
-  } catch (error) {
-    ElMessage.error(error.response?.data?.detail || '连接失败')
-  } finally {
-    connecting.value = false
+function handleTagAction(action, tag) {
+  if (action === 'edit') {
+    editingTag.value = tag
+    Object.assign(tagForm, { name: tag.name, color: tag.color, description: tag.description })
+    tagDialogVisible.value = true
+  } else if (action === 'delete') {
+    deleteTag(tag)
   }
 }
 
-async function handleDisconnect(row) {
+async function deleteTag(tag) {
+  await ElMessageBox.confirm(`确定要删除标签 "${tag.name}" 吗？阵列不会被删除，只会变为未分类。`, '确认删除', { type: 'warning' })
   try {
-    await arrayStore.disconnectArray(row.array_id)
-    ElMessage.success('已断开连接')
-  } catch (error) {
-    ElMessage.error('断开连接失败')
-  }
-}
-
-async function handleDelete(row) {
-  await ElMessageBox.confirm(
-    `确定要删除阵列 "${row.name}" 吗？`,
-    '确认删除',
-    { type: 'warning' }
-  )
-  
-  try {
-    await arrayStore.deleteArray(row.array_id)
+    await api.deleteTag(tag.id)
     ElMessage.success('删除成功')
-  } catch (error) {
+    await loadData()
+  } catch (e) {
     ElMessage.error('删除失败')
   }
 }
 
-// Batch operations
-function handleSelectionChange(selection) {
-  selectedArrays.value = selection
-}
-
-function getArrayName(arrayId) {
-  const array = arrayStore.arrays.find(a => a.array_id === arrayId)
-  return array?.name || arrayId
-}
-
-async function handleBatchAction(action) {
-  if (selectedArrays.value.length === 0) {
-    ElMessage.warning('请先选择阵列')
+async function handleAddTag() {
+  try {
+    await tagFormRef.value.validate()
+  } catch {
     return
   }
 
-  if (action === 'connect') {
-    batchConnectForm.password = ''
-    batchConnectDialogVisible.value = true
-    return
-  }
-
-  // Confirm other batch actions
-  const actionNames = {
-    'disconnect': '断开',
-    'refresh': '刷新',
-    'deploy-agent': '部署 Agent',
-    'start-agent': '启动 Agent',
-    'stop-agent': '停止 Agent',
-    'restart-agent': '重启 Agent',
-  }
-
-  await ElMessageBox.confirm(
-    `确定要对 ${selectedArrays.value.length} 个阵列执行"${actionNames[action]}"操作吗？`,
-    '确认批量操作',
-    { type: 'warning' }
-  )
-
-  await executeBatchAction(action)
-}
-
-async function doBatchConnect() {
-  batchOperating.value = true
+  tagSubmitting.value = true
   try {
-    await executeBatchAction('connect', batchConnectForm.password)
-    batchConnectDialogVisible.value = false
-  } finally {
-    batchOperating.value = false
-  }
-}
-
-async function executeBatchAction(action, password = null) {
-  batchOperating.value = true
-  
-  try {
-    const arrayIds = selectedArrays.value.map(a => a.array_id)
-    const res = await api.batchAction(action, arrayIds, password)
-    
-    batchResult.value = res.data
-    batchResultDialogVisible.value = true
-    
-    // Refresh array list
-    await arrayStore.fetchArrays()
-    
-    if (res.data.success_count === res.data.total) {
-      ElMessage.success(`批量操作完成：全部成功`)
-    } else if (res.data.success_count > 0) {
-      ElMessage.warning(`批量操作完成：${res.data.success_count}/${res.data.total} 成功`)
+    if (editingTag.value) {
+      await api.updateTag(editingTag.value.id, tagForm)
+      ElMessage.success('更新成功')
     } else {
-      ElMessage.error(`批量操作失败`)
+      await api.createTag(tagForm)
+      ElMessage.success('创建成功')
     }
+    tagDialogVisible.value = false
+    await loadData()
   } catch (error) {
-    ElMessage.error(error.response?.data?.detail || '批量操作失败')
+    ElMessage.error(error.response?.data?.detail || '操作失败')
   } finally {
-    batchOperating.value = false
+    tagSubmitting.value = false
   }
 }
 
 onMounted(() => {
-  arrayStore.fetchArrays()
+  loadData()
 })
 </script>
 
@@ -462,18 +504,111 @@ onMounted(() => {
   gap: 10px;
 }
 
-.batch-info {
-  margin-bottom: 15px;
-  color: #606266;
+.tags-container {
+  min-height: 200px;
 }
 
-.batch-summary {
+.search-alert {
+  margin-bottom: 16px;
+}
+
+.tags-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 16px;
+}
+
+.tag-card {
+  background: var(--el-bg-color);
+  border: 1px solid var(--el-border-color-light);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.tag-card:hover {
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+  border-color: var(--el-color-primary-light-5);
+}
+
+.tag-header {
   display: flex;
-  gap: 20px;
-  margin-bottom: 15px;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--el-border-color-lighter);
+  border-left: 4px solid var(--el-color-primary);
+  border-radius: 8px 8px 0 0;
 }
 
-.batch-results {
-  margin-top: 10px;
+.untagged-card .tag-header {
+  border-left-color: var(--el-color-info);
+}
+
+.tag-name {
+  font-weight: 500;
+  font-size: 15px;
+}
+
+.tag-body {
+  padding: 16px;
+}
+
+.tag-stat {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.stat-value {
+  font-size: 28px;
+  font-weight: 700;
+  color: var(--el-color-primary);
+}
+
+.stat-label {
+  color: var(--el-text-color-secondary);
+  font-size: 13px;
+}
+
+.tag-status {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.search-matches {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--el-border-color-lighter);
+}
+
+.match-item {
+  display: flex;
+  justify-content: space-between;
+  padding: 4px 0;
+  font-size: 13px;
+}
+
+.match-name {
+  color: var(--el-text-color-primary);
+}
+
+.match-ip {
+  color: var(--el-text-color-secondary);
+  font-family: monospace;
+}
+
+.tag-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.tag-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
 }
 </style>

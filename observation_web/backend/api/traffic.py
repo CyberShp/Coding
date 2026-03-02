@@ -2,16 +2,18 @@
 Port traffic data API.
 
 Endpoints:
-- GET  /api/traffic/{array_id}/ports   — list ports with recent traffic data
-- GET  /api/traffic/{array_id}/data    — query traffic data for a port
-- POST /api/traffic/{array_id}/sync    — sync traffic.jsonl from agent
+- GET  /api/traffic/{array_id}/ports      — list ports with recent traffic data
+- GET  /api/traffic/{array_id}/data       — query traffic data for a port
+- POST /api/traffic/{array_id}/sync       — sync traffic.jsonl from agent
+- GET  /api/traffic/{array_id}/diagnostic — get traffic collection diagnostic info
 """
 
 import json
 import logging
-from typing import Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import get_config
@@ -22,6 +24,19 @@ from ..db.database import get_db
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/traffic", tags=["traffic"])
+
+
+class TrafficDiagnostic(BaseModel):
+    """Traffic collection diagnostic information"""
+    array_id: str
+    has_rdma: bool = False
+    has_toe: bool = False
+    rdma_devices: List[Dict[str, Any]] = []
+    toe_ports: List[str] = []
+    detected_protocol: str = "unknown"
+    recommended_mode: str = "auto"
+    available_modes: List[str] = ["auto", "ethtool", "sysfs", "rdma", "toe", "command"]
+    notes: List[str] = []
 
 
 @router.get("/{array_id}/ports")
@@ -122,3 +137,160 @@ async def sync_traffic(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Traffic sync failed: {str(e)}",
         )
+
+
+@router.get("/{array_id}/diagnostic", response_model=TrafficDiagnostic)
+async def get_traffic_diagnostic(
+    array_id: str,
+    db: AsyncSession = Depends(get_db),
+    ssh_pool: SSHPool = Depends(get_ssh_pool),
+):
+    """
+    Get traffic collection diagnostic information.
+
+    Detects RDMA/RoCE devices, TOE offload capabilities, and recommends
+    the best collection mode for the array.
+    """
+    conn = ssh_pool.get_connection(array_id)
+    if not conn or not conn.is_connected():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Array not connected",
+        )
+
+    result = TrafficDiagnostic(array_id=array_id)
+    notes = []
+
+    try:
+        # Check for RDMA/InfiniBand devices
+        exit_code, rdma_output, _ = conn.execute(
+            "ls -la /sys/class/infiniband/ 2>/dev/null | grep -v '^total'", timeout=10
+        )
+        if exit_code == 0 and rdma_output and rdma_output.strip():
+            result.has_rdma = True
+            for line in rdma_output.strip().split('\n'):
+                parts = line.split()
+                if len(parts) >= 9:
+                    device_name = parts[-1]
+                    if device_name not in ('.', '..'):
+                        result.rdma_devices.append({
+                            'name': device_name,
+                            'type': 'infiniband',
+                        })
+
+        # Get RDMA device details
+        if result.has_rdma:
+            for dev in result.rdma_devices:
+                dev_name = dev['name']
+                exit_code, link_layer, _ = conn.execute(
+                    f"cat /sys/class/infiniband/{dev_name}/ports/1/link_layer 2>/dev/null",
+                    timeout=5
+                )
+                if exit_code == 0 and link_layer:
+                    dev['link_layer'] = link_layer.strip()
+                    if link_layer.strip() == 'Ethernet':
+                        dev['type'] = 'roce'
+                        notes.append(f"检测到 RoCE 设备: {dev_name}")
+                    else:
+                        notes.append(f"检测到 InfiniBand 设备: {dev_name}")
+
+        # Check for TOE support
+        exit_code, interfaces, _ = conn.execute(
+            "ls /sys/class/net/ | grep -v lo", timeout=5
+        )
+        if exit_code == 0 and interfaces:
+            for iface in interfaces.strip().split('\n'):
+                iface = iface.strip()
+                if not iface:
+                    continue
+                exit_code, toe_output, _ = conn.execute(
+                    f"ethtool -k {iface} 2>/dev/null | grep -E 'tcp-segmentation-offload|large-receive-offload'",
+                    timeout=5
+                )
+                if exit_code == 0 and toe_output:
+                    if ': on' in toe_output:
+                        result.has_toe = True
+                        result.toe_ports.append(iface)
+
+        if result.toe_ports:
+            notes.append(f"检测到 TOE offload 端口: {', '.join(result.toe_ports[:5])}")
+
+        # Determine recommended mode and detected protocol
+        if result.has_rdma and result.rdma_devices:
+            result.recommended_mode = "rdma"
+            result.detected_protocol = "rdma" if any(
+                d.get('link_layer') != 'Ethernet' for d in result.rdma_devices
+            ) else "roce"
+            notes.append("建议使用 rdma 模式采集，可获取绕过内核协议栈的 RDMA/RoCE 流量")
+        elif result.has_toe:
+            result.recommended_mode = "toe"
+            result.detected_protocol = "toe"
+            notes.append("检测到 TOE offload，建议使用 toe 模式以获取更完整的统计")
+        else:
+            result.recommended_mode = "auto"
+            result.detected_protocol = "ethernet"
+            notes.append("未检测到特殊协议，使用标准 ethtool/sysfs 采集即可")
+
+        # Check current traffic data protocol info
+        store = get_traffic_store()
+        ports_data = await store.get_ports(db, array_id)
+        if ports_data:
+            protocols = set()
+            for p in ports_data:
+                if isinstance(p, dict) and 'protocol' in p:
+                    protocols.add(p['protocol'])
+            if protocols:
+                notes.append(f"当前数据中检测到的协议: {', '.join(protocols)}")
+
+        result.notes = notes
+
+    except Exception as e:
+        logger.warning(f"Traffic diagnostic failed for {array_id}: {e}")
+        result.notes = [f"诊断过程中出现错误: {str(e)}"]
+
+    return result
+
+
+@router.get("/{array_id}/mode-info")
+async def get_traffic_mode_info(
+    array_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Get recent traffic data with mode and protocol information.
+
+    Returns the last few data points with their collection mode and protocol type.
+    """
+    store = get_traffic_store()
+
+    # Get recent data to check mode/protocol
+    ports = await store.get_ports(db, array_id)
+    result = {
+        "array_id": array_id,
+        "ports": [],
+        "modes_detected": set(),
+        "protocols_detected": set(),
+    }
+
+    for port_info in ports[:10]:  # Limit to first 10 ports
+        port_name = port_info if isinstance(port_info, str) else port_info.get('port', '')
+        data = await store.query(db, array_id, port_name, minutes=5)
+
+        if data:
+            latest = data[-1] if data else {}
+            mode = latest.get('mode', 'unknown')
+            protocol = latest.get('protocol', 'unknown')
+            result["modes_detected"].add(mode)
+            result["protocols_detected"].add(protocol)
+            result["ports"].append({
+                "port": port_name,
+                "mode": mode,
+                "protocol": protocol,
+                "latest_tx_rate_bps": latest.get('tx_rate_bps', 0),
+                "latest_rx_rate_bps": latest.get('rx_rate_bps', 0),
+            })
+
+    result["modes_detected"] = list(result["modes_detected"])
+    result["protocols_detected"] = list(result["protocols_detected"])
+
+    return result

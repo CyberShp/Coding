@@ -49,13 +49,29 @@ httpLong.interceptors.response.use(response => response, handleError)
 
 export default {
   // Arrays
-  getArrays: () => http.get('/arrays'),
-  getArrayStatuses: () => http.get('/arrays/statuses'),
+  getArrays: (tagId = null) => http.get('/arrays', { params: tagId ? { tag_id: tagId } : {} }),
+  getArrayStatuses: (tagId = null) => http.get('/arrays/statuses', { params: tagId ? { tag_id: tagId } : {} }),
   getArray: (id) => http.get(`/arrays/${id}`),
   createArray: (data) => http.post('/arrays', data),
   updateArray: (id, data) => http.put(`/arrays/${id}`, data),
   deleteArray: (id) => http.delete(`/arrays/${id}`),
   getArrayStatus: (id) => http.get(`/arrays/${id}/status`),
+  searchArrays: (ip) => http.get('/arrays/search', { params: { ip } }),
+
+  // Tags
+  getTags: () => http.get('/tags'),
+  createTag: (data) => http.post('/tags', data),
+  getTag: (id) => http.get(`/tags/${id}`),
+  updateTag: (id, data) => http.put(`/tags/${id}`, data),
+  deleteTag: (id) => http.delete(`/tags/${id}`),
+  getTagArrays: (id, searchIp = null) => http.get(`/tags/${id}/arrays`, { params: searchIp ? { search_ip: searchIp } : {} }),
+  migrateFoldersToTags: () => http.post('/tags/migrate-folders'),
+
+  // Users
+  getOnlineUsers: () => http.get('/users/online'),
+  getCurrentUser: () => http.get('/users/me'),
+  setNickname: (nickname) => http.post('/users/me/nickname', { nickname }),
+  getUserCount: () => http.get('/users/count'),
   // Long operations use httpLong with 60s timeout
   connectArray: (id, password) => httpLong.post(`/arrays/${id}/connect`, null, { params: { password } }),
   disconnectArray: (id) => http.post(`/arrays/${id}/disconnect`),
@@ -85,6 +101,8 @@ export default {
   getTrafficPorts: (arrayId) => http.get(`/traffic/${arrayId}/ports`),
   getTrafficData: (arrayId, port, minutes = 30) => http.get(`/traffic/${arrayId}/data`, { params: { port, minutes } }),
   syncTraffic: (arrayId) => httpLong.post(`/traffic/${arrayId}/sync`),
+  getTrafficDiagnostic: (arrayId) => http.get(`/traffic/${arrayId}/diagnostic`),
+  getTrafficModeInfo: (arrayId) => http.get(`/traffic/${arrayId}/mode-info`),
 
   // Alerts
   getAlerts: (params) => http.get('/alerts', { params }),
@@ -112,6 +130,22 @@ export default {
   stopTestTask: (id) => http.post(`/test-tasks/${id}/stop`),
   deleteTestTask: (id) => http.delete(`/test-tasks/${id}`),
   getTestTaskSummary: (id) => http.get(`/test-tasks/${id}/summary`),
+
+  // Test Task Locks
+  getAllLocks: () => http.get('/test-tasks/locks/all'),
+  checkLocks: (arrayIds) => http.get('/test-tasks/locks/check', { params: { array_ids: arrayIds.join(',') } }),
+  getArrayLock: (arrayId) => http.get(`/test-tasks/locks/array/${arrayId}`),
+  forceUnlock: (arrayId) => http.delete(`/test-tasks/locks/force/${arrayId}`),
+
+  // Alert Expectation Rules
+  getAlertRules: () => http.get('/alert-rules'),
+  createAlertRule: (data) => http.post('/alert-rules', data),
+  getAlertRule: (id) => http.get(`/alert-rules/${id}`),
+  updateAlertRule: (id, data) => http.put(`/alert-rules/${id}`, data),
+  deleteAlertRule: (id) => http.delete(`/alert-rules/${id}`),
+  toggleAlertRule: (id) => http.post(`/alert-rules/${id}/toggle`),
+  initBuiltinRules: () => http.post('/alert-rules/init-builtin'),
+  resetBuiltinRules: () => http.post('/alert-rules/reset-builtin'),
 
   // Snapshots
   createSnapshot: (arrayId) => httpLong.post(`/snapshots/${arrayId}`),
@@ -154,4 +188,9 @@ export default {
   runTask: (id) => httpLong.post(`/tasks/${id}/run`),
   getTaskResults: (id, limit = 20) => http.get(`/tasks/${id}/results`, { params: { limit } }),
   getRecentTaskResults: (limit = 50) => http.get('/tasks/results/recent', { params: { limit } }),
+
+  // Audit Logs
+  getAuditLogs: (params) => http.get('/audit', { params }),
+  getAuditStats: () => http.get('/audit/stats'),
+  cleanupAuditLogs: (retentionDays = 30) => http.delete('/audit/cleanup', { params: { retention_days: retentionDays } }),
 }

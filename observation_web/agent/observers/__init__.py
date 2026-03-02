@@ -19,6 +19,17 @@ from .controller_state import ControllerStateObserver
 from .disk_state import DiskStateObserver
 from .process_crash import ProcessCrashObserver
 from .io_timeout import IoTimeoutObserver
+from .disk_io import DiskIoObserver
+from .disk_space import DiskSpaceObserver
+from .load_average import LoadAverageObserver
+from .network_errors import NetworkErrorsObserver
+from .swap_usage import SwapUsageObserver
+from .tcp_connections import TcpConnectionsObserver
+from .zombie_processes import ZombieProcessesObserver
+from .file_descriptors import FileDescriptorsObserver
+from .thermal import ThermalObserver
+from .dmesg_errors import DmesgErrorsObserver
+from .system_uptime import SystemUptimeObserver
 
 __all__ = [
     'ErrorCodeObserver',
@@ -40,4 +51,15 @@ __all__ = [
     'DiskStateObserver',
     'ProcessCrashObserver',
     'IoTimeoutObserver',
+    'DiskIoObserver',
+    'DiskSpaceObserver',
+    'LoadAverageObserver',
+    'NetworkErrorsObserver',
+    'SwapUsageObserver',
+    'TcpConnectionsObserver',
+    'ZombieProcessesObserver',
+    'FileDescriptorsObserver',
+    'ThermalObserver',
+    'DmesgErrorsObserver',
+    'SystemUptimeObserver',
 ]

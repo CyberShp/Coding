@@ -370,14 +370,55 @@ class SSHConnection:
 class SSHPool:
     """
     SSH Connection Pool.
-    
+
     Manages multiple SSH connections to storage arrays.
+    Provides per-array async locks for serialized operations.
     """
-    
+
     def __init__(self):
         self._connections: Dict[str, SSHConnection] = {}
         self._lock = threading.RLock()
+        self._async_locks: Dict[str, asyncio.Lock] = {}
+        self._operation_timestamps: Dict[str, Dict[str, float]] = {}
+        self._THROTTLE_SECONDS = 5.0
     
+    def get_async_lock(self, array_id: str) -> asyncio.Lock:
+        """
+        Get an asyncio.Lock for the given array.
+
+        Ensures SSH operations on the same array are serialized.
+        Use with `async with pool.get_async_lock(array_id):` before
+        executing SSH commands.
+        """
+        if array_id not in self._async_locks:
+            self._async_locks[array_id] = asyncio.Lock()
+        return self._async_locks[array_id]
+
+    def should_throttle(self, array_id: str, operation: str) -> bool:
+        """
+        Check if an operation should be throttled.
+
+        Returns True if the same operation was performed on this array
+        within THROTTLE_SECONDS seconds.
+        """
+        now = time.time()
+        if array_id not in self._operation_timestamps:
+            self._operation_timestamps[array_id] = {}
+
+        last_time = self._operation_timestamps[array_id].get(operation, 0)
+        if now - last_time < self._THROTTLE_SECONDS:
+            return True
+
+        self._operation_timestamps[array_id][operation] = now
+        return False
+
+    def record_operation(self, array_id: str, operation: str):
+        """Record that an operation was performed."""
+        now = time.time()
+        if array_id not in self._operation_timestamps:
+            self._operation_timestamps[array_id] = {}
+        self._operation_timestamps[array_id][operation] = now
+
     def add_connection(
         self,
         array_id: str,
@@ -391,7 +432,7 @@ class SSHPool:
         with self._lock:
             if array_id in self._connections:
                 self._connections[array_id].disconnect()
-            
+
             conn = SSHConnection(
                 array_id=array_id,
                 host=host,
@@ -413,6 +454,10 @@ class SSHPool:
             if array_id in self._connections:
                 self._connections[array_id].disconnect()
                 del self._connections[array_id]
+            if array_id in self._async_locks:
+                del self._async_locks[array_id]
+            if array_id in self._operation_timestamps:
+                del self._operation_timestamps[array_id]
     
     def connect(self, array_id: str) -> bool:
         """Connect to array"""
@@ -519,6 +564,8 @@ class SSHPool:
             for conn in self._connections.values():
                 conn.disconnect()
             self._connections.clear()
+            self._async_locks.clear()
+            self._operation_timestamps.clear()
 
 
 # Global SSH pool instance

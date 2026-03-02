@@ -7,7 +7,7 @@ from enum import Enum
 from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, ConfigDict, field_validator
-from sqlalchemy import Column, Integer, String, DateTime, Boolean, Text
+from sqlalchemy import Column, Integer, String, DateTime, Boolean, Text, ForeignKey
 from sqlalchemy.sql import func
 
 from ..db.database import Base
@@ -25,16 +25,18 @@ class ConnectionState(str, Enum):
 class ArrayModel(Base):
     """Array database model"""
     __tablename__ = "arrays"
-    
+
     id = Column(Integer, primary_key=True, index=True)
     array_id = Column(String(64), unique=True, index=True, nullable=False)
     name = Column(String(128), nullable=False)
-    host = Column(String(256), nullable=False)
+    host = Column(String(256), nullable=False, unique=True, index=True)
     port = Column(Integer, default=22)
     username = Column(String(64), default="root")
     key_path = Column(String(512), default="")
-    folder = Column(String(128), default="")
-    saved_password = Column(String(512), default="")  # 保存密码，首次成功连接后记住
+    folder = Column(String(128), default="")  # Kept for backward compatibility during migration
+    tag_id = Column(Integer, ForeignKey("tags.id", ondelete="SET NULL"), nullable=True, index=True)
+    saved_password = Column(String(512), default="")
+    version = Column(Integer, default=1, nullable=False)  # Optimistic locking
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
@@ -47,7 +49,8 @@ class ArrayBase(BaseModel):
     port: int = 22
     username: str = "root"
     key_path: str = ""
-    folder: str = ""
+    folder: str = ""  # Kept for backward compatibility
+    tag_id: Optional[int] = None
 
 
 class ArrayCreate(ArrayBase):
@@ -77,15 +80,21 @@ class ArrayUpdate(BaseModel):
     username: Optional[str] = None
     key_path: Optional[str] = None
     folder: Optional[str] = None
+    tag_id: Optional[int] = None
+    expected_version: Optional[int] = None  # For optimistic locking
 
 
 class ArrayResponse(ArrayBase):
     """Schema for array response"""
     id: int
     array_id: str
+    tag_id: Optional[int] = None
+    tag_name: Optional[str] = None
+    tag_color: Optional[str] = None
+    version: int = 1
     created_at: datetime
     updated_at: datetime
-    
+
     model_config = ConfigDict(from_attributes=True)
 
 
@@ -100,10 +109,12 @@ class ArrayStatus(BaseModel):
     agent_running: bool = False
     has_saved_password: bool = False
     last_refresh: Optional[datetime] = None
+    tag_id: Optional[int] = None
+    tag_name: Optional[str] = None
+    tag_color: Optional[str] = None
     observer_status: Dict[str, Dict[str, str]] = {}
     active_issues: List[Dict[str, Any]] = []
     recent_alerts: List[Dict[str, Any]] = []
-    # Counts of alerts by level in the last 2 hours (populated by status endpoints)
     recent_alert_summary: Dict[str, int] = {}
 
 
@@ -111,11 +122,12 @@ class Array(ArrayBase):
     """Full array model with runtime state"""
     id: int
     array_id: str
+    tag_id: Optional[int] = None
     state: ConnectionState = ConnectionState.DISCONNECTED
     last_error: str = ""
     agent_deployed: bool = False
     agent_running: bool = False
     last_refresh: Optional[datetime] = None
     observer_status: Dict[str, Dict[str, str]] = {}
-    
+
     model_config = ConfigDict(from_attributes=True)

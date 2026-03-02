@@ -62,6 +62,32 @@
               </el-breadcrumb>
             </div>
             <div class="header-right">
+              <!-- Online Users Indicator -->
+              <el-popover
+                placement="bottom"
+                :width="250"
+                trigger="hover"
+                @before-enter="loadOnlineUsers"
+              >
+                <template #reference>
+                  <div class="online-users-badge">
+                    <el-icon><UserFilled /></el-icon>
+                    <span class="online-count">{{ onlineCount }}</span>
+                  </div>
+                </template>
+                <div class="online-users-list">
+                  <div class="online-header">在线用户 ({{ onlineUsers.length }})</div>
+                  <div v-if="onlineUsers.length === 0" class="no-users">暂无其他用户在线</div>
+                  <div v-for="user in onlineUsers" :key="user.ip" class="user-item">
+                    <span class="user-dot" :style="{ background: user.color }"></span>
+                    <span class="user-name">{{ user.nickname || user.ip }}</span>
+                    <span class="user-page" v-if="user.viewing_page">
+                      {{ getPageName(user.viewing_page) }}
+                    </span>
+                  </div>
+                </div>
+              </el-popover>
+
               <el-tooltip content="开启/关闭告警提示音">
                 <el-switch
                   v-model="soundOn"
@@ -76,15 +102,29 @@
                 <el-button :icon="Bell" circle @click="$router.push('/alerts')" />
               </el-badge>
               <el-dropdown>
-                <el-button :icon="User" circle />
+                <span class="user-dropdown">
+                  <span class="my-dot" :style="{ background: currentUser.color }"></span>
+                  <el-button :icon="User" circle />
+                </span>
                 <template #dropdown>
                   <el-dropdown-menu>
-                    <el-dropdown-item>个人设置</el-dropdown-item>
-                    <el-dropdown-item divided>退出登录</el-dropdown-item>
+                    <el-dropdown-item disabled>
+                      <span style="color: #909399">{{ currentUser.ip }}</span>
+                    </el-dropdown-item>
+                    <el-dropdown-item @click="showNicknameDialog = true">设置昵称</el-dropdown-item>
                   </el-dropdown-menu>
                 </template>
               </el-dropdown>
             </div>
+
+            <!-- Nickname Dialog -->
+            <el-dialog v-model="showNicknameDialog" title="设置昵称" width="360px">
+              <el-input v-model="nicknameInput" placeholder="输入您的昵称" maxlength="20" show-word-limit />
+              <template #footer>
+                <el-button @click="showNicknameDialog = false">取消</el-button>
+                <el-button type="primary" @click="saveNickname">保存</el-button>
+              </template>
+            </el-dialog>
           </el-header>
 
           <!-- Critical event banner -->
@@ -114,16 +154,26 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 import { useRoute } from 'vue-router'
+import { ElMessage } from 'element-plus'
 import zhCn from 'element-plus/dist/locale/zh-cn.mjs'
-import { Monitor, Odometer, Cpu, Bell, Search, Setting, User, Warning, Files, Timer, WarningFilled, Stopwatch } from '@element-plus/icons-vue'
+import { Monitor, Odometer, Cpu, Bell, Search, Setting, User, Warning, Files, Timer, WarningFilled, Stopwatch, UserFilled } from '@element-plus/icons-vue'
 import { useAlertStore } from './stores/alerts'
 import { setSoundEnabled } from './utils/notification'
+import api from './api'
 
 const route = useRoute()
 const alertStore = useAlertStore()
 const soundOn = ref(false)
+
+// Online users state
+const onlineUsers = ref([])
+const onlineCount = ref(0)
+const currentUser = reactive({ ip: '', nickname: '', color: '#409eff' })
+const showNicknameDialog = ref(false)
+const nicknameInput = ref('')
+let userCountInterval = null
 
 const activeMenu = computed(() => route.path)
 const currentRoute = computed(() => {
@@ -148,13 +198,70 @@ function toggleSound(val) {
   setSoundEnabled(val)
 }
 
+function getPageName(path) {
+  const names = {
+    '/': '仪表盘',
+    '/arrays': '阵列管理',
+    '/alerts': '告警中心',
+    '/query': '查询',
+    '/test-tasks': '测试任务',
+  }
+  for (const [p, name] of Object.entries(names)) {
+    if (path.startsWith(p) && p !== '/') return name
+  }
+  return names[path] || ''
+}
+
+async function loadOnlineUsers() {
+  try {
+    const res = await api.getOnlineUsers()
+    onlineUsers.value = res.data || []
+  } catch (e) {
+    console.error('Failed to load online users:', e)
+  }
+}
+
+async function loadUserCount() {
+  try {
+    const res = await api.getUserCount()
+    onlineCount.value = res.data.online_count || 0
+  } catch (e) {
+    console.debug('Failed to load user count:', e)
+  }
+}
+
+async function loadCurrentUser() {
+  try {
+    const res = await api.getCurrentUser()
+    Object.assign(currentUser, res.data)
+    nicknameInput.value = currentUser.nickname || ''
+  } catch (e) {
+    console.debug('Failed to load current user:', e)
+  }
+}
+
+async function saveNickname() {
+  try {
+    const res = await api.setNickname(nicknameInput.value)
+    Object.assign(currentUser, res.data)
+    showNicknameDialog.value = false
+    ElMessage.success('昵称已保存')
+  } catch (e) {
+    ElMessage.error('保存失败')
+  }
+}
+
 // Initialize WebSocket connection
 onMounted(() => {
   alertStore.connectWebSocket()
+  loadCurrentUser()
+  loadUserCount()
+  userCountInterval = setInterval(loadUserCount, 60000)
 })
 
 onUnmounted(() => {
   alertStore.disconnectWebSocket()
+  if (userCountInterval) clearInterval(userCountInterval)
 })
 </script>
 
@@ -278,5 +385,83 @@ html, body, #app {
 .fade-enter-from,
 .fade-leave-to {
   opacity: 0;
+}
+
+/* Online users */
+.online-users-badge {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  background: #f0f9eb;
+  border-radius: 16px;
+  cursor: pointer;
+  color: #67c23a;
+  font-size: 13px;
+  transition: background 0.2s;
+}
+
+.online-users-badge:hover {
+  background: #e1f3d8;
+}
+
+.online-count {
+  font-weight: 600;
+}
+
+.online-users-list {
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.online-header {
+  font-weight: 600;
+  color: #303133;
+  margin-bottom: 10px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid #ebeef5;
+}
+
+.no-users {
+  color: #909399;
+  font-size: 13px;
+  text-align: center;
+  padding: 10px 0;
+}
+
+.user-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+  font-size: 13px;
+}
+
+.user-dot, .my-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.user-name {
+  flex: 1;
+  color: #303133;
+}
+
+.user-page {
+  color: #909399;
+  font-size: 12px;
+}
+
+.user-dropdown {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.my-dot {
+  width: 10px;
+  height: 10px;
 }
 </style>
