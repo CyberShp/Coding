@@ -2,11 +2,14 @@
 
 This module provides prompt templates for transforming technical analysis
 results into business-friendly narratives and test guidance.
+
+Supports both Python format strings and Jinja2 templates.
 """
 
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path
 from typing import Any
 
@@ -16,6 +19,56 @@ logger = logging.getLogger(__name__)
 
 _TEMPLATE_DIR = Path(__file__).parent
 _template_cache: dict[str, dict[str, Any]] = {}
+
+# Lazy-load jinja2 to avoid import overhead if not needed
+_jinja_env = None
+
+
+def _get_jinja_env():
+    """Get or create Jinja2 environment."""
+    global _jinja_env
+    if _jinja_env is None:
+        try:
+            from jinja2 import Environment, BaseLoader
+            _jinja_env = Environment(loader=BaseLoader())
+        except ImportError:
+            _jinja_env = False  # Mark as unavailable
+    return _jinja_env
+
+
+def _is_jinja_template(text: str) -> bool:
+    """Check if text contains Jinja2 syntax."""
+    return bool(re.search(r"\{%|{{", text))
+
+
+def _render_template_string(template_str: str, variables: dict[str, Any]) -> str:
+    """Render a template string with variables.
+    
+    Uses Jinja2 if the template contains Jinja2 syntax, otherwise uses str.format().
+    """
+    if not template_str:
+        return ""
+    
+    if _is_jinja_template(template_str):
+        # Use Jinja2 for complex templates
+        jinja_env = _get_jinja_env()
+        if jinja_env:
+            try:
+                template = jinja_env.from_string(template_str)
+                return template.render(**variables)
+            except Exception as e:
+                logger.warning(f"Jinja2 rendering failed: {e}, falling back to raw template")
+                return template_str
+        else:
+            logger.warning("Jinja2 not available, returning raw template")
+            return template_str
+    else:
+        # Use simple Python format for basic templates
+        try:
+            return template_str.format(**variables)
+        except KeyError as e:
+            logger.warning(f"Missing template variable: {e}")
+            return template_str
 
 
 def _load_template(template_id: str) -> dict[str, Any]:
@@ -46,24 +99,27 @@ def get_user_prompt(template_id: str) -> str:
     return template.get("user", "")
 
 
-def render_prompt(template_id: str, **kwargs: Any) -> tuple[str, str]:
+def render_prompt(template_id: str, **kwargs: Any) -> list[dict[str, str]]:
     """Render a prompt template with given variables.
     
     Returns:
-        Tuple of (system_prompt, user_prompt)
+        List of message dicts for chat API [{"role": "system", "content": ...}, ...]
     """
     template = _load_template(template_id)
-    system = template.get("system", "")
+    system_template = template.get("system", "")
     user_template = template.get("user", "")
     
-    # Format the user prompt with provided variables
-    try:
-        user = user_template.format(**kwargs)
-    except KeyError as e:
-        logger.warning(f"Missing template variable: {e}")
-        user = user_template
+    # Render templates
+    system = _render_template_string(system_template, kwargs)
+    user = _render_template_string(user_template, kwargs)
     
-    return system, user
+    messages = []
+    if system:
+        messages.append({"role": "system", "content": system})
+    if user:
+        messages.append({"role": "user", "content": user})
+    
+    return messages
 
 
 def list_templates() -> list[dict[str, str]]:
