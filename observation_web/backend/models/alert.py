@@ -36,7 +36,7 @@ class AlertModel(Base):
     details = Column(Text, default="{}")  # JSON string
     timestamp = Column(DateTime, index=True, nullable=False)
     task_id = Column(Integer, nullable=True, index=True)  # Link to test task session
-    is_expected = Column(Integer, default=0, index=True)  # 0=unknown, 1=expected, -1=unexpected
+    is_expected = Column(Integer, default=0)  # 0=unknown, 1=expected, -1=unexpected
     matched_rule_id = Column(Integer, nullable=True)  # ID of the rule that matched
     created_at = Column(DateTime, server_default=func.now())
     
