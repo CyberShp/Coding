@@ -30,6 +30,10 @@ from .file_descriptors import FileDescriptorsObserver
 from .thermal import ThermalObserver
 from .dmesg_errors import DmesgErrorsObserver
 from .system_uptime import SystemUptimeObserver
+from .port_error_code import PortErrorCodeObserver
+from .process_restart import ProcessRestartObserver
+from .sfp_monitor import SfpMonitorObserver
+from .abnormal_reset import AbnormalResetObserver
 
 __all__ = [
     'ErrorCodeObserver',
@@ -62,4 +66,8 @@ __all__ = [
     'ThermalObserver',
     'DmesgErrorsObserver',
     'SystemUptimeObserver',
+    'PortErrorCodeObserver',
+    'ProcessRestartObserver',
+    'SfpMonitorObserver',
+    'AbnormalResetObserver',
 ]

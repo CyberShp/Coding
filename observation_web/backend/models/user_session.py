@@ -8,7 +8,7 @@ from datetime import datetime
 from typing import Optional
 
 from pydantic import BaseModel, ConfigDict
-from sqlalchemy import Column, Integer, String, DateTime, Boolean
+from sqlalchemy import Column, Integer, String, DateTime, Boolean, Text
 from sqlalchemy.sql import func
 
 from ..db.database import Base
@@ -22,6 +22,7 @@ class UserSessionModel(Base):
     id = Column(Integer, primary_key=True, index=True)
     ip = Column(String(64), unique=True, index=True, nullable=False)
     nickname = Column(String(64), default="")
+    previous_ips = Column(Text, default="[]")  # JSON array of historical IPs after claim
     first_seen = Column(DateTime, server_default=func.now())
     last_seen = Column(DateTime, server_default=func.now(), onupdate=func.now())
     is_active = Column(Boolean, default=True)
@@ -56,4 +57,9 @@ class OnlineUser(BaseModel):
 
 class SetNicknameRequest(BaseModel):
     """Request to set user nickname"""
+    nickname: str
+
+
+class ClaimNicknameRequest(BaseModel):
+    """Request to claim existing nickname (e.g. after IP change)"""
     nickname: str

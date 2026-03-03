@@ -15,10 +15,24 @@ export default defineConfig({
       '/api': {
         target: 'http://localhost:9999',
         changeOrigin: true,
+        configure: (proxy) => {
+          proxy.on('proxyReq', (proxyReq, req) => {
+            const clientIp = req.socket?.remoteAddress?.replace('::ffff:', '') || 'unknown'
+            proxyReq.setHeader('X-Forwarded-For', clientIp)
+            proxyReq.setHeader('X-Real-IP', clientIp)
+          })
+        },
       },
       '/ws': {
         target: 'ws://localhost:9999',
         ws: true,
+        configure: (proxy) => {
+          proxy.on('proxyReq', (proxyReq, req) => {
+            const clientIp = req.socket?.remoteAddress?.replace('::ffff:', '') || 'unknown'
+            proxyReq.setHeader('X-Forwarded-For', clientIp)
+            proxyReq.setHeader('X-Real-IP', clientIp)
+          })
+        },
       },
     },
   },

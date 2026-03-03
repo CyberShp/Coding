@@ -11,9 +11,13 @@ const httpLong = axios.create({
   timeout: 60000,  // 60s for long operations
 })
 
-// Request interceptor
+// Request interceptor - add auth token when present
 http.interceptors.request.use(
   config => {
+    const token = localStorage.getItem('admin_token')
+    if (token) {
+      config.headers.Authorization = `Bearer ${token}`
+    }
     return config
   },
   error => {
@@ -67,10 +71,23 @@ export default {
   getTagArrays: (id, searchIp = null) => http.get(`/tags/${id}/arrays`, { params: searchIp ? { search_ip: searchIp } : {} }),
   migrateFoldersToTags: () => http.post('/tags/migrate-folders'),
 
+  // Auth (admin)
+  login: (username, password) => http.post('/auth/login', { username, password }),
+  getAuthMe: () => http.get('/auth/me'),
+  logout: () => http.post('/auth/logout'),
+
+  // Issues (feedback)
+  getIssues: (status = null) => http.get('/issues', { params: status ? { status_filter: status } : {} }),
+  createIssue: (data) => http.post('/issues', data),
+  getIssue: (id) => http.get(`/issues/${id}`),
+  updateIssueStatus: (id, status, resolutionNote = '') =>
+    http.put(`/issues/${id}/status`, { status, resolution_note: resolutionNote }),
+
   // Users
   getOnlineUsers: () => http.get('/users/online'),
   getCurrentUser: () => http.get('/users/me'),
   setNickname: (nickname) => http.post('/users/me/nickname', { nickname }),
+  claimNickname: (nickname) => http.post('/users/claim', { nickname }),
   getUserCount: () => http.get('/users/count'),
   // Long operations use httpLong with 60s timeout
   connectArray: (id, password) => httpLong.post(`/arrays/${id}/connect`, null, { params: { password } }),

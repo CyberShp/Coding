@@ -49,13 +49,6 @@ class ConfigLoader:
                 'keywords': ['recovery', 'probe', 'remove'],
                 'exclude_patterns': [],
             },
-            'subhealth': {
-                'enabled': True,
-                'interval': 15,
-                'window_size': 5,
-                'spike_threshold_percent': 50,
-                'metrics': ['latency', 'packet_loss', 'out_of_order'],
-            },
             'sensitive_info': {
                 'enabled': True,
                 'log_paths': ['/OSM/log/coffer_log/cur_debug/messages'],
@@ -66,16 +59,6 @@ class ConfigLoader:
                     r'iqn\.[a-zA-Z0-9.\-:]+',
                     r'secret\s*[=:]\s*\S+',
                 ],
-            },
-            'performance': {
-                'enabled': True,
-                'interval': 10,
-                'window_size': 5,
-                'fluctuation_threshold_percent': 10,
-                'min_iops_threshold': 100,
-                'min_bandwidth_threshold_mbps': 10,
-                'metrics': ['iops', 'bandwidth', 'latency'],
-                'dimensions': ['bond', 'port'],
             },
             'custom_commands': {
                 'enabled': False,
@@ -129,6 +112,34 @@ class ConfigLoader:
                 'enabled': True,
                 'interval': 30,
                 'log_paths': ['/var/log/messages', '/var/log/syslog'],
+            },
+            'port_error_code': {
+                'enabled': True,
+                'interval': 60,
+                'command_list_ports': 'anytest portallinfo -t 2',
+                'command_get_errors': 'anytest portgeterr -p {port_id} -n 0',
+            },
+            'process_restart': {
+                'enabled': True,
+                'interval': 30,
+                'processes': ['app_data', 'devm', 'memf'],
+            },
+            'sfp_monitor': {
+                'enabled': True,
+                'interval': 120,
+                'command': 'anytest sfpallinfo',
+                'temp_threshold': 105,
+            },
+            'abnormal_reset': {
+                'enabled': True,
+                'interval': 120,
+                'command': 'os_cli "cat ./log_reset.txt"',
+                'abnormal_reasons': [
+                    'watchDog reset', 'oops reset', 'unknown reset',
+                    'oom reset', 'panic reset', 'kernel reset',
+                    'mce reset', 'bios reset', 'software unknown reset',
+                    'failure recovery reset',
+                ],
             },
         },
     }

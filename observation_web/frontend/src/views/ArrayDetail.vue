@@ -279,11 +279,12 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
+import { ref, reactive, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Refresh, ArrowRight, CircleCheck, Check } from '@element-plus/icons-vue'
 import { useArrayStore } from '../stores/arrays'
+import { useAlertStore } from '../stores/alerts'
 import api from '../api'
 import LogViewer from '../components/LogViewer.vue'
 import AgentConfig from '../components/AgentConfig.vue'
@@ -297,6 +298,7 @@ import { translateAlert, getObserverName as getObserverLabel, LEVEL_LABELS, LEVE
 
 const route = useRoute()
 const arrayStore = useArrayStore()
+const alertStore = useAlertStore()
 
 const loading = ref(true)
 const refreshing = ref(false)
@@ -632,6 +634,23 @@ async function silentRefresh() {
     refreshInFlight = false
   }
 }
+
+// When WebSocket delivers a new alert for this array, prepend to recentAlerts
+const seenAlertKeys = new Set()
+watch(
+  () => alertStore.recentAlerts,
+  (newList) => {
+    const latest = newList[0]
+    if (!latest || !array.value?.array_id) return
+    if (latest.array_id !== array.value.array_id) return
+    const key = latest.id || `${latest.timestamp}_${latest.observer_name}_${(latest.message || '').slice(0, 50)}`
+    if (seenAlertKeys.has(key)) return
+    seenAlertKeys.add(key)
+    recentAlerts.value.unshift(latest)
+    if (recentAlerts.value.length > 20) recentAlerts.value.pop()
+  },
+  { deep: true }
+)
 
 onMounted(() => {
   loadArray()

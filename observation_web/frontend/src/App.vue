@@ -49,6 +49,10 @@
               <el-icon><Stopwatch /></el-icon>
               <span>测试任务</span>
             </el-menu-item>
+            <el-menu-item index="/issues">
+              <el-icon><ChatDotRound /></el-icon>
+              <span>建议反馈</span>
+            </el-menu-item>
           </el-menu>
         </el-aside>
 
@@ -109,9 +113,10 @@
                 <template #dropdown>
                   <el-dropdown-menu>
                     <el-dropdown-item disabled>
-                      <span style="color: #909399">{{ currentUser.ip }}</span>
+                      <span style="color: #909399">{{ currentUser.nickname || currentUser.ip }}</span>
                     </el-dropdown-item>
                     <el-dropdown-item @click="showNicknameDialog = true">设置昵称</el-dropdown-item>
+                    <el-dropdown-item @click="showClaimDialog = true">认领昵称</el-dropdown-item>
                   </el-dropdown-menu>
                 </template>
               </el-dropdown>
@@ -123,6 +128,15 @@
               <template #footer>
                 <el-button @click="showNicknameDialog = false">取消</el-button>
                 <el-button type="primary" @click="saveNickname">保存</el-button>
+              </template>
+            </el-dialog>
+            <!-- Claim Nickname Dialog (for IP change) -->
+            <el-dialog v-model="showClaimDialog" title="认领昵称" width="360px">
+              <p class="claim-hint">换过电脑或 IP 后，输入之前的昵称可恢复身份（锁定、历史等）</p>
+              <el-input v-model="claimInput" placeholder="输入您之前的昵称" maxlength="20" show-word-limit />
+              <template #footer>
+                <el-button @click="showClaimDialog = false">取消</el-button>
+                <el-button type="primary" @click="claimNickname">认领</el-button>
               </template>
             </el-dialog>
           </el-header>
@@ -158,7 +172,7 @@ import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import zhCn from 'element-plus/dist/locale/zh-cn.mjs'
-import { Monitor, Odometer, Cpu, Bell, Search, Setting, User, Warning, Files, Timer, WarningFilled, Stopwatch, UserFilled } from '@element-plus/icons-vue'
+import { Monitor, Odometer, Cpu, Bell, Search, Setting, User, Warning, Files, Timer, WarningFilled, Stopwatch, UserFilled, ChatDotRound } from '@element-plus/icons-vue'
 import { useAlertStore } from './stores/alerts'
 import { setSoundEnabled } from './utils/notification'
 import api from './api'
@@ -173,6 +187,8 @@ const onlineCount = ref(0)
 const currentUser = reactive({ ip: '', nickname: '', color: '#409eff' })
 const showNicknameDialog = ref(false)
 const nicknameInput = ref('')
+const showClaimDialog = ref(false)
+const claimInput = ref('')
 let userCountInterval = null
 
 const activeMenu = computed(() => route.path)
@@ -235,6 +251,10 @@ async function loadCurrentUser() {
     const res = await api.getCurrentUser()
     Object.assign(currentUser, res.data)
     nicknameInput.value = currentUser.nickname || ''
+    if (!currentUser.nickname && !sessionStorage.getItem('nicknamePromptShown')) {
+      showNicknameDialog.value = true
+      sessionStorage.setItem('nicknamePromptShown', '1')
+    }
   } catch (e) {
     console.debug('Failed to load current user:', e)
   }
@@ -248,6 +268,22 @@ async function saveNickname() {
     ElMessage.success('昵称已保存')
   } catch (e) {
     ElMessage.error('保存失败')
+  }
+}
+
+async function claimNickname() {
+  if (!claimInput.value.trim()) {
+    ElMessage.warning('请输入昵称')
+    return
+  }
+  try {
+    const res = await api.claimNickname(claimInput.value.trim())
+    Object.assign(currentUser, res.data)
+    showClaimDialog.value = false
+    claimInput.value = ''
+    ElMessage.success('认领成功，身份已恢复')
+  } catch (e) {
+    ElMessage.error(e.response?.data?.detail || '认领失败，请确认昵称正确')
   }
 }
 
@@ -458,6 +494,13 @@ html, body, #app {
   display: flex;
   align-items: center;
   gap: 4px;
+}
+
+.claim-hint {
+  color: #909399;
+  font-size: 13px;
+  margin-bottom: 12px;
+  line-height: 1.5;
 }
 
 .my-dot {

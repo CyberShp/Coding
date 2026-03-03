@@ -41,6 +41,14 @@ class RemoteConfig:
     python_cmd: str = "python3"
     upload_staging_path: str = "/home/permitdir"   # Staging dir for SFTP uploads (permission workaround)
     auto_redeploy: bool = True                      # Auto-redeploy agent when it goes offline
+    ingest_url: str = ""                            # URL for agent to push alerts (e.g. http://192.168.1.100:9999/api/ingest)
+
+
+@dataclass
+class AdminConfig:
+    """Admin authentication (for Issue status changes, etc.)"""
+    username: str = "admin"
+    password: str = "admin123"  # Change in production
 
 
 @dataclass
@@ -50,6 +58,7 @@ class AppConfig:
     ssh: SSHConfig = field(default_factory=SSHConfig)
     database: DatabaseConfig = field(default_factory=DatabaseConfig)
     remote: RemoteConfig = field(default_factory=RemoteConfig)
+    admin: AdminConfig = field(default_factory=AdminConfig)
     
     @classmethod
     def load(cls, config_path: Optional[Path] = None) -> 'AppConfig':
@@ -70,6 +79,12 @@ class AppConfig:
                     config.ssh = SSHConfig(**data['ssh'])
                 if 'database' in data:
                     config.database = DatabaseConfig(**data['database'])
+                if 'admin' in data:
+                    admin_data = data['admin']
+                    config.admin = AdminConfig(
+                        username=admin_data.get('username', 'admin'),
+                        password=admin_data.get('password', 'admin123'),
+                    )
                 if 'remote' in data:
                     remote_data = data['remote']
                     if 'agent_deploy_path' not in remote_data and 'agent_path' in remote_data:
@@ -91,6 +106,10 @@ class AppConfig:
             config_path = Path(__file__).parent.parent / "config.json"
         
         data = {
+            'admin': {
+                'username': self.admin.username,
+                'password': self.admin.password,
+            },
             'server': {
                 'host': self.server.host,
                 'port': self.server.port,
@@ -112,6 +131,7 @@ class AppConfig:
                 'python_cmd': self.remote.python_cmd,
                 'upload_staging_path': self.remote.upload_staging_path,
                 'auto_redeploy': self.remote.auto_redeploy,
+                'ingest_url': getattr(self.remote, 'ingest_url', ''),
             },
         }
         

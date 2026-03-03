@@ -84,6 +84,27 @@ class AgentDeployer:
             if not ok:
                 return {"ok": False, "error": error}
 
+            # Step 3b: Inject push_url for agent HTTP push if ingest_url is configured
+            ingest_url = getattr(self.config.remote, 'ingest_url', '') or ''
+            if ingest_url:
+                # Ensure trailing path is /api/ingest for alert push
+                push_url = ingest_url.rstrip('/')
+                if not push_url.endswith('/api/ingest'):
+                    push_url = f"{push_url}/api/ingest" if push_url else ""
+                if push_url:
+                    patch_script = (
+                        f"python3 -c \""
+                        f"import json; p='/etc/observation-points/config.json'; "
+                        f"f=open(p); c=json.load(f); f.close(); "
+                        f"c.setdefault('reporter',{{}})['push_url']='{push_url}'; "
+                        f"c.setdefault('reporter',{{}})['push_enabled']=True; "
+                        f"open(p,'w').write(json.dumps(c, indent=2, ensure_ascii=False)); "
+                        f"\""
+                    )
+                    patch_ok, patch_err = self._run_commands([patch_script])
+                    if not patch_ok:
+                        logger.warning(f"Failed to inject push_url: {patch_err}")
+
             start_result = self.start_agent()
             if not start_result["ok"]:
                 return start_result

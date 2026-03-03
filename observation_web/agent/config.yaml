@@ -59,20 +59,15 @@ observers:
     #   - 'expected_recovery'
     max_lines_per_check: 1000
 
-  # 4. 亚健康监测（时延、丢包、乱序激增）
-  subhealth:
-    enabled: true
-    interval: 15
-    window_size: 5          # 滑动窗口大小
-    spike_threshold_percent: 50  # 激增阈值（相对均值增长百分比）
-    cooldown_seconds: 60    # 告警冷却时间
-    metrics:
-      - latency
-      - packet_loss
-      - out_of_order
-    ports: []
-    # 内部命令（可选，用于获取亚健康数据）
-    # internal_command: '/opt/internal/get_subhealth.sh {port}'
+  # 4. [未实现] 亚健康监测（时延、丢包、乱序激增）- 需配合观察点类使用
+  # subhealth:
+  #   enabled: true
+  #   interval: 15
+  #   window_size: 5
+  #   spike_threshold_percent: 50
+  #   cooldown_seconds: 60
+  #   metrics: [latency, packet_loss, out_of_order]
+  #   ports: []
 
   # 5. 敏感信息监测
   sensitive_info:
@@ -91,28 +86,18 @@ observers:
       - 'secret\s*[=:]\s*\S+'
       - 'token\s*[=:]\s*\S+'
 
-  # 6. 性能波动监测（IOPS、带宽、时延 >10%）
-  performance:
-    enabled: true
-    interval: 10
-    window_size: 5          # 滑动窗口大小
-    fluctuation_threshold_percent: 10  # 波动阈值
-    min_iops_threshold: 100     # 最小 IOPS 阈值（低于此值不检测波动）
-    min_bandwidth_threshold_mbps: 10  # 最小带宽阈值（Mbps）
-    cooldown_seconds: 60
-    metrics:
-      - iops
-      - bandwidth
-      - latency
-    dimensions:             # 监测维度
-      - bond
-      - port
-    protocols:
-      - iscsi
-      - nvme
-      - nas
-    # 内部命令（可选，用于获取性能数据）
-    # internal_command: '/opt/internal/get_perf.sh'
+  # 6. [未实现] 性能波动监测（IOPS、带宽、时延 >10%）- 需配合观察点类使用
+  # performance:
+  #   enabled: true
+  #   interval: 10
+  #   window_size: 5
+  #   fluctuation_threshold_percent: 10
+  #   min_iops_threshold: 100
+  #   min_bandwidth_threshold_mbps: 10
+  #   cooldown_seconds: 60
+  #   metrics: [iops, bandwidth, latency]
+  #   dimensions: [bond, port]
+  #   protocols: [iscsi, nvme, nas]
 
   # 7. 自定义命令观察点
   custom_commands:

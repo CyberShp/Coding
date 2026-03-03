@@ -84,6 +84,10 @@ class Scheduler:
         from ..observers.disk_state import DiskStateObserver
         from ..observers.process_crash import ProcessCrashObserver
         from ..observers.io_timeout import IoTimeoutObserver
+        from ..observers.port_error_code import PortErrorCodeObserver
+        from ..observers.process_restart import ProcessRestartObserver
+        from ..observers.sfp_monitor import SfpMonitorObserver
+        from ..observers.abnormal_reset import AbnormalResetObserver
         
         return {
             'error_code': ErrorCodeObserver,
@@ -105,6 +109,10 @@ class Scheduler:
             'disk_state': DiskStateObserver,
             'process_crash': ProcessCrashObserver,
             'io_timeout': IoTimeoutObserver,
+            'port_error_code': PortErrorCodeObserver,
+            'process_restart': ProcessRestartObserver,
+            'sfp_monitor': SfpMonitorObserver,
+            'abnormal_reset': AbnormalResetObserver,
         }
     
     def register(self, observer: BaseObserver):

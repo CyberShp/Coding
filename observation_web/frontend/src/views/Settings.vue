@@ -1,5 +1,19 @@
 <template>
   <div class="settings">
+    <!-- Admin login entry -->
+    <el-card class="admin-card" v-if="!authStore.isAdmin">
+      <div class="admin-entry">
+        <span>需要管理员权限操作（如 Issue 状态变更）时，请先登录</span>
+        <el-button type="primary" @click="$router.push('/admin/login')">管理员登录</el-button>
+      </div>
+    </el-card>
+    <el-card class="admin-card" v-else>
+      <div class="admin-entry">
+        <span>已登录管理员</span>
+        <el-button type="default" @click="handleLogout">退出登录</el-button>
+      </div>
+    </el-card>
+
     <el-tabs v-model="activeTab">
       <!-- Array Management -->
       <el-tab-pane label="阵列管理" name="arrays">
@@ -122,9 +136,16 @@
 import { ref, reactive, computed, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useAlertStore } from '../stores/alerts'
+import { useAuthStore } from '../stores/auth'
 import api from '../api'
 
 const alertStore = useAlertStore()
+const authStore = useAuthStore()
+
+function handleLogout() {
+  authStore.logout()
+  ElMessage.success('已退出登录')
+}
 
 const activeTab = ref('observers')
 const apiUrl = computed(() => window.location.origin + '/api')
@@ -171,6 +192,16 @@ async function cleanupAlerts() {
 <style scoped>
 .settings {
   padding: 20px;
+}
+
+.admin-card {
+  margin-bottom: 20px;
+}
+
+.admin-entry {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
 }
 
 .tab-desc {

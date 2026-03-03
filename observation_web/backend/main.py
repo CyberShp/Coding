@@ -18,6 +18,8 @@ from .config import get_config
 from .core.system_alert import sys_error, sys_warning, sys_info
 from .db.database import init_db, create_tables
 from .api import arrays_router, alerts_router, query_router, ws_router, tags_router, alert_rules_router, audit_router
+from .api.auth import router as auth_router
+from .api.issues import router as issues_router
 from .api.system_alerts import router as system_alerts_router
 from .api.data_lifecycle import router as data_lifecycle_router
 from .api.scheduler import router as scheduler_router
@@ -31,6 +33,7 @@ from .api.users import router as users_router
 from .middleware.user_session import UserSessionMiddleware
 from .core.ssh_pool import get_ssh_pool
 from .core.scheduler import get_scheduler
+from .core.alert_sync import start_alert_sync, stop_alert_sync
 
 # Configure logging
 logging.basicConfig(
@@ -186,6 +189,9 @@ async def lifespan(app: FastAPI):
     # Start background idle connection cleaner
     cleanup_task = asyncio.create_task(_idle_connection_cleaner())
     logger.info("Idle connection cleaner started")
+
+    # Start alert sync (periodic SSH pull of alerts from connected arrays)
+    start_alert_sync()
     
     yield
     
@@ -199,6 +205,10 @@ async def lifespan(app: FastAPI):
     except asyncio.CancelledError:
         pass
     
+    # Stop alert sync
+    stop_alert_sync()
+    logger.info("Alert sync stopped")
+
     # Stop scheduler
     scheduler = get_scheduler()
     scheduler.stop()
@@ -288,6 +298,8 @@ def create_app() -> FastAPI:
     app.include_router(query_router, prefix="/api")
     app.include_router(tags_router, prefix="/api")
     app.include_router(users_router, prefix="/api")
+    app.include_router(auth_router, prefix="/api")
+    app.include_router(issues_router, prefix="/api")
     app.include_router(alert_rules_router, prefix="/api")
     app.include_router(system_alerts_router, prefix="/api")
     app.include_router(data_lifecycle_router, prefix="/api")

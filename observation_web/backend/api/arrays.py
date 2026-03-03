@@ -83,6 +83,102 @@ async def _update_sync_position(
     return True
 
 
+async def sync_array_alerts(
+    array_id: str,
+    db: AsyncSession,
+    conn: "SSHConnection",
+    config,
+    full_sync: bool = False,
+) -> int:
+    """
+    Sync alerts from array's alerts.log to DB. Used by refresh endpoint and background sync.
+    Returns count of new alerts synced. Raises on fatal error.
+    """
+    from ..core.alert_store import get_alert_store
+    from ..models.alert import AlertCreate, AlertLevel
+    from .websocket import broadcast_alert
+
+    log_path = config.remote.agent_log_path
+    new_alerts_count = 0
+
+    exit_code, total_str, _ = await conn.execute_async(f"wc -l < {log_path} 2>/dev/null", timeout=5)
+    if exit_code != 0:
+        return 0
+
+    total_lines = int(total_str.strip())
+    last_pos = await _get_sync_position(db, array_id)
+
+    if full_sync or total_lines < last_pos:
+        last_pos = 0
+
+    new_count = total_lines - last_pos
+    content = ""
+    if new_count > 0:
+        read_count = min(new_count, 500)
+        exit_code, content, _ = await conn.execute_async(
+            f"tail -n {read_count} {log_path} 2>/dev/null", timeout=10
+        )
+
+    if content and content.strip():
+        parsed_alerts = []
+        for line in content.strip().split('\n'):
+            if not line.strip():
+                continue
+            try:
+                parsed_alerts.append(json.loads(line))
+            except Exception:
+                pass
+
+        if parsed_alerts:
+            alert_store = get_alert_store()
+            existing_alerts = await alert_store.get_alerts(db, array_id=array_id, limit=100)
+            existing_keys = {
+                f"{a.timestamp.isoformat()}_{a.observer_name}_{a.message[:50]}"
+                for a in existing_alerts
+            }
+
+            new_alerts = []
+            for alert in parsed_alerts:
+                timestamp_str = alert.get('timestamp', '')
+                if not timestamp_str:
+                    continue
+                dedup_key = f"{timestamp_str}_{alert.get('observer_name', '')}_{alert.get('message', '')[:50]}"
+                if dedup_key in existing_keys:
+                    continue
+                existing_keys.add(dedup_key)
+
+                try:
+                    level_str = alert.get('level', 'info').lower()
+                    level = AlertLevel(level_str) if level_str in [l.value for l in AlertLevel] else AlertLevel.INFO
+                    alert_create = AlertCreate(
+                        array_id=array_id,
+                        observer_name=alert.get('observer_name', 'unknown'),
+                        level=level,
+                        message=alert.get('message', ''),
+                        details=alert.get('details', {}),
+                        timestamp=datetime.fromisoformat(
+                            timestamp_str.replace('Z', '+00:00').replace('+00:00', '')
+                        ),
+                    )
+                    new_alerts.append(alert_create)
+                except Exception as e:
+                    sys_error("arrays", "Failed to parse alert", {"error": str(e)})
+
+            if new_alerts:
+                new_alerts_count = await alert_store.create_alerts_batch(db, new_alerts)
+                for alert in new_alerts[-10:]:
+                    await broadcast_alert({
+                        'array_id': alert.array_id,
+                        'observer_name': alert.observer_name,
+                        'level': alert.level.value,
+                        'message': alert.message,
+                        'timestamp': alert.timestamp.isoformat(),
+                    })
+
+    await _update_sync_position(db, array_id, total_lines, last_pos)
+    return new_alerts_count
+
+
 async def _get_array_or_404(array_id: str, db: AsyncSession) -> ArrayModel:
     """Verify array exists in DB, raise 404 if not found."""
     result = await db.execute(

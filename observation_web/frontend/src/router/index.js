@@ -32,6 +32,11 @@ const routes = [
     component: () => import('../views/CustomQuery.vue'),
   },
   {
+    path: '/admin/login',
+    name: 'AdminLogin',
+    component: () => import('../views/AdminLogin.vue'),
+  },
+  {
     path: '/settings',
     name: 'Settings',
     component: () => import('../views/Settings.vue'),
@@ -55,6 +60,11 @@ const routes = [
     path: '/test-tasks',
     name: 'TestTasks',
     component: () => import('../views/TestTasks.vue'),
+  },
+  {
+    path: '/issues',
+    name: 'Issues',
+    component: () => import('../views/Issues.vue'),
   },
 ]
 

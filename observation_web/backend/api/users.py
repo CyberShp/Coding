@@ -19,8 +19,11 @@ from ..models.user_session import (
     UserSessionResponse,
     OnlineUser,
     SetNicknameRequest,
+    ClaimNicknameRequest,
 )
+from ..models.array_lock import ArrayLockModel
 from ..middleware.user_session import ip_to_color, get_all_presence
+from sqlalchemy import update
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/users", tags=["users"])
@@ -154,6 +157,104 @@ async def set_nickname(
         last_seen=session.last_seen,
         is_active=session.is_active,
         color=ip_to_color(session.ip),
+    )
+
+
+@router.post("/claim", response_model=UserSessionResponse)
+async def claim_nickname(
+    request: Request,
+    body: ClaimNicknameRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Claim existing nickname when user's IP has changed (e.g. after computer restart).
+    Migrates the old session to the new IP, including array locks.
+    """
+    new_ip = getattr(request.state, 'user_ip', None)
+    if not new_ip:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Unable to determine user IP"
+        )
+
+    nickname = body.nickname.strip()[:64]
+    if not nickname:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="昵称不能为空"
+        )
+
+    # Find session with this nickname (old session)
+    result = await db.execute(
+        select(UserSessionModel).where(UserSessionModel.nickname == nickname)
+    )
+    old_session = result.scalar_one_or_none()
+
+    if not old_session:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="未找到该昵称，请确认昵称正确"
+        )
+
+    if old_session.ip == new_ip:
+        # Same IP, nothing to migrate
+        await db.refresh(old_session)
+        return UserSessionResponse(
+            id=old_session.id,
+            ip=old_session.ip,
+            nickname=old_session.nickname or "",
+            first_seen=old_session.first_seen,
+            last_seen=old_session.last_seen,
+            is_active=old_session.is_active,
+            color=ip_to_color(old_session.ip),
+        )
+
+    old_ip = old_session.ip
+
+    # Delete the new session if it exists (created on first visit with new IP)
+    # Must do this before updating old_session.ip to avoid unique constraint violation
+    result_new = await db.execute(
+        select(UserSessionModel).where(UserSessionModel.ip == new_ip)
+    )
+    new_session_row = result_new.scalar_one_or_none()
+    if new_session_row and new_session_row.id != old_session.id:
+        await db.delete(new_session_row)
+
+    # Migrate array locks from old IP to new IP
+    await db.execute(
+        update(ArrayLockModel)
+        .where(ArrayLockModel.locked_by_ip == old_ip)
+        .values(locked_by_ip=new_ip)
+    )
+
+    # Update previous_ips
+    import json
+    try:
+        prev_ips = json.loads(old_session.previous_ips or "[]")
+    except (json.JSONDecodeError, TypeError):
+        prev_ips = []
+    if old_ip not in prev_ips:
+        prev_ips.append(old_ip)
+    old_session.previous_ips = json.dumps(prev_ips)
+
+    # Update old session's IP to new IP
+    old_session.ip = new_ip
+    old_session.last_seen = datetime.now()
+    old_session.is_active = True
+
+    await db.commit()
+    await db.refresh(old_session)
+
+    logger.info(f"User claimed nickname '{nickname}': {old_ip} -> {new_ip}")
+
+    return UserSessionResponse(
+        id=old_session.id,
+        ip=old_session.ip,
+        nickname=old_session.nickname or "",
+        first_seen=old_session.first_seen,
+        last_seen=old_session.last_seen,
+        is_active=old_session.is_active,
+        color=ip_to_color(old_session.ip),
     )
 
 

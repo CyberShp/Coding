@@ -5,7 +5,7 @@ Database configuration and session management.
 import os
 from pathlib import Path
 
-from sqlalchemy import event
+from sqlalchemy import event, text
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from typing import AsyncGenerator
@@ -80,11 +80,46 @@ def init_db():
 
 
 async def create_tables():
-    """Create all tables"""
-    from ..models import array, alert, query, lifecycle, scheduler, traffic, task_session, snapshot, tag, user_session, array_lock, alert_rule, audit_log  # Import models to register them
+    """Create all tables and run migrations"""
+    from ..models import array, alert, query, lifecycle, scheduler, traffic, task_session, snapshot, tag, user_session, array_lock, alert_rule, audit_log, issue  # Import models to register them
     
     async with _async_engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        # Migration: add previous_ips to user_sessions if missing
+        await conn.run_sync(_migrate_user_sessions)
+        # Migration: add tag_id and other new columns to arrays if missing
+        await conn.run_sync(_migrate_arrays)
+
+
+def _migrate_user_sessions(conn):
+    """Add previous_ips column to user_sessions if it doesn't exist"""
+    result = conn.execute(
+        text("SELECT name FROM sqlite_master WHERE type='table' AND name='user_sessions'")
+    )
+    if not result.fetchone():
+        return
+    result = conn.execute(text("PRAGMA table_info(user_sessions)"))
+    columns = [row[1] for row in result.fetchall()]
+    if "previous_ips" not in columns:
+        conn.execute(text("ALTER TABLE user_sessions ADD COLUMN previous_ips TEXT DEFAULT '[]'"))
+
+
+def _migrate_arrays(conn):
+    """Add tag_id, saved_password, version columns to arrays if they don't exist"""
+    result = conn.execute(
+        text("SELECT name FROM sqlite_master WHERE type='table' AND name='arrays'")
+    )
+    if not result.fetchone():
+        return
+    result = conn.execute(text("PRAGMA table_info(arrays)"))
+    columns = [row[1] for row in result.fetchall()]
+    if "tag_id" not in columns:
+        conn.execute(text("ALTER TABLE arrays ADD COLUMN tag_id INTEGER REFERENCES tags(id) ON DELETE SET NULL"))
+    if "saved_password" not in columns:
+        conn.execute(text("ALTER TABLE arrays ADD COLUMN saved_password TEXT DEFAULT ''"))
+    if "version" not in columns:
+        conn.execute(text("ALTER TABLE arrays ADD COLUMN version INTEGER DEFAULT 1"))
+
 
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
