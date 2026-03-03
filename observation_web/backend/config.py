@@ -2,6 +2,8 @@
 Configuration management for the backend service.
 """
 
+__version__ = "4.0.0"
+
 import json
 import os
 from dataclasses import dataclass, field

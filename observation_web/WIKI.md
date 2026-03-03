@@ -1,8 +1,8 @@
 # 存储阵列观察点监控系统 — 用户手册
 
-> **版本**：3.1.0  
+> **版本**：4.0.0  
 > **适用人群**：存储测试工程师、自动化测试平台维护人员  
-> **最后更新**：2026-02-10
+> **最后更新**：2026-03-03
 
 ---
 
@@ -27,6 +27,9 @@
    - 4.13 [关键事件通知](#413-关键事件通知)
    - 4.14 [活跃告警与异常面板](#414-活跃告警与异常面板)
    - 4.15 [告警确认消除机制](#415-告警确认消除机制)
+   - 4.16 [管理员登录](#416-管理员登录)
+   - 4.17 [建议反馈](#417-建议反馈)
+   - 4.18 [昵称身份系统](#418-昵称身份系统)
 5. [观察点（Observer）完整列表](#5-观察点observer完整列表)
    - 5.1 [端口级观察点](#51-端口级观察点)
    - 5.2 [卡件级观察点](#52-卡件级观察点)
@@ -45,6 +48,7 @@
 11. [术语表](#11-术语表)
 12. [开发者扩展指南：如何添加一个新的观察点](#十二开发者扩展指南如何添加一个新的观察点)
 13. [开发者教程：修改监测命令/回显/预期结果/Web 显示](#十三开发者教程修改监测命令回显预期结果web-显示)
+14. [升级与部署](#14-升级与部署)
 
 ---
 
@@ -101,6 +105,7 @@
 
 - **PC → 阵列**：通过 SSH 连接（Paramiko 库），用于部署 Agent、启动/停止 Agent、拉取日志和流量数据
 - **阵列 → PC**（可选）：Agent 可配置 HTTP 推送模式，将告警数据主动推送至 Web 后端的 `/api/ingest` 接口
+- **告警双通道同步**：Agent HTTP push 为主通道；后端每 60 秒 SSH 定时拉取为兜底，确保告警实时性
 - **前端 ↔ 后端**：HTTP REST API + WebSocket 实时告警推送
 
 ### 数据存储
@@ -500,11 +505,43 @@ python -m uvicorn backend.main:app --host 0.0.0.0 --port 9999
   - 支持填写备注说明
 - **新告警不继承**：新产生的告警不会自动继承旧告警的已确认状态
 
+### 4.16 管理员登录
+
+**路径**：`/admin/login`（从设置页进入）
+
+**设计理念**：管理员登录不是入口门槛，而是"权限提升"。普通用户可自由浏览仪表盘、阵列、告警等页面，仅在需要管理操作（修改 Issue 状态、系统设置等）时才需登录。
+
+**登录入口**：设置页面（Settings）顶部「管理员登录」按钮
+
+**登录页交互**：左侧 3 只像素风格宠物 SVG，右侧登录表单。5 种动画状态：闲逛、凝视、捂眼、错愕、欢呼
+
+**默认账号**：`admin` / `admin123`（可在 `config.json` 的 `admin` 段修改）
+
+**需要管理员权限的操作**：Issue 状态变更、系统设置修改
+
+### 4.17 建议反馈
+
+**路径**：`/issues`
+
+**功能**：提交建议/反馈，按状态分类（待处理 / 已解决 / 不解决 / 已采纳）
+
+**状态变更**：仅创建者（按 IP 或昵称）和管理员可操作
+
+**侧边栏入口**：「建议反馈」菜单项
+
+### 4.18 昵称身份系统
+
+**首次访问**：弹出昵称设置对话框，用户输入昵称后作为主标识
+
+**身份设计**：昵称为主标识、IP 为辅助。在线用户以昵称显示
+
+**IP 变化恢复**：当用户 IP 变化（如换网络）后，可通过「认领昵称」恢复身份，系统自动迁移旧 IP 的会话数据、阵列锁定等到新 IP
+
 ---
 
 ## 5. 观察点（Observer）完整列表
 
-系统共包含 **19 个观察点**，分为端口级、卡件级、系统级三类。
+系统共包含 **23 个观察点**，分为端口级、卡件级、系统级三类。
 
 ### 5.1 端口级观察点
 
@@ -515,6 +552,7 @@ python -m uvicorn backend.main:app --host 0.0.0.0 --port 9999
 | `port_fec` | FEC 模式 | FEC 编码模式是否发生变化 | 内置（ethtool --show-fec） | 60s | WARNING |
 | `port_speed` | 端口速率 | 端口链接速率是否发生变化（如 25G → 10G） | 内置（sysfs / ethtool） | 60s | WARNING |
 | `port_traffic` | 端口流量 | TX/RX 字节数采集，计算带宽速率 | 内置（sysfs statistics） | 30s | 无告警（仅采集数据） |
+| `port_error_code` | 端口误码 | anytest portallinfo + portgeterr，0x2 以太网/0x11 FC 卡件误码统计 | 内置（anytest） | 60s | WARNING |
 
 ### 5.2 卡件级观察点
 
@@ -525,6 +563,7 @@ python -m uvicorn backend.main:app --host 0.0.0.0 --port 9999
 | `pcie_bandwidth` | PCIe 带宽 | LnkCap vs LnkSta 对比，检测降级 | 内置（lspci -vvv） | 120s | WARNING |
 | `controller_state` | 控制器状态 | 控制器在线/离线/降级状态变化 | **需用户提供命令** | 60s | ERROR（持续） |
 | `disk_state` | 磁盘状态 | 磁盘在线/离线/重建/故障状态变化 | **需用户提供命令** | 60s | ERROR / WARNING（持续） |
+| `sfp_monitor` | 光模块监控 | anytest sfpallinfo，温度/健康/运行状态/FC 速率一致性 | 内置（anytest） | 120s | WARNING |
 
 ### 5.3 系统级观察点
 
@@ -539,6 +578,8 @@ python -m uvicorn backend.main:app --host 0.0.0.0 --port 9999
 | `process_crash` | 进程崩溃 | segfault / core dump / OOM 等崩溃事件 | 内置（日志 + dmesg） | 30s | CRITICAL（持续） |
 | `io_timeout` | IO 超时 | IO timeout / SCSI error 等存储 IO 异常 | 内置（日志 + dmesg） | 30s | ERROR / CRITICAL（持续） |
 | `custom_commands` | 自定义命令 | 用户自定义的监测命令和预期结果 | 用户配置 | 自定义 | WARNING |
+| `process_restart` | 进程拉起 | ps -aux 中 -v N 参数变化，检测进程被重拉 | 内置（ps） | 30s | WARNING |
+| `abnormal_reset` | 异常复位 | os_cli cat log_reset.txt，检测异常复位原因 | 内置（os_cli） | 120s | WARNING |
 
 > **"持续"标记**：该观察点触发告警后，不受冷却时间限制，每次检查都会上报，直到异常恢复。
 
@@ -599,6 +640,22 @@ No002  HealthState: FAULT
 - `Buffer I/O error` — 缓冲区 IO 错误
 - `EXT4-fs error` / `XFS error` — 文件系统错误
 
+#### port_error_code（端口误码）
+
+使用 `anytest portallinfo -t 2` 获取端口列表（0x2 以太网卡件、0x11 FC 卡件），对每个端口执行 `anytest portgeterr -p {port_id} -n 0`。0x11 卡件解析 LossOfSignal Count、BadRXChar Count 等；0x2 卡件解析 Rx Errors、Tx Errors、Rx Dropped、Tx Dropped、Collisions。非零即上报告警。
+
+#### sfp_monitor（光模块监控）
+
+使用 `anytest sfpallinfo` 获取光模块信息，按 `---+` 分隔为块。解析 PortId、parentID、Name、TempReal、HealthState、RunningState、RunSpeed、MaxSpeed。温度 ≥ 105°C 上报；HealthState 非 NORMAL 上报；RunningState 非 LINK_UP 上报；FC 光模块 MaxSpeed ≠ RunSpeed 或 RunSpeed 为 unknown 上报降速告警。
+
+#### process_restart（进程拉起）
+
+默认监控 `app_data`、`devm`、`memf` 三个进程（可配置）。每周期执行 `ps -aux | grep` 解析 `-v N` 参数。若 `-v` 值增大（如 1 → 2），说明进程被重拉，上报告警。
+
+#### abnormal_reset（异常复位）
+
+执行 `os_cli "cat ./log_reset.txt"` 获取复位日志，解析 reason 和 time。匹配异常关键字（watchDog reset、oops reset、unknown reset、oom reset、panic reset、kernel reset、mce reset、bios reset、software unknown reset、failure recovery reset）则上报告警，记录已上报时间戳避免重复。
+
 ---
 
 ## 6. 告警体系
@@ -628,6 +685,11 @@ No002  HealthState: FAULT
 - 建议 → 绿色标签
 
 ### 6.3 告警聚合与风暴抑制
+
+#### 告警双通道同步
+
+- **Agent 推送**：配置 `remote.ingest_url` 后，Agent 将告警主动推送至后端 `/api/ingest`
+- **后端兜底**：每 60 秒对已连接阵列执行 SSH 拉取，确保告警实时性
 
 #### 时间窗口聚合
 
@@ -675,6 +737,10 @@ No002  HealthState: FAULT
 
 ```json
 {
+  "admin": {
+    "username": "admin",       // 管理员账号（用于 Issue 状态变更、系统设置等）
+    "password": "admin123"     // 管理员密码，生产环境请修改
+  },
   "server": {
     "host": "0.0.0.0",        // 监听地址
     "port": 9999,              // 后端端口
@@ -693,7 +759,8 @@ No002  HealthState: FAULT
   "remote": {
     "agent_deploy_path": "/OSM/coffer_data/observation_points",  // Agent 部署路径
     "agent_log_path": "/var/log/observation-points/alerts.log",  // Agent 告警日志路径
-    "python_cmd": "python3"                                      // 阵列上的 Python 命令
+    "python_cmd": "python3",                                     // 阵列上的 Python 命令
+    "ingest_url": ""                                             // Agent 推送地址，如 http://192.168.1.100:9999/api/ingest
   }
 }
 ```
@@ -799,6 +866,29 @@ No002  HealthState: FAULT
       "interval": 60,
       "timeout_seconds": 1,        // 命令执行超过此时间即告警
       "commands": ["lscpu"]        // 要监测执行时间的命令列表
+    },
+    "port_error_code": {
+      "enabled": true,
+      "interval": 60,
+      "command_list_ports": "anytest portallinfo -t 2",
+      "command_get_errors": "anytest portgeterr -p {port_id} -n 0"
+    },
+    "process_restart": {
+      "enabled": true,
+      "interval": 30,
+      "processes": ["app_data", "devm", "memf"]
+    },
+    "sfp_monitor": {
+      "enabled": true,
+      "interval": 120,
+      "command": "anytest sfpallinfo",
+      "temp_threshold": 105
+    },
+    "abnormal_reset": {
+      "enabled": true,
+      "interval": 120,
+      "command": "os_cli \"cat ./log_reset.txt\"",
+      "abnormal_reasons": ["watchDog reset", "oops reset", "unknown reset", "oom reset", "panic reset", "kernel reset", "mce reset", "bios reset", "software unknown reset", "failure recovery reset"]
     }
   }
 }
@@ -965,6 +1055,7 @@ No002  HealthState: FAULT
 | 阵列上 alerts.log 为空 | 确认 Agent 正在运行（`ps aux \| grep observation`） |
 | PC 端看不到告警 | 点击阵列详情的「刷新」按钮手动同步 |
 | 告警延迟 | 检查 SSH 连接是否正常，网络延迟是否过大 |
+| 告警不实时 | 配置 `config.json` 中 `remote.ingest_url` 启用 Agent 推送；后端每 60 秒 SSH 定时同步为兜底，检查 alert_sync 日志 |
 
 ### 10.5 页面卡顿
 
@@ -999,6 +1090,9 @@ No002  HealthState: FAULT
 | **lspci** | Linux PCI 设备列表查询工具 |
 | **活跃问题** | 当前仍未解决的告警或异常状态，显示在阵列详情的活跃告警面板中 |
 | **告警确认（Ack）** | 用户手动标记某条告警为"已确认非问题"，将其从活跃面板移除 |
+| **昵称身份** | 用户以昵称为主标识，IP 为辅助；IP 变化后可认领昵称恢复身份 |
+| **管理员登录** | 权限提升入口，用于 Issue 状态变更、系统设置等管理操作 |
+| **迁移脚本** | `backend/db/migrations/` 下的版本化数据库变更脚本，启动时自动执行 |
 | **智能折叠** | 基于语义身份（观察点+关键字段）将相似告警自动分组显示 |
 | **AlarmType** | 阵列系统告警类型。0=事件（INFO）、1=故障（WARNING）、2=恢复（WARNING） |
 | **send_ignore** | SSH 协议中的轻量心跳包，用于检测连接真实可用性 |
@@ -1015,6 +1109,13 @@ No002  HealthState: FAULT
 | 前端开发服务器 | 5173 | Vite 开发模式 |
 | SSH 连接 | 22 | 连接存储阵列 |
 | WebSocket | 9999 | 与后端同端口，路径 /ws/alerts |
+
+### 管理员默认账号
+
+| 项目 | 默认值 |
+|------|--------|
+| 账号 | admin |
+| 密码 | admin123 |
 
 ### 默认文件路径
 
@@ -1588,3 +1689,40 @@ config.json 参数名变了
    - 检查告警小卡片的翻译文案
    - 点击小卡片，检查详情抽屉
    - 在告警中心检查折叠是否正确
+
+---
+
+## 14. 升级与部署
+
+### 14.1 当前部署方式（手动上传）
+
+若服务器暂未配置 Git，可采用：本地 clone 代码库 → 压缩 → scp 上传 → 服务器解压。此方式易出错，且数据库变更需手动处理。
+
+### 14.2 推荐升级流程
+
+1. **本地 PC** 运行 `./scripts/pack.sh` 打包，产出 `observation_web_vX.Y.Z_YYYYMMDD.tar.gz`
+2. **上传**：`scp observation_web_v*.tar.gz user@server:/path/to/observation_web/`
+3. **服务器** 运行：`cd /path/to/observation_web && ./scripts/upgrade.sh observation_web_v*.tar.gz`
+
+升级脚本自动完成：备份 → 停服 → 替换代码（保留 config.json、observation_web.db）→ 安装依赖 → 数据库迁移 → 启动 → 健康检查
+
+### 14.3 数据库迁移机制
+
+- 数据库表 `_schema_version` 记录当前迁移版本号
+- 迁移脚本位于 `backend/db/migrations/NNN_description.py`，按版本号有序执行
+- 启动时自动执行未运行的迁移，幂等安全
+- 升级时无需手动操作数据库
+
+### 14.4 回滚
+
+升级失败时执行：`./scripts/upgrade.sh --rollback`，从最近备份 `backups/backup_YYYYMMDD_HHMMSS/` 恢复
+
+### 14.5 离线环境
+
+服务器无法访问外网时，打包时加 `--with-deps`：`./scripts/pack.sh --with-deps`，将 Python wheel 打入 `vendor/`。服务器安装时使用：`pip install --no-index --find-links=vendor/ -r requirements.txt`
+
+### 14.6 升级注意事项
+
+- `config.json` 和 `observation_web.db` 不会被升级包覆盖
+- 新增配置项有默认值兜底
+- 数据库列变更通过迁移脚本自动处理

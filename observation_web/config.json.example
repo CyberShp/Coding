@@ -1,0 +1,29 @@
+{
+  "admin": {
+    "username": "admin",
+    "password": "admin123"
+  },
+  "server": {
+    "host": "0.0.0.0",
+    "port": 9999,
+    "debug": false,
+    "cors_origins": ["*"]
+  },
+  "ssh": {
+    "default_port": 22,
+    "timeout": 10,
+    "keepalive_interval": 30
+  },
+  "database": {
+    "path": "observation_web.db",
+    "echo": false
+  },
+  "remote": {
+    "agent_deploy_path": "/OSM/coffer_data/observation_points",
+    "agent_log_path": "/var/log/observation-points/alerts.log",
+    "python_cmd": "python3",
+    "upload_staging_path": "/home/permitdir",
+    "auto_redeploy": true,
+    "ingest_url": ""
+  }
+}
