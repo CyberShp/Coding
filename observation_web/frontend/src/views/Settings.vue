@@ -25,20 +25,6 @@
         </el-card>
       </el-tab-pane>
 
-      <!-- Observer Config -->
-      <el-tab-pane label="观察点配置" name="observers">
-        <el-card>
-          <template #header>
-            <span>观察点配置</span>
-          </template>
-          <el-table :data="observers" stripe>
-            <el-table-column label="观察点" prop="name" />
-            <el-table-column label="显示名称" prop="display" />
-            <el-table-column label="描述" prop="description" />
-          </el-table>
-        </el-card>
-      </el-tab-pane>
-
       <!-- Alert Rules -->
       <el-tab-pane label="告警规则" name="alerts">
         <el-card>
@@ -147,21 +133,9 @@ function handleLogout() {
   ElMessage.success('已退出登录')
 }
 
-const activeTab = ref('observers')
+const activeTab = ref('alerts')
 const apiUrl = computed(() => window.location.origin + '/api')
 const wsConnected = computed(() => alertStore.wsConnected)
-
-const observers = ref([
-  { name: 'error_code', display: '误码监测', description: '监测端口和 PCIe 误码' },
-  { name: 'link_status', display: '链路状态', description: '监测网络链路状态变化' },
-  { name: 'card_recovery', display: '卡修复', description: '监测卡修复事件' },
-  { name: 'alarm_type', display: 'AlarmType', description: '监测 AlarmType 告警' },
-  { name: 'memory_leak', display: '内存泄漏', description: '检测内存持续增长' },
-  { name: 'cpu_usage', display: 'CPU利用率', description: '监测 CPU 持续高负载' },
-  { name: 'cmd_response', display: '命令响应', description: '监测命令响应时间' },
-  { name: 'sig_monitor', display: 'sig信号', description: '监测异常信号' },
-  { name: 'sensitive_info', display: '敏感信息', description: '检测日志中的敏感信息' },
-])
 
 const alertConfig = reactive({
   cooldown: 300,

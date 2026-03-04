@@ -37,10 +37,6 @@
               <el-icon><Warning /></el-icon>
               <span>系统告警</span>
             </el-menu-item>
-            <el-menu-item index="/data">
-              <el-icon><Files /></el-icon>
-              <span>数据管理</span>
-            </el-menu-item>
             <el-menu-item index="/tasks">
               <el-icon><Timer /></el-icon>
               <span>定时任务</span>
