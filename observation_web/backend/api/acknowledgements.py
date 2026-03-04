@@ -13,8 +13,8 @@ import logging
 from datetime import datetime, timedelta
 from typing import List
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
-from sqlalchemy import select, delete
+from fastapi import APIRouter, Depends, HTTPException, Request, Query, status
+from sqlalchemy import select, delete, exists
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..db.database import get_db
@@ -109,6 +109,65 @@ async def ack_alerts(
             logger.debug("Failed to clear active issues cache (non-critical)")
 
     return created
+
+
+@router.post("/ack-all-visible", response_model=dict)
+async def ack_all_visible(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    hours: int = Query(2, ge=1, le=168, description="Only ack alerts within this many hours"),
+    ack_type: str = Query("dismiss", description="dismiss | confirmed_ok"),
+):
+    """
+    Batch acknowledge all currently unacked alerts within the time range.
+    Used by the banner "全部忽略 24 小时" to clear all visible alerts.
+    """
+    from datetime import datetime
+
+    client_ip = request.client.host if request and request.client else "unknown"
+    valid_types = {t.value for t in AckType}
+    ack_type_val = ack_type if ack_type in valid_types else AckType.DISMISS.value
+
+    expires_at = None
+    if ack_type_val == AckType.DISMISS.value:
+        expires_at = datetime.now() + timedelta(hours=_DISMISS_DEFAULT_HOURS)
+    elif ack_type_val == AckType.DEFERRED.value:
+        expires_at = datetime.now() + timedelta(hours=72)
+
+    # Find unacked alerts in time range
+    since = datetime.now() - timedelta(hours=hours)
+    ack_exists = exists().where(AlertAckModel.alert_id == AlertModel.id)
+    stmt = (
+        select(AlertModel.id)
+        .where(AlertModel.timestamp >= since)
+        .where(~ack_exists)
+    )
+    result = await db.execute(stmt)
+    unacked_ids = [row[0] for row in result.all()]
+
+    if not unacked_ids:
+        return {"acked_count": 0, "message": "No unacked alerts in range"}
+
+    created = []
+    for alert_id in unacked_ids:
+        ack = AlertAckModel(
+            alert_id=alert_id,
+            acked_by_ip=client_ip,
+            comment="",
+            ack_type=ack_type_val,
+            ack_expires_at=expires_at,
+            note="Batch ack (ack-all-visible)",
+        )
+        db.add(ack)
+        created.append(ack)
+
+    await db.commit()
+    try:
+        await _clear_acked_active_issues(db, unacked_ids)
+    except Exception:
+        logger.debug("Failed to clear active issues cache (non-critical)")
+
+    return {"acked_count": len(created), "message": f"Acknowledged {len(created)} alerts"}
 
 
 @router.delete("/ack/{alert_id}")

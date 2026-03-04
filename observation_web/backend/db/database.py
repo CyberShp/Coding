@@ -2,15 +2,18 @@
 Database configuration and session management.
 """
 
+import logging
 import os
 from pathlib import Path
 
-from sqlalchemy import event
+from sqlalchemy import event, text
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from typing import AsyncGenerator
 
 from ..config import get_config
+
+logger = logging.getLogger(__name__)
 
 
 class Base(DeclarativeBase):
@@ -19,6 +22,11 @@ class Base(DeclarativeBase):
 # Async engine for SQLite
 _async_engine = None
 AsyncSessionLocal = None
+
+
+def get_async_engine():
+    """Return the async engine (for fallback table creation)."""
+    return _async_engine
 
 
 def get_database_url() -> str:
@@ -80,13 +88,37 @@ def init_db():
 
 
 async def create_tables():
-    """Create all tables and run migrations"""
-    from ..models import array, alert, query, lifecycle, scheduler, traffic, task_session, snapshot, tag, user_session, array_lock, alert_rule, audit_log, issue  # Import models to register them
-    from .migrations import run_migrations
+    """Create all tables and run migrations. Uses separate transactions so migration
+    failure does not roll back table creation."""
+    from ..models import array, alert, query, lifecycle, scheduler, traffic, task_session, snapshot, tag, user_session, array_lock, alert_rule, audit_log, issue  # noqa: F401
 
+    # Transaction 1: Create tables (unaffected by migration failures)
     async with _async_engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-        await conn.run_sync(run_migrations)
+
+    # Transaction 2: Run migrations (independent; failure does not undo table creation)
+    from .migrations import run_migrations
+    try:
+        async with _async_engine.begin() as conn:
+            await conn.run_sync(run_migrations)
+    except Exception as e:
+        logger.error("Migration failed (tables still created): %s", e)
+
+    # Startup diagnostic: verify all expected tables exist
+    async with _async_engine.begin() as conn:
+        def _check_tables(sync_conn):
+            result = sync_conn.execute(
+                text("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
+            )
+            existing = {row[0] for row in result.fetchall()}
+            expected = set(Base.metadata.tables.keys())
+            missing = expected - existing
+            if missing:
+                logger.error("MISSING TABLES after create_all: %s", missing)
+            else:
+                logger.info("All %d tables verified", len(expected))
+
+        await conn.run_sync(_check_tables)
 
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:

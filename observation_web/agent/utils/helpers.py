@@ -16,31 +16,39 @@ logger = logging.getLogger(__name__)
 DEFAULT_TIMEOUT = 10
 
 
+# PATH 初始化，用于 SSH/服务环境下 os_cli 等命令找不到时
+_ENV_PATH_PREFIX = "export PATH=/usr/local/bin:/usr/bin:/bin:/sbin:/usr/sbin:$PATH && "
+
+
 def run_command(
     cmd: Union[str, List[str]],
     timeout: int = DEFAULT_TIMEOUT,
     shell: bool = False,
     check: bool = False,
     capture_stderr: bool = True,
+    ensure_path: bool = False,
 ):
     # type: (...) -> Tuple[int, str, str]
     """
     执行命令并返回结果
-    
+
     Args:
         cmd: 命令字符串或列表
         timeout: 超时时间（秒）
         shell: 是否使用 shell 执行
         check: 是否在非零返回码时抛出异常
         capture_stderr: 是否捕获 stderr
-        
+        ensure_path: 若 True 且 shell=True，在命令前添加 PATH 初始化（解决 os_cli 等 cmd not found）
     Returns:
         (返回码, stdout, stderr)
     """
     try:
         if isinstance(cmd, str) and not shell:
             cmd = cmd.split()
-        
+
+        if ensure_path and shell and isinstance(cmd, str):
+            cmd = _ENV_PATH_PREFIX + cmd
+
         run_kw = dict(shell=shell, timeout=timeout, check=check)
         if sys.version_info >= (3, 7):
             run_kw['capture_output'] = True
@@ -66,6 +74,9 @@ def run_command(
 def read_sysfs(path: Union[str, Path]) -> Optional[str]:
     """
     读取 sysfs 文件内容
+
+    端口 down 时 carrier 可能不存在或抛出 IOError(Invalid argument)，
+    此时返回 None 由调用方处理。
     
     Args:
         path: sysfs 文件路径
@@ -78,6 +89,10 @@ def read_sysfs(path: Union[str, Path]) -> Optional[str]:
         if not path.exists():
             return None
         return path.read_text().strip()
+    except (IOError, OSError) as e:
+        # carrier 在端口 down 时可能抛出 Invalid argument
+        logger.debug(f"读取 sysfs 失败 (端口可能 down): {path}, 错误: {e}")
+        return None
     except Exception as e:
         logger.debug(f"读取 sysfs 失败: {path}, 错误: {e}")
         return None

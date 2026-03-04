@@ -16,7 +16,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from .config import get_config
 from .core.system_alert import sys_error, sys_warning, sys_info
-from .db.database import init_db, create_tables
+from .db.database import init_db, create_tables, Base, get_async_engine
 from .api import arrays_router, alerts_router, query_router, ws_router, tags_router, alert_rules_router, audit_router
 from .api.auth import router as auth_router
 from .api.issues import router as issues_router
@@ -174,8 +174,20 @@ async def lifespan(app: FastAPI):
     
     # Initialize database
     init_db()
-    await create_tables()
-    logger.info("Database initialized")
+    try:
+        await create_tables()
+        logger.info("Database initialized")
+    except Exception as e:
+        logger.error("create_tables failed: %s", e, exc_info=True)
+        # Fallback: create tables only (skip migrations)
+        try:
+            from .models import array, alert, query, lifecycle, scheduler, traffic, task_session, snapshot, tag, user_session, array_lock, alert_rule, audit_log, issue  # noqa: F401
+            async with get_async_engine().begin() as conn:
+                await conn.run_sync(Base.metadata.create_all)
+            logger.info("Fallback: tables created without migrations")
+        except Exception as e2:
+            logger.critical("Cannot create database tables: %s", e2)
+            raise
     
     # Initialize SSH pool
     get_ssh_pool()

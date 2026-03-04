@@ -40,6 +40,23 @@
           <el-descriptions-item label="名称">{{ array.name }}</el-descriptions-item>
           <el-descriptions-item label="地址">{{ array.host }}:{{ array.port }}</el-descriptions-item>
           <el-descriptions-item label="用户名">{{ array.username }}</el-descriptions-item>
+          <el-descriptions-item label="标签">
+            <el-select
+              v-model="array.tag_id"
+              placeholder="选择标签"
+              size="small"
+              clearable
+              style="width: 160px"
+              @change="handleTagChange"
+            >
+              <el-option
+                v-for="tag in tags"
+                :key="tag.id"
+                :label="tag.name"
+                :value="tag.id"
+              />
+            </el-select>
+          </el-descriptions-item>
           <el-descriptions-item label="连接状态">
             <el-tag :type="getStateType(array.state)">{{ getStateText(array.state) }}</el-tag>
           </el-descriptions-item>
@@ -58,9 +75,12 @@
       <el-card class="active-issues-card">
         <template #header>
           <div class="card-header">
-            <span>活跃告警与异常</span>
+            <el-tooltip content="来自系统级观察点：CPU、内存、AlarmType、PCIe、卡件等，不含端口误码/链路">
+              <span>活跃异常（系统级）</span>
+            </el-tooltip>
             <el-tag v-if="activeIssues.length > 0" type="danger" size="small">{{ activeIssues.length }} 项</el-tag>
             <el-tag v-else type="success" size="small">无异常</el-tag>
+            <span v-if="unackedCount > 0" class="unacked-hint">未确认告警 {{ unackedCount }} 条</span>
           </div>
         </template>
 
@@ -317,9 +337,14 @@ const connectForm = reactive({
 const recentAlerts = ref([])
 const drawerVisible = ref(false)
 const selectedAlert = ref(null)
+const tags = ref([])
 
 const activeIssues = computed(() => {
   return array.value?.active_issues || []
+})
+
+const unackedCount = computed(() => {
+  return recentAlerts.value.filter(a => !a.is_acked).length
 })
 
 function getAlertTranslation(alert) {
@@ -374,9 +399,9 @@ function openAlertDrawer(alert) {
   drawerVisible.value = true
 }
 
-async function handleAck({ alertIds }) {
+async function handleAck({ alertIds, ackType = 'dismiss' }) {
   try {
-    await api.ackAlerts(alertIds)
+    await api.ackAlerts(alertIds, '', { ack_type: ackType })
     ElMessage.success('已确认')
     recentAlerts.value.forEach(a => {
       if (alertIds.includes(a.id)) a.is_acked = true
@@ -407,6 +432,26 @@ async function loadRecentAlerts() {
     recentAlerts.value = res.data.items || res.data || []
   } catch (error) {
     console.error('Failed to load alerts:', error)
+  }
+}
+
+async function loadTags() {
+  try {
+    const res = await api.getTags()
+    tags.value = res.data || []
+  } catch (error) {
+    console.error('Failed to load tags:', error)
+  }
+}
+
+async function handleTagChange(tagId) {
+  if (!array.value?.array_id) return
+  try {
+    await api.updateArray(array.value.array_id, { tag_id: tagId || null })
+    ElMessage.success('标签已更新')
+    await loadArray()
+  } catch (e) {
+    ElMessage.error('更新失败: ' + errMsg(e, '未知错误'))
   }
 }
 
@@ -653,6 +698,7 @@ watch(
 )
 
 onMounted(() => {
+  loadTags()
   loadArray()
   refreshTimer = setInterval(silentRefresh, 30000) // 30 seconds
 })
@@ -691,6 +737,12 @@ onUnmounted(() => {
   display: flex;
   justify-content: space-between;
   align-items: center;
+}
+
+.unacked-hint {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  margin-left: 8px;
 }
 
 .actions {

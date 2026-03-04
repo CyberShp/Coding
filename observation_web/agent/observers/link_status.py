@@ -45,9 +45,25 @@ class LinkStatusObserver(BaseObserver):
             'changes': [],
             'current_states': {},
         }
-        
+
         ports = self._get_ports_to_check()
-        
+        current_port_set = set(ports)
+
+        # 检测消失的端口：之前 carrier=1 的端口现在不见了，视为 link DOWN
+        if not self._first_run:
+            for port in list(self._last_states.keys()):
+                if port not in current_port_set and port not in self.whitelist:
+                    last_state = self._last_states[port]
+                    if last_state.get('carrier') == '1':
+                        alerts.append(f"{port} link DOWN (端口消失)")
+                        details['changes'].append({
+                            'port': port,
+                            'change': f"{port} link DOWN (端口消失)",
+                            'timestamp': datetime.now().isoformat(),
+                        })
+                        logger.warning(f"[LinkStatus] {port} DOWN (端口消失)")
+                    del self._last_states[port]
+
         for port in ports:
             state = self._get_port_state(port)
             if not state:
@@ -128,26 +144,33 @@ class LinkStatusObserver(BaseObserver):
         return master_path.exists()
     
     def _get_port_state(self, port: str):  # type: (...) -> Optional[Dict[str, Any]]
-        """获取端口状态"""
+        """获取端口状态。端口 down 时 carrier 可能读不到，用 operstate 兜底。"""
         port_path = Path(f'/sys/class/net/{port}')
-        
+
         if not port_path.exists():
             return None
-        
+
+        carrier_val = read_sysfs(port_path / 'carrier')
+        operstate_val = read_sysfs(port_path / 'operstate') or 'unknown'
+
+        # carrier 在端口 down 时可能不存在或抛错，用 operstate 兜底
+        if carrier_val is None:
+            carrier_val = '1' if operstate_val == 'up' else '0'
+
         state = {
-            'carrier': read_sysfs(port_path / 'carrier') or '0',
-            'operstate': read_sysfs(port_path / 'operstate') or 'unknown',
+            'carrier': carrier_val or '0',
+            'operstate': operstate_val,
             'speed': read_sysfs(port_path / 'speed'),
             'duplex': read_sysfs(port_path / 'duplex'),
             'timestamp': datetime.now().isoformat(),
         }
-        
+
         # 获取 bond 信息（如果是 bond）
         if (port_path / 'bonding').exists():
             state['is_bond'] = True
             state['bond_mode'] = read_sysfs(port_path / 'bonding/mode')
             state['bond_slaves'] = read_sysfs(port_path / 'bonding/slaves')
-        
+
         return state
     
     def _detect_changes(self, port: str, last: Dict, current: Dict) -> List[str]:

@@ -56,6 +56,10 @@ class PortErrorCodeObserver(BaseObserver):
             'command_list_ports',
             'anytest portallinfo -t 2'
         )
+        self.cmd_list_ports_fc = config.get(
+            'command_list_ports_fc',
+            'anytest portallinfo -t 1'
+        )
         self.cmd_get_errors = config.get(
             'command_get_errors',
             'anytest portgeterr -p {port_id} -n 0'
@@ -99,26 +103,45 @@ class PortErrorCodeObserver(BaseObserver):
         )
 
     def _get_port_list(self) -> Tuple[List[str], List[str]]:
-        """获取 0x2 和 0x11 端口列表"""
-        cmd = f"{self.cmd_list_ports} | grep -iE 'portId' | grep -aiE '0x2|0x11'"
-        ret, stdout, stderr = run_command(cmd, shell=True, timeout=15)
-        if ret != 0:
-            logger.warning(f"[port_error_code] 获取端口列表失败: {stderr[:200]}")
-            return [], []
-
+        """获取 0x2 和 0x11 端口列表。以太网用 -t 2，FC 用 -t 1，分别查询后合并。"""
         ports_0x2 = []
         ports_0x11 = []
-        for line in stdout.strip().split('\n'):
-            line = line.strip()
-            if not line:
-                continue
-            m = PORT_ID_PATTERN.search(line)
-            if m:
-                port_id = m.group(1)
-                if port_id.upper().startswith('0X11'):
-                    ports_0x11.append(port_id)
-                elif port_id.upper().startswith('0X2'):
-                    ports_0x2.append(port_id)
+
+        # Query Ethernet ports (-t 2)
+        cmd_eth = f"{self.cmd_list_ports} | grep -iE 'portId' | grep -aiE '0x2|0x11'"
+        ret, stdout, stderr = run_command(cmd_eth, shell=True, timeout=15)
+        if ret == 0:
+            for line in stdout.strip().split('\n'):
+                line = line.strip()
+                if not line:
+                    continue
+                m = PORT_ID_PATTERN.search(line)
+                if m:
+                    port_id = m.group(1)
+                    if port_id.upper().startswith('0X11'):
+                        ports_0x11.append(port_id)
+                    elif port_id.upper().startswith('0X2'):
+                        ports_0x2.append(port_id)
+
+        # Query FC ports (-t 1)
+        cmd_fc = f"{self.cmd_list_ports_fc} | grep -iE 'portId' | grep -aiE '0x2|0x11'"
+        ret, stdout, stderr = run_command(cmd_fc, shell=True, timeout=15)
+        if ret != 0:
+            logger.warning(f"[port_error_code] 获取 FC 端口列表失败: {stderr[:200]}")
+        else:
+            for line in stdout.strip().split('\n'):
+                line = line.strip()
+                if not line:
+                    continue
+                m = PORT_ID_PATTERN.search(line)
+                if m:
+                    port_id = m.group(1)
+                    if port_id.upper().startswith('0X11'):
+                        if port_id not in ports_0x11:
+                            ports_0x11.append(port_id)
+                    elif port_id.upper().startswith('0X2'):
+                        if port_id not in ports_0x2:
+                            ports_0x2.append(port_id)
 
         return ports_0x2, ports_0x11
 

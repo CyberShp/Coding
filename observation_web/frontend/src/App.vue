@@ -151,7 +151,28 @@
               </template>
             </span>
             <el-button type="danger" size="small" plain @click="$router.push('/alerts')">查看</el-button>
-            <el-button size="small" text @click="alertStore.acknowledgeAllCritical()">全部已知</el-button>
+            <el-button size="small" text @click="handleAckAllVisible">全部忽略 24 小时</el-button>
+          </div>
+
+          <!-- Suppressed state banner -->
+          <div v-if="alertStore.suppressedList.length > 0 && !alertStore.hasCriticalEvents" class="suppressed-banner">
+            <el-icon><InfoFilled /></el-icon>
+            <span class="suppressed-text">{{ alertStore.suppressedList.length }} 个观察点的告警已被抑制</span>
+            <el-button size="small" text @click="showSuppressedDetail = !showSuppressedDetail">
+              {{ showSuppressedDetail ? '收起' : '详情' }}
+            </el-button>
+            <el-button size="small" text type="warning" @click="alertStore.clearAllSuppressions()">
+              取消全部抑制
+            </el-button>
+          </div>
+          <div v-if="showSuppressedDetail && alertStore.suppressedList.length > 0" class="suppressed-detail">
+            <div v-for="item in alertStore.suppressedList" :key="item.observer" class="suppressed-item">
+              <span class="suppressed-observer">{{ item.observer }}</span>
+              <span class="suppressed-remaining">{{ formatRemaining(item.expiresAt) }}</span>
+              <el-button size="small" text type="warning" @click="alertStore.clearSuppression(item.observer)">
+                取消抑制
+              </el-button>
+            </div>
           </div>
 
           <el-main class="main-content">
@@ -172,7 +193,7 @@ import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import zhCn from 'element-plus/dist/locale/zh-cn.mjs'
-import { Monitor, Odometer, Cpu, Bell, Search, Setting, User, Warning, Files, Timer, WarningFilled, Stopwatch, UserFilled, ChatDotRound } from '@element-plus/icons-vue'
+import { Monitor, Odometer, Cpu, Bell, Search, Setting, User, Warning, Files, Timer, WarningFilled, Stopwatch, UserFilled, ChatDotRound, InfoFilled } from '@element-plus/icons-vue'
 import { useAlertStore } from './stores/alerts'
 import { setSoundEnabled } from './utils/notification'
 import api from './api'
@@ -180,6 +201,26 @@ import api from './api'
 const route = useRoute()
 const alertStore = useAlertStore()
 const soundOn = ref(false)
+const showSuppressedDetail = ref(false)
+
+function formatRemaining(expiresAt) {
+  const ms = expiresAt - Date.now()
+  if (ms <= 0) return '已过期'
+  const h = Math.floor(ms / (60 * 60 * 1000))
+  const m = Math.floor((ms % (60 * 60 * 1000)) / (60 * 1000))
+  if (h > 0) return `剩余 ${h}h${m}m`
+  return `剩余 ${m}m`
+}
+
+async function handleAckAllVisible() {
+  try {
+    await api.ackAllVisible(2, 'dismiss')
+    alertStore.acknowledgeAllCritical()
+    ElMessage.success('已全部忽略 24 小时')
+  } catch (e) {
+    ElMessage.error('操作失败: ' + (e.response?.data?.detail || e.message))
+  }
+}
 
 // Online users state
 const onlineUsers = ref([])
@@ -406,6 +447,45 @@ html, body, #app {
 @keyframes critical-pulse {
   0%, 100% { background: #fef0f0; }
   50% { background: #fde2e2; }
+}
+
+/* Suppressed state banner */
+.suppressed-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 20px;
+  background: #f4f4f5;
+  border-bottom: 1px solid #e4e7ed;
+  color: #606266;
+  font-size: 14px;
+}
+.suppressed-banner .el-icon {
+  font-size: 18px;
+  color: #909399;
+}
+.suppressed-text {
+  flex: 1;
+}
+.suppressed-detail {
+  padding: 8px 20px 12px;
+  background: #fafafa;
+  border-bottom: 1px solid #e4e7ed;
+  font-size: 13px;
+}
+.suppressed-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 4px 0;
+}
+.suppressed-observer {
+  font-weight: 500;
+  min-width: 120px;
+}
+.suppressed-remaining {
+  color: #909399;
+  min-width: 80px;
 }
 
 .main-content {

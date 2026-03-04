@@ -41,10 +41,10 @@ class ErrorCodeObserver(BaseObserver):
                 'tx_carrier_errors',
             ]
         },
-        # 丢包统计
+        # 丢包统计（降级为 INFO，不作为告警重点）
         'dropped': {
             'name': '丢包',
-            'level': AlertLevel.WARNING,
+            'level': AlertLevel.INFO,
             'counters': [
                 'rx_dropped',
                 'tx_dropped',
@@ -133,7 +133,16 @@ class ErrorCodeObserver(BaseObserver):
                 categorized_alerts[cat_key] = []
             categorized_alerts[cat_key].append(alert_info['message'])
         
-        details['port_counters'] = self._last_port_errors
+        # 只将有告警的端口数据放入 details，避免全量端口干扰
+        alerted_ports = set()
+        for alert_info in port_alerts:
+            msg = alert_info.get('message', '')
+            if '.' in msg:
+                alerted_ports.add(msg.split('.')[0])
+        details['port_counters'] = {
+            p: self._last_port_errors[p] for p in alerted_ports
+            if p in self._last_port_errors
+        } if alerted_ports else {}
         
         # 检查 PCIe 误码
         if self.pcie_enabled:
@@ -150,7 +159,7 @@ class ErrorCodeObserver(BaseObserver):
         }
         
         if categorized_alerts:
-            # 构建分类消息
+            # 构建分类消息：仅 WARNING 及以上级别上报到 message，INFO 只记录到 details
             message_parts = []
             max_level = AlertLevel.INFO
             
@@ -163,18 +172,24 @@ class ErrorCodeObserver(BaseObserver):
                     cat_name = cat_info.get('name', cat_key)
                     cat_level = cat_info.get('level', AlertLevel.INFO)
                 
-                # 取最高告警级别
                 if cat_level.value > max_level.value:
                     max_level = cat_level
                 
-                # 每个分类显示前2个告警
-                sample = alerts[:2]
-                if len(alerts) > 2:
-                    message_parts.append(f"{cat_name}: {'; '.join(sample)} (共{len(alerts)}项)")
-                else:
-                    message_parts.append(f"{cat_name}: {'; '.join(sample)}")
+                # 仅 WARNING 及以上级别加入 message_parts
+                if cat_level.value >= AlertLevel.WARNING.value:
+                    sample = alerts[:2]
+                    if len(alerts) > 2:
+                        message_parts.append(f"{cat_name}: {'; '.join(sample)} (共{len(alerts)}项)")
+                    else:
+                        message_parts.append(f"{cat_name}: {'; '.join(sample)}")
             
-            message = " | ".join(message_parts)
+            # 若 message 为空（只有 INFO 级别），用简要信息
+            if message_parts:
+                message = " | ".join(message_parts)
+            else:
+                info_summary = [f"{self.COUNTER_CATEGORIES.get(k, {}).get('name', k)} {len(v)}项"
+                                for k, v in categorized_alerts.items()]
+                message = f"端口计数器: {', '.join(info_summary)}"
             
             return self.create_result(
                 has_alert=True,

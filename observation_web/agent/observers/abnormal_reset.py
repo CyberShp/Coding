@@ -43,7 +43,14 @@ class AbnormalResetObserver(BaseObserver):
 
     def __init__(self, name: str, config: Dict[str, Any]):
         super().__init__(name, config)
-        self.command = config.get('command', 'os_cli "cat ./log_reset.txt"')
+        # os_cli_path: 可选，指定 os_cli 完整路径（如 /usr/local/bin/os_cli）
+        self.os_cli_path = config.get('os_cli_path', '')
+        base_cmd = config.get('command', 'os_cli "cat ./log_reset.txt"')
+        if self.os_cli_path:
+            # 使用完整路径替换命令中的 os_cli
+            base_cmd = base_cmd.replace('os_cli', self.os_cli_path, 1)
+        self.command = base_cmd
+        self.ensure_path = config.get('ensure_path', True)  # 默认添加 PATH 解决 cmd not found
         reasons = config.get('abnormal_reasons', DEFAULT_ABNORMAL_REASONS)
         self.abnormal_patterns = [
             re.compile(re.escape(r), re.IGNORECASE)
@@ -52,9 +59,17 @@ class AbnormalResetObserver(BaseObserver):
         self._last_reported_times: Set[str] = set()
 
     def check(self) -> ObserverResult:
-        ret, stdout, stderr = run_command(self.command, shell=True, timeout=15)
+        ret, stdout, stderr = run_command(
+            self.command, shell=True, timeout=15, ensure_path=self.ensure_path
+        )
         if ret != 0:
-            logger.warning(f"[abnormal_reset] 命令执行失败: {stderr[:200]}")
+            err_preview = (stderr or '')[:200]
+            if 'not found' in err_preview.lower() or 'no such file' in err_preview.lower():
+                logger.warning(
+                    f"[abnormal_reset] 命令不存在或路径错误 (可配置 os_cli_path): {err_preview}"
+                )
+            else:
+                logger.warning(f"[abnormal_reset] 命令执行失败: {err_preview}")
             return self.create_result(
                 has_alert=False,
                 message="异常复位: 命令执行失败",

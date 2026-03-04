@@ -230,7 +230,10 @@ async def _compute_recent_alert_summary(
 # ---------------------------------------------------------------------------
 
 # Observers that contribute to the "active issues" panel
-_ACTIVE_ISSUE_OBSERVERS = {'cpu_usage', 'memory_leak', 'alarm_type', 'pcie_bandwidth', 'card_info'}
+_ACTIVE_ISSUE_OBSERVERS = {
+    'cpu_usage', 'memory_leak', 'alarm_type', 'pcie_bandwidth', 'card_info',
+    'error_code', 'port_error_code',  # 端口误码（不含丢包）
+}
 
 _OBSERVER_TITLES = {
     'cpu_usage': 'CPU 利用率过高',
@@ -238,6 +241,8 @@ _OBSERVER_TITLES = {
     'alarm_type': '告警未恢复',
     'pcie_bandwidth': 'PCIe 带宽降级',
     'card_info': '卡件异常',
+    'error_code': '端口误码',
+    'port_error_code': '端口误码',
 }
 
 # ---------------------------------------------------------------------------
@@ -419,6 +424,19 @@ def _update_active_issues(status_obj: ArrayStatus, alert: dict):
         _pop_recovery(array_id, key)  # relapse after recovery → invalidate ack
         _upsert_issue(status_obj, key, observer, level, message, details, timestamp)
 
+    elif observer == 'port_error_code':
+        key = 'port_error_code'
+        _pop_recovery(array_id, key)
+        _upsert_issue(status_obj, key, observer, level, message, details, timestamp)
+
+    elif observer == 'error_code':
+        # 仅误码/PCIe 类别加入 active issues，不含丢包
+        by_cat = details.get('by_category', {})
+        if by_cat.get('error_code', 0) > 0 or by_cat.get('pcie', 0) > 0:
+            key = 'error_code'
+            _pop_recovery(array_id, key)
+            _upsert_issue(status_obj, key, observer, level, message, details, timestamp)
+
 
 def _upsert_issue(
     status_obj: ArrayStatus, key: str, observer: str,
@@ -597,6 +615,38 @@ async def _derive_active_issues_from_db(db: AsyncSession, array_id: str) -> List
                         'since': ts,
                         'latest': ts,
                     })
+        elif obs_name == 'port_error_code':
+            if level in ('warning', 'error', 'critical'):
+                alerts_list = details.get('alerts', [])
+                msg = '; '.join(alerts_list[:3]) if alerts_list else message[:200]
+                issues.append({
+                    'key': 'port_error_code',
+                    'observer': 'port_error_code',
+                    'level': level,
+                    'title': _OBSERVER_TITLES['port_error_code'],
+                    'message': msg[:200],
+                    'details': details,
+                    'alert_id': alert_id,
+                    'since': ts,
+                    'latest': ts,
+                })
+        elif obs_name == 'error_code':
+            # 仅误码/PCIe 类别，不含丢包
+            by_cat = details.get('by_category', {})
+            if level in ('warning', 'error', 'critical') and (
+                by_cat.get('error_code', 0) > 0 or by_cat.get('pcie', 0) > 0
+            ):
+                issues.append({
+                    'key': 'error_code',
+                    'observer': 'error_code',
+                    'level': level,
+                    'title': _OBSERVER_TITLES['error_code'],
+                    'message': message[:200],
+                    'details': details,
+                    'alert_id': alert_id,
+                    'since': ts,
+                    'latest': ts,
+                })
 
     return issues
 
@@ -1183,6 +1233,16 @@ async def get_array_status(
 
     # Populate recent alert summary (last 2 hours) for health classification
     status_obj.recent_alert_summary = await _compute_recent_alert_summary(db, array_id)
+
+    # Populate tag info for detail page
+    from ..models.tag import TagModel
+    status_obj.tag_id = array.tag_id
+    if array.tag_id:
+        tag_result = await db.execute(select(TagModel).where(TagModel.id == array.tag_id))
+        tag = tag_result.scalar_one_or_none()
+        if tag:
+            status_obj.tag_name = tag.name
+            status_obj.tag_color = tag.color
     
     return status_obj
 

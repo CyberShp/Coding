@@ -136,6 +136,8 @@ export default {
     ack_type: opts.ack_type || 'dismiss',
     ...(opts.expires_hours ? { expires_hours: opts.expires_hours } : {}),
   }),
+  ackAllVisible: (hours = 2, ackType = 'dismiss') =>
+    http.post('/alerts/ack-all-visible', null, { params: { hours, ack_type: ackType } }),
   unackAlert: (alertId) => http.delete(`/alerts/ack/${alertId}`),
   getAlertAckDetails: (alertId) => http.get(`/alerts/${alertId}/ack`),
 

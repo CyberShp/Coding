@@ -241,9 +241,9 @@ function openAlertDrawer(alert) {
   drawerVisible.value = true
 }
 
-async function handleAck({ alertIds }) {
+async function handleAck({ alertIds, ackType = 'dismiss' }) {
   try {
-    await api.ackAlerts(alertIds)
+    await api.ackAlerts(alertIds, '', { ack_type: ackType })
     ElMessage.success('已确认')
     // Mark in-memory alerts as acked
     alertStore.recentAlerts.forEach(a => {

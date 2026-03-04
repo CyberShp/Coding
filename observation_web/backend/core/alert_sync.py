@@ -42,8 +42,18 @@ async def _sync_one_array(array_id: str, semaphore: asyncio.Semaphore) -> Tuple[
                 await db.commit()
                 return (array_id, count)
         except Exception as e:
-            logger.warning(f"Alert sync failed for {array_id}: {e}")
-            sys_warning("alert_sync", f"Sync failed for {array_id}", {"error": str(e)})
+            err_str = str(e)
+            if "no such table" in err_str.lower():
+                logger.error(f"Alert sync failed for {array_id}: missing table - {e}")
+                sys_error(
+                    "alert_sync",
+                    f"DB table missing for {array_id}, run create_tables",
+                    {"error": err_str},
+                    exception=e,
+                )
+            else:
+                logger.warning(f"Alert sync failed for {array_id}: {e}")
+                sys_warning("alert_sync", f"Sync failed for {array_id}", {"error": err_str})
             return (array_id, None)
 
 

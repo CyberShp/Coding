@@ -10,9 +10,17 @@
           <span class="fold-obs">{{ getObserverLabel(group.items[0].observer_name) }}</span>
           <span class="fold-msg">{{ getSummary(group.items[0]) }}</span>
           <el-tag v-if="group.items[0].is_acked" type="success" size="small" effect="plain" class="ack-badge">已确认</el-tag>
-          <el-button v-else size="small" text type="success" class="ack-btn" @click.stop="handleAckSingle(group.items[0])">
-            <el-icon><Check /></el-icon>确认
-          </el-button>
+          <el-dropdown v-else trigger="click" @command="(cmd) => handleAckSingle(group.items[0], cmd)">
+            <el-button size="small" text type="success" class="ack-btn">
+              <el-icon><Check /></el-icon>确认<el-icon class="el-icon--right"><ArrowDown /></el-icon>
+            </el-button>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item command="confirmed_ok">确认无问题</el-dropdown-item>
+                <el-dropdown-item command="dismiss">忽略 24 小时</el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
           <el-icon class="row-arrow"><ArrowRight /></el-icon>
         </div>
       </div>
@@ -28,9 +36,17 @@
             &times; {{ group.count }}
           </el-tag>
           <el-tag v-if="isGroupAllAcked(group)" type="success" size="small" effect="plain" class="ack-badge">全部已确认</el-tag>
-          <el-button v-else size="small" text type="success" class="ack-btn" @click.stop="handleAckGroup(group)">
-            <el-icon><Check /></el-icon>确认全组
-          </el-button>
+          <el-dropdown v-else trigger="click" @command="(cmd) => handleAckGroup(group, cmd)">
+            <el-button size="small" text type="success" class="ack-btn" @click.stop>
+              <el-icon><Check /></el-icon>确认全组<el-icon class="el-icon--right"><ArrowDown /></el-icon>
+            </el-button>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item command="confirmed_ok">全部确认无问题</el-dropdown-item>
+                <el-dropdown-item command="dismiss">全部忽略 24 小时</el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
           <el-icon class="fold-arrow" :class="{ rotated: group.expanded }"><ArrowRight /></el-icon>
         </div>
         <!-- Expanded children -->
@@ -47,9 +63,17 @@
               <el-tag :type="getLevelType(item.level)" size="small">{{ getLevelText(item.level) }}</el-tag>
               <span class="fold-msg">{{ getSummary(item) }}</span>
               <el-tag v-if="item.is_acked" type="success" size="small" effect="plain" class="ack-badge">已确认</el-tag>
-              <el-button v-else size="small" text type="success" class="ack-btn" @click.stop="handleAckSingle(item)">
-                <el-icon><Check /></el-icon>确认
-              </el-button>
+              <el-dropdown v-else trigger="click" @command="(cmd) => handleAckSingle(item, cmd)">
+                <el-button size="small" text type="success" class="ack-btn" @click.stop>
+                  <el-icon><Check /></el-icon>确认<el-icon class="el-icon--right"><ArrowDown /></el-icon>
+                </el-button>
+                <template #dropdown>
+                  <el-dropdown-menu>
+                    <el-dropdown-item command="confirmed_ok">确认无问题</el-dropdown-item>
+                    <el-dropdown-item command="dismiss">忽略 24 小时</el-dropdown-item>
+                  </el-dropdown-menu>
+                </template>
+              </el-dropdown>
               <el-icon class="row-arrow"><ArrowRight /></el-icon>
             </div>
           </div>
@@ -61,7 +85,7 @@
 </template>
 
 <script setup>
-import { ArrowRight, Check } from '@element-plus/icons-vue'
+import { ArrowRight, ArrowDown, Check } from '@element-plus/icons-vue'
 import { translateAlert, getObserverName, LEVEL_LABELS, LEVEL_TAG_TYPES } from '@/utils/alertTranslator'
 import { useAlertFolding } from '@/composables/useAlertFolding'
 import { toRef } from 'vue'
@@ -89,16 +113,16 @@ function handleChildClick(item) {
   emit('select', item)
 }
 
-function handleAckSingle(item) {
+function handleAckSingle(item, ackType = 'dismiss') {
   if (item.id) {
-    emit('ack', { alertIds: [item.id] })
+    emit('ack', { alertIds: [item.id], ackType })
   }
 }
 
-function handleAckGroup(group) {
+function handleAckGroup(group, ackType = 'dismiss') {
   const ids = group.items.filter(i => i.id && !i.is_acked).map(i => i.id)
   if (ids.length) {
-    emit('ack', { alertIds: ids })
+    emit('ack', { alertIds: ids, ackType })
   }
 }
 

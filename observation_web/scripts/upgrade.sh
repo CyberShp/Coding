@@ -72,7 +72,13 @@ TMP_EXTRACT=$(mktemp -d)
 tar xzf "$PACK_FILE" -C "$TMP_EXTRACT"
 SRC=$(ls -d "$TMP_EXTRACT"/observation_web_v* 2>/dev/null | head -1)
 if [ -z "$SRC" ]; then
-    SRC="$TMP_EXTRACT/$(ls "$TMP_EXTRACT" | head -1)"
+    SRC="$TMP_EXTRACT/$(ls "$TMP_EXTRACT" 2>/dev/null | head -1)"
+fi
+
+if [ ! -d "$SRC" ] || [ ! -d "$SRC/backend" ]; then
+    echo -e "${RED}升级包内容无效，未找到源目录或 backend${NC}"
+    rm -rf "$TMP_EXTRACT"
+    exit 1
 fi
 
 echo -e "${YELLOW}替换代码...${NC}"
@@ -81,8 +87,8 @@ cp -r "$SRC"/agent "$INSTALL_DIR/"
 mkdir -p "$INSTALL_DIR/frontend"
 cp -r "$SRC"/frontend/dist "$INSTALL_DIR/frontend/"
 cp -r "$SRC"/scripts "$INSTALL_DIR/"
-cp "$SRC"/requirements.txt "$INSTALL_DIR/"
-cp "$SRC"/start.sh "$INSTALL_DIR/"
+[ -f "$SRC/requirements.txt" ] && cp "$SRC/requirements.txt" "$INSTALL_DIR/" || true
+[ -f "$SRC/start.sh" ] && cp "$SRC/start.sh" "$INSTALL_DIR/" || true
 [ -f "$SRC/config.json.example" ] && cp "$SRC/config.json.example" "$INSTALL_DIR/" || true
 
 # Preserve config and db

@@ -16,6 +16,10 @@ export const useAlertStore = defineStore('alerts', () => {
   // Critical event banner state
   const criticalEvents = ref([])  // unacknowledged critical events
 
+  // Suppressed observers: after "acknowledge all", new alerts from these observers
+  // are auto-suppressed for 24h (no banner, no notification, no sound)
+  const suppressedObservers = ref(new Map())  // observer_name -> expiryTimestamp
+
   // WebSocket reconnection state
   let heartbeatTimer = null
   let reconnectTimer = null
@@ -31,6 +35,18 @@ export const useAlertStore = defineStore('alerts', () => {
   })
 
   const hasCriticalEvents = computed(() => criticalEvents.value.length > 0)
+
+  // Suppressed list for UI: [{ observer, expiresAt }]
+  const suppressedList = computed(() => {
+    const now = Date.now()
+    const list = []
+    for (const [obs, expiry] of suppressedObservers.value.entries()) {
+      if (expiry > now) {
+        list.push({ observer: obs, expiresAt: expiry })
+      }
+    }
+    return list.sort((a, b) => a.expiresAt - b.expiresAt)
+  })
 
   // Actions
   async function fetchAlerts(params = {}) {
@@ -67,7 +83,40 @@ export const useAlertStore = defineStore('alerts', () => {
   }
 
   function acknowledgeAllCritical() {
+    const now = Date.now()
+    const expiryMs = 24 * 60 * 60 * 1000
+    const newSuppressed = new Map(suppressedObservers.value)
+    for (const e of criticalEvents.value) {
+      const obs = e.observer_name || 'unknown'
+      newSuppressed.set(obs, now + expiryMs)
+    }
+    suppressedObservers.value = newSuppressed
     criticalEvents.value = []
+  }
+
+  function clearSuppression(observerName) {
+    const m = new Map(suppressedObservers.value)
+    m.delete(observerName)
+    suppressedObservers.value = m
+  }
+
+  function clearAllSuppressions() {
+    suppressedObservers.value = new Map()
+  }
+
+  function _cleanupExpiredSuppressions() {
+    const now = Date.now()
+    const m = suppressedObservers.value
+    let changed = false
+    for (const [obs, expiry] of m.entries()) {
+      if (expiry <= now) {
+        m.delete(obs)
+        changed = true
+      }
+    }
+    if (changed) {
+      suppressedObservers.value = new Map(m)
+    }
   }
 
   function handleNewAlert(data) {
@@ -79,18 +128,23 @@ export const useAlertStore = defineStore('alerts', () => {
 
     // Check if critical
     if (isCriticalAlert(data)) {
+      _cleanupExpiredSuppressions()
+      const obs = data.observer_name || 'unknown'
+      const expiry = suppressedObservers.value.get(obs)
+      const now = Date.now()
+      if (expiry && now < expiry) {
+        // Suppressed: skip banner, notification, sound
+        return
+      }
+
       criticalEvents.value.unshift(data)
-      // Keep max 50 critical events
       if (criticalEvents.value.length > 50) {
         criticalEvents.value = criticalEvents.value.slice(0, 50)
       }
 
-      // Desktop notification
       const title = `关键事件：${data.observer_name || '未知'}`
       const body = (data.message || '').substring(0, 120)
       sendDesktopNotification(title, body, { tag: `critical-${data.id || Date.now()}` })
-
-      // Sound
       playAlertSound()
     }
   }
@@ -204,5 +258,9 @@ export const useAlertStore = defineStore('alerts', () => {
     disconnectWebSocket,
     acknowledgeCritical,
     acknowledgeAllCritical,
+    clearSuppression,
+    clearAllSuppressions,
+    suppressedObservers,
+    suppressedList,
   }
 })
