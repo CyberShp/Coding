@@ -54,6 +54,17 @@ class AdminConfig:
 
 
 @dataclass
+class AIConfig:
+    """AI service configuration for alert interpretation"""
+    enabled: bool = False
+    api_url: str = "http://localhost:11434/v1/chat/completions"
+    api_key: str = ""
+    model: str = "llama3"
+    timeout: int = 15
+    max_tokens: int = 800
+
+
+@dataclass
 class AppConfig:
     """Application configuration"""
     server: ServerConfig = field(default_factory=ServerConfig)
@@ -61,7 +72,8 @@ class AppConfig:
     database: DatabaseConfig = field(default_factory=DatabaseConfig)
     remote: RemoteConfig = field(default_factory=RemoteConfig)
     admin: AdminConfig = field(default_factory=AdminConfig)
-    
+    ai: AIConfig = field(default_factory=AIConfig)
+
     @classmethod
     def load(cls, config_path: Optional[Path] = None) -> 'AppConfig':
         """Load configuration from file"""
@@ -96,7 +108,16 @@ class AppConfig:
                         remote_data = dict(remote_data)
                         remote_data['agent_log_path'] = remote_data.pop('log_path')
                     config.remote = RemoteConfig(**remote_data)
-                    
+                if 'ai' in data:
+                    ai_data = data['ai']
+                    config.ai = AIConfig(
+                        enabled=ai_data.get('enabled', False),
+                        api_url=ai_data.get('api_url', 'http://localhost:11434/v1/chat/completions'),
+                        api_key=ai_data.get('api_key', ''),
+                        model=ai_data.get('model', 'llama3'),
+                        timeout=ai_data.get('timeout', 15),
+                        max_tokens=ai_data.get('max_tokens', 800),
+                    )
             except Exception as e:
                 print(f"Warning: Failed to load config: {e}")
         
@@ -134,6 +155,14 @@ class AppConfig:
                 'upload_staging_path': self.remote.upload_staging_path,
                 'auto_redeploy': self.remote.auto_redeploy,
                 'ingest_url': getattr(self.remote, 'ingest_url', ''),
+            },
+            'ai': {
+                'enabled': self.ai.enabled,
+                'api_url': self.ai.api_url,
+                'api_key': self.ai.api_key,
+                'model': self.ai.model,
+                'timeout': self.ai.timeout,
+                'max_tokens': self.ai.max_tokens,
             },
         }
         

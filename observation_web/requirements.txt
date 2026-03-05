@@ -26,3 +26,6 @@ dataclasses;python_version<"3.7"
 
 # CORS support
 python-multipart>=0.0.5
+
+# HTTP client for AI API
+httpx>=0.24.0

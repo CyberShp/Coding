@@ -236,4 +236,13 @@ export default {
   getAuditLogs: (params) => http.get('/audit', { params }),
   getAuditStats: () => http.get('/audit/stats'),
   cleanupAuditLogs: (retentionDays = 30) => http.delete('/audit/cleanup', { params: { retention_days: retentionDays } }),
+
+  // AI (alert interpretation)
+  checkAIStatus: () => http.get('/ai/status'),
+  getAIInterpretation: (alertId) => http.post('/ai/interpret-alert', { alert_id: alertId }),
+
+  // AI (admin config)
+  getAIConfig: () => http.get('/ai/config'),
+  updateAIConfig: (data) => http.put('/ai/config', data),
+  getAIModels: () => http.get('/ai/models'),
 }

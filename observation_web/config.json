@@ -25,6 +25,15 @@
     "agent_log_path": "/var/log/observation-points/alerts.log",
     "python_cmd": "python3",
     "upload_staging_path": "/home/permitdir",
-    "auto_redeploy": true
+    "auto_redeploy": true,
+    "ingest_url": ""
+  },
+  "ai": {
+    "enabled": false,
+    "api_url": "http://localhost:11434/v1/chat/completions",
+    "api_key": "",
+    "model": "llama3",
+    "timeout": 15,
+    "max_tokens": 800
   }
 }

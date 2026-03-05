@@ -25,5 +25,13 @@
     "upload_staging_path": "/home/permitdir",
     "auto_redeploy": true,
     "ingest_url": ""
+  },
+  "ai": {
+    "enabled": false,
+    "api_url": "http://your-ai-server/v1/chat/completions",
+    "api_key": "",
+    "model": "your-model-name",
+    "timeout": 15,
+    "max_tokens": 800
   }
 }

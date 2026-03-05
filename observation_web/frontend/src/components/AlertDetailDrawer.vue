@@ -42,6 +42,36 @@
         </div>
       </el-card>
 
+      <!-- AI 智能解读 -->
+      <el-card v-if="aiAvailable" shadow="never" class="drawer-section ai-section">
+        <template #header>
+          <div class="section-header">
+            <el-icon><MagicStick /></el-icon>
+            <span>AI 智能解读</span>
+            <el-tag v-if="aiInterpretation && aiCached" type="info" size="small" effect="plain">已缓存</el-tag>
+          </div>
+        </template>
+        <div v-if="aiLoading" class="ai-loading">
+          <el-icon class="is-loading"><Loading /></el-icon>
+          <span>AI 正在解读告警...</span>
+        </div>
+        <div v-else-if="aiError" class="ai-error">
+          <el-alert type="warning" :title="aiError" show-icon />
+          <el-button type="primary" plain size="small" style="margin-top:8px" @click="fetchAIInterpretation">
+            重试
+          </el-button>
+        </div>
+        <div v-else-if="aiInterpretation" class="ai-content">
+          <div class="ai-text">{{ aiInterpretation }}</div>
+        </div>
+        <div v-else class="ai-trigger">
+          <el-button type="primary" :loading="aiLoading" @click="fetchAIInterpretation">
+            <el-icon><MagicStick /></el-icon>
+            获取 AI 解读
+          </el-button>
+        </div>
+      </el-card>
+
       <!-- alarm_type 结构化信息 -->
       <el-card v-if="isAlarmType && translated.parsed" shadow="never" class="drawer-section">
         <template #header>
@@ -280,7 +310,7 @@
 
 <script setup>
 import { ref, computed, watch } from 'vue'
-import { Warning, Clock, Monitor, InfoFilled, List, Document, DocumentCopy, More, ArrowRight, CircleCheck, Check, Loading } from '@element-plus/icons-vue'
+import { Warning, Clock, Monitor, InfoFilled, List, Document, DocumentCopy, More, ArrowRight, CircleCheck, Check, Loading, MagicStick } from '@element-plus/icons-vue'
 import { translateAlert, getObserverName, LEVEL_LABELS, LEVEL_TAG_TYPES } from '@/utils/alertTranslator'
 import { ElMessage } from 'element-plus'
 import api from '@/api'
@@ -299,6 +329,13 @@ const visible = computed({
 
 const showOriginal = ref(false)
 const showDetails = ref(false)
+
+// AI interpretation state
+const aiAvailable = ref(false)
+const aiLoading = ref(false)
+const aiError = ref('')
+const aiInterpretation = ref('')
+const aiCached = ref(false)
 
 // Acknowledgement state
 const ackInfo = ref(null)
@@ -347,11 +384,47 @@ watch(
   async ([open, alertId]) => {
     ackInfo.value = null
     ackComment.value = ''
+    aiInterpretation.value = ''
+    aiCached.value = false
+    aiError.value = ''
     if (!open || !alertId) return
     await loadAckDetails(alertId)
+    await checkAIAndMaybeFetch(open, alertId)
   },
   { immediate: true },
 )
+
+async function checkAIAndMaybeFetch(open, alertId) {
+  if (!open || !alertId) return
+  aiAvailable.value = false
+  try {
+    const { data } = await api.checkAIStatus()
+    if (data?.available) {
+      aiAvailable.value = true
+      await fetchAIInterpretation()
+    }
+  } catch {
+    aiAvailable.value = false
+  }
+}
+
+async function fetchAIInterpretation() {
+  const alertId = props.alert?.id
+  if (!alertId) return
+  aiLoading.value = true
+  aiError.value = ''
+  try {
+    const { data } = await api.getAIInterpretation(alertId)
+    aiInterpretation.value = data.interpretation || ''
+    aiCached.value = data.cached || false
+  } catch (e) {
+    const msg = e.response?.data?.detail || e.message || 'AI 解读暂不可用'
+    aiError.value = typeof msg === 'string' ? msg : JSON.stringify(msg)
+    aiInterpretation.value = ''
+  } finally {
+    aiLoading.value = false
+  }
+}
 
 async function loadAckDetails(alertId) {
   ackLoading.value = true
@@ -545,6 +618,32 @@ function handleClose(done) { done() }
   border-radius: 4px; font-size: 12px; white-space: pre-wrap;
   word-break: break-word; max-height: 300px; overflow-y: auto;
   font-family: monospace;
+}
+
+/* AI section */
+.ai-section :deep(.el-card__body) {
+  padding: 12px 16px;
+}
+.ai-loading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--el-text-color-secondary);
+  font-size: 14px;
+}
+.ai-error {
+  font-size: 13px;
+}
+.ai-content {
+  font-size: 14px;
+  line-height: 1.7;
+}
+.ai-text {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.ai-trigger {
+  padding: 8px 0;
 }
 
 /* Ack section */

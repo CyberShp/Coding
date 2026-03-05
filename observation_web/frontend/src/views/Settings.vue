@@ -86,6 +86,76 @@
         </el-card>
       </el-tab-pane>
 
+      <!-- AI Settings (admin only) -->
+      <el-tab-pane v-if="authStore.isAdmin" label="AI 设置" name="ai">
+        <el-card>
+          <template #header>
+            <div class="ai-header">
+              <span>AI 智能解读配置</span>
+              <el-tag :type="aiConfig.enabled ? 'success' : 'info'" size="small" effect="dark">
+                {{ aiConfig.enabled ? '已启用' : '未启用' }}
+              </el-tag>
+            </div>
+          </template>
+          <el-form label-width="140px" :model="aiConfig">
+            <el-form-item label="启用 AI">
+              <el-switch v-model="aiConfig.enabled" />
+              <span class="form-help">开启后，告警详情中可使用 AI 智能解读功能</span>
+            </el-form-item>
+            <el-form-item label="API 地址">
+              <el-input
+                v-model="aiConfig.api_url"
+                placeholder="http://192.168.1.100:11434/v1/chat/completions"
+                clearable
+              >
+                <template #append>
+                  <el-button :loading="fetchingModels" @click="fetchModels">
+                    获取模型
+                  </el-button>
+                </template>
+              </el-input>
+              <span class="form-help">兼容 OpenAI 接口格式的 API 地址</span>
+            </el-form-item>
+            <el-form-item label="API Key">
+              <el-input
+                v-model="aiConfig.api_key"
+                placeholder="留空表示不需要认证"
+                show-password
+                clearable
+              />
+            </el-form-item>
+            <el-form-item label="模型">
+              <el-select
+                v-model="aiConfig.model"
+                filterable
+                allow-create
+                placeholder="选择或输入模型名称"
+                style="width: 100%"
+                :loading="fetchingModels"
+              >
+                <el-option
+                  v-for="m in availableModels"
+                  :key="m.id"
+                  :label="m.name"
+                  :value="m.id"
+                />
+              </el-select>
+              <span class="form-help">可输入 API 地址后点击「获取模型」自动加载可用模型</span>
+            </el-form-item>
+            <el-form-item label="超时时间">
+              <el-input-number v-model="aiConfig.timeout" :min="5" :max="120" /> 秒
+            </el-form-item>
+            <el-form-item label="最大输出长度">
+              <el-input-number v-model="aiConfig.max_tokens" :min="100" :max="4096" :step="100" /> tokens
+            </el-form-item>
+            <el-form-item>
+              <el-button type="primary" :loading="savingAI" @click="saveAIConfig">保存配置</el-button>
+              <el-button :loading="testingAI" @click="testAIConnection">测试连接</el-button>
+            </el-form-item>
+          </el-form>
+        </el-card>
+      </el-tab-pane>
+
       <!-- About -->
       <el-tab-pane label="关于" name="about">
         <el-card>
@@ -161,6 +231,101 @@ async function cleanupAlerts() {
     ElMessage.error('清理失败')
   }
 }
+
+// ---- AI Settings (admin only) ----
+const aiConfig = reactive({
+  enabled: false,
+  api_url: '',
+  api_key: '',
+  model: '',
+  timeout: 15,
+  max_tokens: 800,
+})
+const availableModels = ref([])
+const fetchingModels = ref(false)
+const savingAI = ref(false)
+const testingAI = ref(false)
+
+async function loadAIConfig() {
+  if (!authStore.isAdmin) return
+  try {
+    const { data } = await api.getAIConfig()
+    Object.assign(aiConfig, data)
+  } catch {
+    // Not admin or config not available — ignore
+  }
+}
+
+async function fetchModels() {
+  if (!aiConfig.api_url) {
+    ElMessage.warning('请先填写 API 地址')
+    return
+  }
+  fetchingModels.value = true
+  try {
+    // Save current url/key first so backend uses latest values
+    await api.updateAIConfig({ api_url: aiConfig.api_url, api_key: aiConfig.api_key })
+    const { data } = await api.getAIModels()
+    availableModels.value = data || []
+    if (data.length > 0) {
+      ElMessage.success(`获取到 ${data.length} 个可用模型`)
+    } else {
+      ElMessage.info('API 返回了空的模型列表')
+    }
+  } catch (e) {
+    const detail = e.response?.data?.detail || e.message
+    ElMessage.error('获取模型失败: ' + detail)
+    availableModels.value = []
+  } finally {
+    fetchingModels.value = false
+  }
+}
+
+async function saveAIConfig() {
+  savingAI.value = true
+  try {
+    const { data } = await api.updateAIConfig({
+      enabled: aiConfig.enabled,
+      api_url: aiConfig.api_url,
+      api_key: aiConfig.api_key,
+      model: aiConfig.model,
+      timeout: aiConfig.timeout,
+      max_tokens: aiConfig.max_tokens,
+    })
+    Object.assign(aiConfig, data)
+    ElMessage.success('AI 配置已保存')
+  } catch (e) {
+    ElMessage.error('保存失败: ' + (e.response?.data?.detail || e.message))
+  } finally {
+    savingAI.value = false
+  }
+}
+
+async function testAIConnection() {
+  if (!aiConfig.api_url) {
+    ElMessage.warning('请先填写 API 地址')
+    return
+  }
+  testingAI.value = true
+  try {
+    // Save first, then try fetching models as a connectivity test
+    await api.updateAIConfig({ api_url: aiConfig.api_url, api_key: aiConfig.api_key })
+    const { data } = await api.getAIModels()
+    if (data && data.length >= 0) {
+      ElMessage.success(`连接成功！发现 ${data.length} 个可用模型`)
+      availableModels.value = data
+    }
+  } catch (e) {
+    const detail = e.response?.data?.detail || e.message
+    ElMessage.error('连接测试失败: ' + detail)
+  } finally {
+    testingAI.value = false
+  }
+}
+
+onMounted(() => {
+  loadAIConfig()
+})
 </script>
 
 <style scoped>
@@ -218,5 +383,11 @@ async function cleanupAlerts() {
 
 .about-content li {
   margin: 4px 0;
+}
+
+.ai-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
 }
 </style>
