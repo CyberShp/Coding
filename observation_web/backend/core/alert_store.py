@@ -53,10 +53,10 @@ class AlertStore:
         self,
         db: AsyncSession,
         alerts: List[AlertCreate],
-    ) -> int:
-        """Create multiple alerts in batch"""
+    ) -> tuple[int, List["AlertModel"]]:
+        """Create multiple alerts in batch. Returns (count, created_alert_models)."""
         if not alerts:
-            return 0
+            return 0, []
         
         db_alerts = [
             AlertModel(
@@ -71,9 +71,10 @@ class AlertStore:
         ]
         
         db.add_all(db_alerts)
+        await db.flush()  # Assign IDs before commit
         await db.commit()
         
-        return len(db_alerts)
+        return len(db_alerts), db_alerts
     
     async def get_alerts(
         self,

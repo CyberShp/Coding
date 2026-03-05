@@ -1,8 +1,8 @@
 # 存储阵列观察点监控系统 — 用户手册
 
-> **版本**：4.0.0  
+> **版本**：4.1.0  
 > **适用人群**：存储测试工程师、自动化测试平台维护人员  
-> **最后更新**：2026-03-03
+> **最后更新**：2026-03-05
 
 ---
 
@@ -30,6 +30,8 @@
    - 4.16 [管理员登录](#416-管理员登录)
    - 4.17 [建议反馈](#417-建议反馈)
    - 4.18 [昵称身份系统](#418-昵称身份系统)
+   - 4.19 [告警管理（Admin）](#419-告警管理admin)
+   - 4.20 [批量告警确认](#420-批量告警确认)
 5. [观察点（Observer）完整列表](#5-观察点observer完整列表)
    - 5.1 [端口级观察点](#51-端口级观察点)
    - 5.2 [卡件级观察点](#52-卡件级观察点)
@@ -39,6 +41,7 @@
    - 6.2 [告警三段式可读性](#62-告警三段式可读性)
    - 6.3 [告警聚合与风暴抑制](#63-告警聚合与风暴抑制)
    - 6.4 [告警智能折叠](#64-告警智能折叠)
+   - 6.5 [批量确认](#65-批量确认)
 7. [配置参考](#7-配置参考)
    - 7.1 [Web 端配置](#71-web-端配置)
    - 7.2 [Agent 端配置](#72-agent-端配置)
@@ -264,12 +267,12 @@ python -m uvicorn backend.main:app --host 0.0.0.0 --port 9999
 - **阵列详情页**：
   - 基本信息（连接状态、Agent 状态）
   - **活跃告警与异常面板**（仅显示当前未解决的问题，支持确认消除）
-  - 最近告警（智能折叠、确认按钮、详情抽屉）
+  - 最近告警（智能折叠、确认按钮、详情抽屉、**多选批量确认**）
   - 性能监控（CPU/内存实时曲线）
   - 端口流量监控（TX/RX 带宽曲线，实时自动刷新）
-  - 事件时间线（跨观察点时间轴视图）
+  - 事件时间线（跨观察点时间轴视图，**支持按分类筛选**）
   - 状态快照与对比
-  - Agent 控制面板（部署/启动/停止/重启/配置修改）
+  - Agent 控制面板（部署/启动/停止/重启/配置修改，**所有操作异步非阻塞**）
 
 **连接保持机制**：
 - SSH keepalive 间隔：30 秒
@@ -537,6 +540,72 @@ python -m uvicorn backend.main:app --host 0.0.0.0 --port 9999
 
 **IP 变化恢复**：当用户 IP 变化（如换网络）后，可通过「认领昵称」恢复身份，系统自动迁移旧 IP 的会话数据、阵列锁定等到新 IP
 
+### 4.19 告警管理（Admin）
+
+**路径**：`/admin/monitors`（需管理员登录）
+
+统一管理所有内置观察点和自定义监控模板：
+
+**页面布局**：
+
+- **统一列表**：`el-table` 将 23 个内置观察点和自定义模板合并展示，每行包含名称、分类标签、类型（内置/自定义）、告警级别、检查间隔、开关
+- **分类筛选**：顶部 Radio 按钮组可按"全部 / 端口级 / 卡件级 / 系统级 / 自定义"快速过滤
+- **搜索**：按名称或观察点名模糊搜索
+- **已禁用行半透明**：关闭开关后行变为 50% 透明，视觉区分
+
+**内置观察点操作**：
+
+| 操作 | 说明 |
+|------|------|
+| 开关 | 行内 `el-switch`，调用 `PUT /api/admin/observer-configs/{name}` 保存覆盖配置 |
+| 配置 | 点击行或「配置」按钮打开抽屉，可修改启用状态和检查间隔 |
+| 生效方式 | 修改保存在数据库 `observer_configs` 表，下次部署 Agent 时自动合并到 `config.json` |
+
+**自定义模板操作**：
+
+| 操作 | 说明 |
+|------|------|
+| 新建 | 右上角「新建自定义模板」按钮打开抽屉表单 |
+| 编辑 | 点击行或「编辑」按钮打开完整编辑表单 |
+| 删除 | 「删除」按钮，二次确认后删除 |
+| 下发 | 「下发」按钮打开对话框，选择目标阵列/标签后推送到 Agent 的 `config.json` 并重启 |
+| 开关 | 行内 `el-switch`，调用 `PUT /api/admin/monitor-templates/{id}` |
+
+**自定义模板字段**：
+
+| 字段 | 说明 |
+|------|------|
+| 名称 / 描述 | 模板标识 |
+| 分类 | 端口级 / 卡件级 / 系统级 / 自定义 |
+| 命令 | 在阵列上执行的 shell 或 curl 命令 |
+| 执行间隔 / 超时 | 秒 |
+| 匹配类型 | 正则 / JSONPath / 包含 / 退出码 |
+| 匹配表达式 / 匹配条件 | 告警触发规则（found / not_found / gt / lt / eq / ne） |
+| 阈值 | 当匹配条件为 gt/lt/eq/ne 时使用 |
+| 告警级别 | info / warning / error / critical |
+| 消息模板 | 支持 `{value}` `{command}` `{match}` 占位符 |
+| 冷却时间 | 相同告警抑制间隔 |
+
+**下发机制**：
+
+1. 选择目标类型（按标签或按阵列）和目标 ID
+2. 后端通过 SSH 读取阵列当前 `config.json`
+3. 将自定义模板写入 `custom_monitors` 数组
+4. 将内置观察点覆盖配置（`observer_configs`）合并到 `observers` 对象
+5. base64 编码写入、重启 Agent
+
+### 4.20 批量告警确认
+
+**位置**：告警中心、仪表盘实时告警流、阵列详情最近告警
+
+告警列表现在支持多选批量确认操作：
+
+- **勾选框**：每条告警左侧的复选框，支持逐条或全选
+- **批量操作栏**：选中告警后底部浮出操作栏，显示已选数量和「批量确认」按钮
+- **折叠组全选**：展开折叠组后可勾选组内个别或全部告警
+- **确认全组**：折叠组头部的「确认全组」按钮可一键确认组内所有未确认告警
+- **API**：调用 `POST /api/alerts/batch-ack`，传入 `alert_ids` 数组和可选 `note` 备注
+
 ---
 
 ## 5. 观察点（Observer）完整列表
@@ -654,7 +723,14 @@ No002  HealthState: FAULT
 
 #### abnormal_reset（异常复位）
 
-执行 `os_cli "cat ./log_reset.txt"` 获取复位日志，解析 reason 和 time。匹配异常关键字（watchDog reset、oops reset、unknown reset、oom reset、panic reset、kernel reset、mce reset、bios reset、software unknown reset、failure recovery reset）则上报告警，记录已上报时间戳避免重复。
+通过**两阶段交互式命令**获取复位日志：
+
+1. **阶段一**：执行 `os_cli` 命令，等待回显中出现 `succeed` 或 `success` 关键字（默认 10 秒超时），表示进入 os_cli 交互环境
+2. **阶段二**：向 stdin 写入 `cat ./log_reset.txt`，然后写入 `exit` 退出 os_cli
+
+> 这是一个两阶段交互式命令（`subprocess.Popen` + stdin 管道），而非普通的一步 `subprocess.run`。配置中的 `os_cli_cmd` 对应阶段一命令，`inner_cmd` 对应阶段二命令，`ready_keyword` 配置等待关键字，`ready_timeout` 配置等待超时。
+
+解析获取的复位日志中的 reason 和 time 字段。匹配异常关键字（watchDog reset、oops reset、unknown reset、oom reset、panic reset、kernel reset、mce reset、bios reset、software unknown reset、failure recovery reset）则上报告警，记录已上报时间戳避免重复。
 
 ---
 
@@ -726,6 +802,23 @@ No002  HealthState: FAULT
 - 点击可展开查看组内所有告警
 - "确认全组"按钮可批量确认
 - 全部已确认的组显示"全部已确认"标签
+
+### 6.5 批量确认
+
+除了逐条确认和"确认全组"，告警列表现支持**跨组多选批量确认**：
+
+1. 列表中每条告警左侧增加**复选框**
+2. 勾选多条后，底部浮出批量操作栏：显示已选数量和「批量确认」按钮
+3. 一次请求将所有选中告警标记为已确认
+
+API：`POST /api/alerts/batch-ack`
+
+```json
+{
+  "alert_ids": [1, 2, 3],
+  "note": "线缆拔插测试预期告警"
+}
+```
 
 ---
 
@@ -887,12 +980,49 @@ No002  HealthState: FAULT
     "abnormal_reset": {
       "enabled": true,
       "interval": 120,
-      "command": "os_cli \"cat ./log_reset.txt\"",
+      "os_cli_cmd": "os_cli",
+      "inner_cmd": "cat ./log_reset.txt",
+      "ready_timeout": 10,
+      "ready_keyword": "succeed",
       "abnormal_reasons": ["watchDog reset", "oops reset", "unknown reset", "oom reset", "panic reset", "kernel reset", "mce reset", "bios reset", "software unknown reset", "failure recovery reset"]
     }
   }
 }
 ```
+
+### 7.3 内置观察点覆盖配置
+
+内置观察点的默认行为由 Agent 代码和 `config.json` 硬编码。v4.1.0 引入**覆盖配置**机制，允许管理员通过 Web 界面修改内置观察点的启用状态和检查间隔，无需手动编辑阵列上的 `config.json`。
+
+**数据流**：
+
+```
+Web 管理页面 → PUT /api/admin/observer-configs/{name}
+                    ↓
+              observer_configs 表（DB）
+                    ↓
+         部署 Agent / 下发模板时
+                    ↓
+         读取覆盖配置 → 合并到 config.json → SSH 写入阵列
+```
+
+**API**：
+
+| 接口 | 方法 | 说明 |
+|------|------|------|
+| `/api/admin/observer-configs` | GET | 获取所有覆盖配置 |
+| `/api/admin/observer-configs/{name}` | PUT | 更新指定观察点的覆盖配置 |
+
+**PUT 请求体示例**：
+
+```json
+{
+  "enabled": false,
+  "interval": 60
+}
+```
+
+**合并规则**：覆盖配置的字段会直接覆盖 `config.json` 中对应观察点的同名字段。未设置的字段保持原值。
 
 ---
 
@@ -915,7 +1045,7 @@ No002  HealthState: FAULT
 | 加载告警列表 | < 1 秒 | 数据量、筛选条件 |
 | 同步流量数据 | 1-3 秒 | 流量数据文件大小 |
 | 拍摄快照 | < 1 秒 | 数据库查询 |
-| 部署 Agent | 5-15 秒 | SSH 传输速度 |
+| 部署 Agent | 5-15 秒 | SSH 传输速度（异步非阻塞，不影响其他操作） |
 
 ### 8.3 超过推荐规模的影响
 
@@ -1093,6 +1223,8 @@ No002  HealthState: FAULT
 | **昵称身份** | 用户以昵称为主标识，IP 为辅助；IP 变化后可认领昵称恢复身份 |
 | **管理员登录** | 权限提升入口，用于 Issue 状态变更、系统设置等管理操作 |
 | **迁移脚本** | `backend/db/migrations/` 下的版本化数据库变更脚本，启动时自动执行 |
+| **自定义监控模板** | 管理员在 Web 端定义的监控规则（命令+匹配+告警），下发到 Agent 的 `custom_monitors` |
+| **观察点覆盖配置** | `observer_configs` 表中存储的内置观察点参数覆盖值，部署时合并到 Agent config.json |
 | **智能折叠** | 基于语义身份（观察点+关键字段）将相似告警自动分组显示 |
 | **AlarmType** | 阵列系统告警类型。0=事件（INFO）、1=故障（WARNING）、2=恢复（WARNING） |
 | **send_ignore** | SSH 协议中的轻量心跳包，用于检测连接真实可用性 |
@@ -1126,6 +1258,7 @@ No002  HealthState: FAULT
 | 告警日志 | 阵列上 `/var/log/observation-points/alerts.log` | Agent 输出的告警 |
 | 流量数据 | 阵列上 `/var/log/observation-points/traffic.jsonl` | 端口流量采集 |
 | 数据库 | `observation_web/observation_web.db` | SQLite 数据库 |
+| 自定义监控 Agent 模块 | `agent/observers/custom_monitor.py` | 执行自定义监控模板的 Agent 观察点 |
 
 ### 快捷键 / 快捷操作
 
@@ -1156,6 +1289,8 @@ No002  HealthState: FAULT
 | 5 | `agent/config.json` | **必须** | 用户配置文件，添加你的观察点配置项 |
 | 6 | `frontend/src/utils/alertTranslator.js` | 可选(推荐) | Web 前端告警翻译，让告警以可读中文显示 |
 | 7 | `backend/core/alert_aggregator.py` | 可选 | 告警聚合规则，如果需要与其他观察点做根因关联 |
+| 8 | `frontend/src/views/AdminMonitors.vue` | 可选 | 告警管理页内置观察点列表（`BUILTIN_OBSERVERS` 数组），新增行 |
+| 9 | `backend/api/observer_configs.py` | 可选 | 内置观察点配置覆盖 API（`VALID_OBSERVERS` 列表），新增条目 |
 
 ### 12.2 步骤详解
 
@@ -1713,6 +1848,14 @@ config.json 参数名变了
 - 启动时自动执行未运行的迁移，幂等安全
 - 升级时无需手动操作数据库
 
+**v4.1.0 新增迁移**：
+
+| 迁移脚本 | 作用 |
+|---------|------|
+| `003_catchup_missing_columns.py` | 补齐历史缺失列（`is_expected` 等），并回填 NULL 值为默认值 |
+| `004_add_monitor_templates.py` | 创建 `monitor_templates` 表，存储自定义监控模板 |
+| `005_add_observer_configs.py` | 创建 `observer_configs` 表，存储内置观察点的覆盖配置 |
+
 ### 14.4 回滚
 
 升级失败时执行：`./scripts/upgrade.sh --rollback`，从最近备份 `backups/backup_YYYYMMDD_HHMMSS/` 恢复
@@ -1726,3 +1869,44 @@ config.json 参数名变了
 - `config.json` 和 `observation_web.db` 不会被升级包覆盖
 - 新增配置项有默认值兜底
 - 数据库列变更通过迁移脚本自动处理
+
+---
+
+## 附录：版本变更记录
+
+### v4.1.0（2026-03-05）
+
+**新功能**：
+
+| 功能 | 说明 |
+|------|------|
+| 告警管理页 | 新增 `/admin/monitors` 页面，统一管理 23 个内置观察点和自定义监控模板 |
+| 内置观察点可配置 | 管理员可在 Web 界面修改内置观察点的启用/禁用和检查间隔，部署时自动生效 |
+| 自定义监控模板 CRUD | 创建、编辑、删除自定义监控规则，支持 shell/curl 命令、正则/JSONPath/包含/退出码匹配 |
+| 模板下发 | 按标签或阵列批量下发自定义模板到 Agent，合并到 `config.json` 并自动重启 |
+| 批量告警确认 | 告警列表多选复选框 + 批量确认操作栏，`POST /api/alerts/batch-ack` |
+| 事件时间线分类筛选 | 时间线支持按端口级/卡件级/系统级分类过滤事件 |
+
+**Bug 修复**：
+
+| 修复项 | 说明 |
+|--------|------|
+| abnormal_reset 两阶段执行 | `os_cli` 命令改为交互式两阶段（进入 os_cli → 等待 succeed → 执行内部命令），修复之前一步执行无法获取数据的问题 |
+| Agent 部署非阻塞 | `deploy`/`start`/`stop`/`restart`/`batch-action` 的同步 SSH 调用改为 `run_in_executor` 异步执行，部署 Agent 不再阻塞其他页面操作 |
+| 数据库迁移回填 | `003_catchup_missing_columns` 迁移增加 `UPDATE` 语句，回填 `is_expected` 等列的 NULL 值，修复历史数据导致的 500 错误 |
+| 仪表盘统计卡片点击 | 统计卡片（总阵列数、在线数、24h 告警数、错误数）点击跳转修复 |
+
+**数据库变更**：
+
+| 迁移 | 说明 |
+|------|------|
+| 003 | 补齐缺失列（`is_expected`、`task_id` 等），回填默认值 |
+| 004 | 新增 `monitor_templates` 表 |
+| 005 | 新增 `observer_configs` 表 |
+
+**涉及文件**（31 个文件，新增 10 个，修改 21 个）：
+
+- **Agent**：`abnormal_reset.py`（两阶段修复）、`scheduler.py`（custom_monitor 注册）、`loader.py`（默认配置更新）、`custom_monitor.py`（新增）
+- **后端 API**：`arrays.py`（非阻塞部署）、`acknowledgements.py`（批量确认）、`timeline.py`（分类筛选）、`main.py`（路由注册）、`monitor_templates.py`（新增）、`observer_configs.py`（新增）
+- **后端 DB**：`database.py`、`migrations/utils.py`、`003`/`004`/`005` 迁移脚本、`monitor_template.py`/`observer_config.py` 模型
+- **前端**：`AdminMonitors.vue`（新增）、`AlertCenter.vue`、`FoldedAlertList.vue`（多选批量）、`EventTimeline.vue`、`ArrayDetail.vue`、`Dashboard.vue`、`App.vue`、`router/index.js`、`api/index.js`

@@ -62,6 +62,23 @@ class Scheduler:
                 logger.debug(f"注册: {name} (间隔 {observer.get_interval()}s)")
             except Exception as e:
                 logger.error(f"初始化失败 {name}: {e}")
+
+        # Load custom_monitors (from admin-deployed templates)
+        from ..observers.custom_monitor import CustomMonitorObserver as CustomMonCls
+        custom_monitors = self.config.get('custom_monitors', [])
+        for i, mon_config in enumerate(custom_monitors):
+            name = mon_config.get('name') or f'custom_monitor_{i}'
+            obs_config = {
+                'enabled': True,
+                'interval': mon_config.get('interval', 60),
+                **mon_config,
+            }
+            try:
+                observer = CustomMonCls(name, obs_config)
+                self.register(observer)
+                logger.debug(f"注册自定义监控: {name} (间隔 {observer.get_interval()}s)")
+            except Exception as e:
+                logger.error(f"自定义监控 {name} 初始化失败: {e}")
     
     def _get_observer_classes(self) -> Dict[str, type]:
         """获取所有观察点类的映射"""
@@ -88,6 +105,7 @@ class Scheduler:
         from ..observers.process_restart import ProcessRestartObserver
         from ..observers.sfp_monitor import SfpMonitorObserver
         from ..observers.abnormal_reset import AbnormalResetObserver
+        from ..observers.custom_monitor import CustomMonitorObserver
         
         return {
             'error_code': ErrorCodeObserver,
@@ -113,6 +131,7 @@ class Scheduler:
             'process_restart': ProcessRestartObserver,
             'sfp_monitor': SfpMonitorObserver,
             'abnormal_reset': AbnormalResetObserver,
+            'custom_monitor': CustomMonitorObserver,
         }
     
     def register(self, observer: BaseObserver):

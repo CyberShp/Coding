@@ -73,6 +73,23 @@ export default {
 
   // Auth (admin)
   login: (username, password) => http.post('/auth/login', { username, password }),
+
+  // Admin monitor templates
+  getMonitorTemplates: () => http.get('/admin/monitor-templates'),
+  createMonitorTemplate: (data) => http.post('/admin/monitor-templates', data),
+  updateMonitorTemplate: (id, data) => http.put(`/admin/monitor-templates/${id}`, data),
+  deleteMonitorTemplate: (id) => http.delete(`/admin/monitor-templates/${id}`),
+  deployMonitorTemplates: (templateIds, targetType, targetIds) =>
+    http.post('/admin/monitor-templates/deploy', {
+      template_ids: templateIds,
+      target_type: targetType,
+      target_ids: targetIds,
+    }),
+
+  // Observer config overrides (built-in observers)
+  getObserverConfigs: () => http.get('/admin/observer-configs'),
+  updateObserverConfig: (name, data) => http.put(`/admin/observer-configs/${name}`, data),
+
   getAuthMe: () => http.get('/auth/me'),
   logout: () => http.post('/auth/logout'),
 
@@ -139,6 +156,13 @@ export default {
   ackAllVisible: (hours = 2, ackType = 'dismiss') =>
     http.post('/alerts/ack-all-visible', null, { params: { hours, ack_type: ackType } }),
   unackAlert: (alertId) => http.delete(`/alerts/ack/${alertId}`),
+  batchUndoAck: (alertIds) => http.post('/alerts/ack/batch-undo', { alert_ids: alertIds }),
+  batchModifyAck: (alertIds, newAckType, expiresHours = null) =>
+    http.post('/alerts/ack/batch-modify', {
+      alert_ids: alertIds,
+      new_ack_type: newAckType,
+      expires_hours: expiresHours,
+    }),
   getAlertAckDetails: (alertId) => http.get(`/alerts/${alertId}/ack`),
 
   // Test Tasks

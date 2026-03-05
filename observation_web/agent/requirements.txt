@@ -3,3 +3,6 @@
 
 # Python 3.6 需 dataclasses 回退包（3.7+ 内置）
 dataclasses; python_version<'3.7'
+
+# JSONPath for custom monitor templates
+jsonpath-ng>=1.5.0

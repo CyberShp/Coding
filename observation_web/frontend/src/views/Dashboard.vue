@@ -157,6 +157,8 @@
               :compact="true"
               @select="openAlertDrawer"
               @ack="handleAck"
+              @undo-ack="handleUndoAck"
+              @modify-ack="handleModifyAck"
             />
           </div>
         </el-card>
@@ -245,12 +247,32 @@ async function handleAck({ alertIds, ackType = 'dismiss' }) {
   try {
     await api.ackAlerts(alertIds, '', { ack_type: ackType })
     ElMessage.success('已确认')
-    // Mark in-memory alerts as acked
     alertStore.recentAlerts.forEach(a => {
       if (alertIds.includes(a.id)) a.is_acked = true
     })
   } catch (e) {
     ElMessage.error('确认失败: ' + (e.response?.data?.detail || e.message))
+  }
+}
+
+async function handleUndoAck({ alertIds }) {
+  try {
+    await api.batchUndoAck(alertIds)
+    ElMessage.success('已撤销确认')
+    alertStore.recentAlerts.forEach(a => {
+      if (alertIds.includes(a.id)) a.is_acked = false
+    })
+  } catch (e) {
+    ElMessage.error('撤销失败: ' + (e.response?.data?.detail || e.message))
+  }
+}
+
+async function handleModifyAck({ alertIds, ackType }) {
+  try {
+    await api.batchModifyAck(alertIds, ackType)
+    ElMessage.success('已更改确认类型')
+  } catch (e) {
+    ElMessage.error('更改失败: ' + (e.response?.data?.detail || e.message))
   }
 }
 

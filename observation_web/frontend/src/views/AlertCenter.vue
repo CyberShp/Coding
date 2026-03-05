@@ -72,9 +72,21 @@
         <FoldedAlertList
           :alerts="alerts"
           :show-array-id="true"
+          :selectable="true"
+          v-model:selected-ids="selectedIds"
           @select="openDrawer"
           @ack="handleAck"
+          @undo-ack="handleUndoAck"
+          @modify-ack="handleModifyAck"
         />
+        <!-- 批量操作栏 -->
+        <div v-if="selectedIds.length > 0" class="batch-actions">
+          <span class="batch-count">已选 {{ selectedIds.length }} 条</span>
+          <el-button size="small" @click="handleBatchUndo">批量撤销</el-button>
+          <el-button size="small" type="success" @click="handleBatchModify('confirmed_ok')">批量确认无问题</el-button>
+          <el-button size="small" type="warning" @click="handleBatchModify('dismiss')">批量忽略24h</el-button>
+          <el-button size="small" text @click="selectedIds = []">取消选择</el-button>
+        </div>
       </div>
 
       <!-- Aggregated view -->
@@ -146,6 +158,7 @@ const stats = ref(null)
 const drawerVisible = ref(false)
 const selectedAlert = ref(null)
 const aggregateMode = ref(false)
+const selectedIds = ref([])
 
 const filters = reactive({
   level: '',
@@ -190,6 +203,56 @@ async function handleAck({ alertIds, ackType = 'dismiss' }) {
     })
   } catch (e) {
     ElMessage.error('确认失败: ' + (e.response?.data?.detail || e.message))
+  }
+}
+
+async function handleUndoAck({ alertIds }) {
+  try {
+    await api.batchUndoAck(alertIds)
+    ElMessage.success('已撤销确认')
+    alerts.value.forEach(a => {
+      if (alertIds.includes(a.id)) a.is_acked = false
+    })
+  } catch (e) {
+    ElMessage.error('撤销失败: ' + (e.response?.data?.detail || e.message))
+  }
+}
+
+async function handleModifyAck({ alertIds, ackType }) {
+  try {
+    await api.batchModifyAck(alertIds, ackType)
+    ElMessage.success('已更改确认类型')
+  } catch (e) {
+    ElMessage.error('更改失败: ' + (e.response?.data?.detail || e.message))
+  }
+}
+
+async function handleBatchUndo() {
+  if (selectedIds.value.length === 0) return
+  try {
+    await api.batchUndoAck(selectedIds.value)
+    ElMessage.success('已撤销确认')
+    alerts.value.forEach(a => {
+      if (selectedIds.value.includes(a.id)) a.is_acked = false
+    })
+    selectedIds.value = []
+  } catch (e) {
+    ElMessage.error('撤销失败: ' + (e.response?.data?.detail || e.message))
+  }
+}
+
+async function handleBatchModify(ackType) {
+  if (selectedIds.value.length === 0) return
+  try {
+    const expiresHours = ackType === 'dismiss' ? 24 : null
+    await api.batchModifyAck(selectedIds.value, ackType, expiresHours)
+    ElMessage.success('已批量确认')
+    alerts.value.forEach(a => {
+      if (selectedIds.value.includes(a.id)) a.is_acked = true
+    })
+    selectedIds.value = []
+  } catch (e) {
+    ElMessage.error('批量确认失败: ' + (e.response?.data?.detail || e.message))
   }
 }
 
@@ -425,6 +488,23 @@ onUnmounted(() => {
 .pagination {
   margin-top: 20px;
   justify-content: flex-end;
+}
+
+.batch-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  margin-top: 12px;
+  background: var(--el-fill-color-light);
+  border-radius: 6px;
+  border: 1px solid var(--el-border-color-lighter);
+}
+
+.batch-count {
+  font-size: 14px;
+  color: var(--el-text-color-regular);
+  margin-right: 8px;
 }
 
 /* Aggregated view styles */

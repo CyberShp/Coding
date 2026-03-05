@@ -85,7 +85,15 @@ echo -e "${YELLOW}替换代码...${NC}"
 cp -r "$SRC"/backend "$INSTALL_DIR/"
 cp -r "$SRC"/agent "$INSTALL_DIR/"
 mkdir -p "$INSTALL_DIR/frontend"
-cp -r "$SRC"/frontend/dist "$INSTALL_DIR/frontend/"
+if [ -d "$SRC/frontend/dist" ]; then
+    cp -r "$SRC"/frontend/dist "$INSTALL_DIR/frontend/"
+elif [ -d "$SRC/frontend" ]; then
+    cp -r "$SRC"/frontend/* "$INSTALL_DIR/frontend/"
+    if [ -f "$INSTALL_DIR/frontend/package.json" ]; then
+        echo -e "${YELLOW}安装前端依赖...${NC}"
+        (cd "$INSTALL_DIR/frontend" && npm install --production 2>/dev/null) || true
+    fi
+fi
 cp -r "$SRC"/scripts "$INSTALL_DIR/"
 [ -f "$SRC/requirements.txt" ] && cp "$SRC/requirements.txt" "$INSTALL_DIR/" || true
 [ -f "$SRC/start.sh" ] && cp "$SRC/start.sh" "$INSTALL_DIR/" || true

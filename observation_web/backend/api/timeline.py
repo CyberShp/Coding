@@ -22,17 +22,29 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/timeline", tags=["timeline"])
 
 
+# Category -> observer_name mapping (port/card/system)
+CATEGORIES = {
+    'port': ['error_code', 'link_status', 'port_fec', 'port_speed', 'port_traffic'],
+    'card': ['card_recovery', 'card_info', 'pcie_bandwidth', 'controller_state', 'disk_state'],
+    'system': ['alarm_type', 'memory_leak', 'cpu_usage', 'cmd_response', 'sig_monitor', 'sensitive_info', 'process_crash', 'io_timeout'],
+}
+
+
 @router.get("/{array_id}")
 async def get_timeline(
     array_id: str,
     hours: int = Query(24, ge=1, le=168),
     observer: Optional[str] = Query(None),
+    category: Optional[str] = Query(None),
     db: AsyncSession = Depends(get_db),
 ):
     """
     Get timeline events for a specific array.
     Returns events sorted by time, grouped by observer category.
     Also returns any active test task sessions for background marking.
+
+    - observer: exact observer_name match
+    - category: port/card/system - filters by observer category (expands to observer_name.in_())
     """
     start_time = datetime.now() - timedelta(hours=hours)
 
@@ -43,6 +55,8 @@ async def get_timeline(
     ]
     if observer:
         cond.append(AlertModel.observer_name == observer)
+    elif category and category in CATEGORIES:
+        cond.append(AlertModel.observer_name.in_(CATEGORIES[category]))
 
     result = await db.execute(
         select(AlertModel)
@@ -53,11 +67,6 @@ async def get_timeline(
     alerts = result.scalars().all()
 
     # Group by observer category
-    CATEGORIES = {
-        'port': ['error_code', 'link_status', 'port_fec', 'port_speed', 'port_traffic'],
-        'card': ['card_recovery', 'card_info', 'pcie_bandwidth', 'controller_state', 'disk_state'],
-        'system': ['alarm_type', 'memory_leak', 'cpu_usage', 'cmd_response', 'sig_monitor', 'sensitive_info', 'process_crash', 'io_timeout'],
-    }
     CATEGORY_LABELS = {'port': '端口级', 'card': '卡件级', 'system': '系统级'}
 
     def _get_category(obs_name):

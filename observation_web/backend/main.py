@@ -29,6 +29,8 @@ from .api.task_session import router as task_session_router
 from .api.timeline import router as timeline_router
 from .api.snapshot import router as snapshot_router
 from .api.acknowledgements import router as ack_router
+from .api.monitor_templates import router as monitor_templates_router
+from .api.observer_configs import router as observer_configs_router
 from .api.users import router as users_router
 from .middleware.user_session import UserSessionMiddleware
 from .core.ssh_pool import get_ssh_pool
@@ -134,12 +136,15 @@ async def _idle_connection_cleaner():
                                 if config.remote.auto_redeploy:
                                     try:
                                         logger.info(f"Attempting auto-redeploy for {array_id}")
-                                        # Try start first (files may still exist)
+                                        loop = asyncio.get_event_loop()
                                         if deployer.check_deployed():
-                                            result = deployer.start_agent()
+                                            result = await asyncio.wait_for(
+                                                loop.run_in_executor(None, deployer.start_agent), timeout=60
+                                            )
                                         else:
-                                            # Files missing (reboot cleared them) → full deploy
-                                            result = deployer.deploy()
+                                            result = await asyncio.wait_for(
+                                                loop.run_in_executor(None, deployer.deploy), timeout=120
+                                            )
                                         if result.get("ok"):
                                             status_obj.agent_running = True
                                             status_obj.agent_deployed = True
@@ -322,6 +327,8 @@ def create_app() -> FastAPI:
     app.include_router(timeline_router, prefix="/api")
     app.include_router(snapshot_router, prefix="/api")
     app.include_router(ack_router, prefix="/api")
+    app.include_router(monitor_templates_router, prefix="/api")
+    app.include_router(observer_configs_router, prefix="/api")
     app.include_router(audit_router, prefix="/api")
     app.include_router(ws_router)
     

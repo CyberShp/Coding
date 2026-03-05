@@ -133,7 +133,10 @@ class ConfigLoader:
             'abnormal_reset': {
                 'enabled': True,
                 'interval': 120,
-                'command': 'os_cli "cat ./log_reset.txt"',
+                'os_cli_cmd': 'os_cli',
+                'inner_cmd': 'cat log_reset.txt',
+                'ready_timeout': 10,
+                'ready_keyword': 'succeed',
                 'abnormal_reasons': [
                     'watchDog reset', 'oops reset', 'unknown reset',
                     'oom reset', 'panic reset', 'kernel reset',

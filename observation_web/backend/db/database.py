@@ -90,7 +90,7 @@ def init_db():
 async def create_tables():
     """Create all tables and run migrations. Uses separate transactions so migration
     failure does not roll back table creation."""
-    from ..models import array, alert, query, lifecycle, scheduler, traffic, task_session, snapshot, tag, user_session, array_lock, alert_rule, audit_log, issue  # noqa: F401
+    from ..models import array, alert, query, lifecycle, scheduler, traffic, task_session, snapshot, tag, user_session, array_lock, alert_rule, audit_log, issue, monitor_template, observer_config  # noqa: F401
 
     # Transaction 1: Create tables (unaffected by migration failures)
     async with _async_engine.begin() as conn:

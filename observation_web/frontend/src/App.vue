@@ -49,6 +49,10 @@
               <el-icon><ChatDotRound /></el-icon>
               <span>建议反馈</span>
             </el-menu-item>
+            <el-menu-item v-if="authStore.isAdmin" index="/admin/monitors">
+              <el-icon><Bell /></el-icon>
+              <span>告警管理</span>
+            </el-menu-item>
           </el-menu>
         </el-aside>
 
@@ -191,11 +195,13 @@ import { ElMessage } from 'element-plus'
 import zhCn from 'element-plus/dist/locale/zh-cn.mjs'
 import { Monitor, Odometer, Cpu, Bell, Search, Setting, User, Warning, Files, Timer, WarningFilled, Stopwatch, UserFilled, ChatDotRound, InfoFilled } from '@element-plus/icons-vue'
 import { useAlertStore } from './stores/alerts'
+import { useAuthStore } from './stores/auth'
 import { setSoundEnabled } from './utils/notification'
 import api from './api'
 
 const route = useRoute()
 const alertStore = useAlertStore()
+const authStore = useAuthStore()
 const soundOn = ref(false)
 const showSuppressedDetail = ref(false)
 

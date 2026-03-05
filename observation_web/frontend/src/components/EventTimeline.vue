@@ -76,7 +76,7 @@ async function fetchData() {
   loading.value = true
   try {
     const params = { hours: timeRange.value }
-    if (filterCategory.value) params.observer = filterCategory.value
+    if (filterCategory.value) params.category = filterCategory.value
     const res = await api.getTimeline(props.arrayId, params)
     events.value = res.data.events || []
     taskWindows.value = res.data.task_windows || []

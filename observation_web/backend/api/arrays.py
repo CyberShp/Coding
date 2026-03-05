@@ -24,6 +24,7 @@ from ..models.array import (
     ArrayStatus, ConnectionState
 )
 from ..models.lifecycle import SyncStateModel
+from ..models.alert import AlertModel, AlertAckModel
 
 
 class BatchActionRequest(BaseModel):
@@ -81,6 +82,77 @@ async def _update_sync_position(
     row.last_sync_at = datetime.now()
     await db.flush()
     return True
+
+
+async def _auto_ack_new_alerts(
+    db: AsyncSession,
+    array_id: str,
+    created_alerts: List[AlertModel],
+) -> None:
+    """
+    Auto-ack new alerts if the same array_id+observer_name was previously
+    confirmed_ok or has an unexpired dismiss ack.
+    """
+    if not created_alerts:
+        return
+
+    from ..models.alert import AlertAckModel
+
+    now = datetime.now()
+
+    # Observers with confirmed_ok (permanent) - inherit for new alerts
+    confirmed_result = await db.execute(
+        select(AlertModel.observer_name).distinct()
+        .join(AlertAckModel, AlertAckModel.alert_id == AlertModel.id)
+        .where(
+            AlertModel.array_id == array_id,
+            AlertAckModel.ack_type == "confirmed_ok",
+            AlertAckModel.ack_expires_at.is_(None),
+        )
+    )
+    confirmed_observers = {r[0] for r in confirmed_result.all()}
+
+    # Observers with unexpired dismiss - inherit for new alerts (use max expiry per observer)
+    dismiss_result = await db.execute(
+        select(
+            AlertModel.observer_name,
+            func.max(AlertAckModel.ack_expires_at).label("expires_at"),
+        )
+        .join(AlertAckModel, AlertAckModel.alert_id == AlertModel.id)
+        .where(
+            AlertModel.array_id == array_id,
+            AlertAckModel.ack_type == "dismiss",
+            AlertAckModel.ack_expires_at > now,
+        )
+        .group_by(AlertModel.observer_name)
+    )
+    dismiss_map = {r[0]: r[1] for r in dismiss_result.all()}
+
+    # Create acks for new alerts that should inherit
+    created_acks = []
+    for alert in created_alerts:
+        obs = alert.observer_name
+        if obs in confirmed_observers:
+            ack = AlertAckModel(
+                alert_id=alert.id,
+                acked_by_ip="system",
+                ack_type="confirmed_ok",
+                ack_expires_at=None,
+            )
+            db.add(ack)
+            created_acks.append(ack)
+        elif obs in dismiss_map and obs not in confirmed_observers:
+            ack = AlertAckModel(
+                alert_id=alert.id,
+                acked_by_ip="system",
+                ack_type="dismiss",
+                ack_expires_at=dismiss_map[obs],
+            )
+            db.add(ack)
+            created_acks.append(ack)
+
+    if created_acks:
+        await db.flush()
 
 
 async def sync_array_alerts(
@@ -165,7 +237,8 @@ async def sync_array_alerts(
                     sys_error("arrays", "Failed to parse alert", {"error": str(e)})
 
             if new_alerts:
-                new_alerts_count = await alert_store.create_alerts_batch(db, new_alerts)
+                new_alerts_count, created_db_alerts = await alert_store.create_alerts_batch(db, new_alerts)
+                await _auto_ack_new_alerts(db, array_id, created_db_alerts)
                 for alert in new_alerts[-10:]:
                     await broadcast_alert({
                         'array_id': alert.array_id,
@@ -202,6 +275,31 @@ def _get_array_status(array_id: str) -> ArrayStatus:
             host="",
         )
     return _array_status_cache[array_id]
+
+
+async def _apply_observer_overrides(conn, config, db: AsyncSession):
+    """After deploy, merge observer_configs overrides into remote config.json."""
+    try:
+        from .observer_configs import get_all_observer_overrides
+        overrides = await get_all_observer_overrides(db)
+        if not overrides:
+            return
+        agent_path = config.remote.agent_deploy_path
+        config_path = f"/etc/observation-points/config.json"
+        content = conn.read_file(config_path)
+        if not content:
+            return
+        config_data = json.loads(content)
+        observers = config_data.setdefault("observers", {})
+        for obs_name, ov in overrides.items():
+            obs = observers.setdefault(obs_name, {})
+            obs.update(ov)
+        import base64
+        config_json = json.dumps(config_data, indent=2, ensure_ascii=False)
+        encoded = base64.b64encode(config_json.encode("utf-8")).decode("ascii")
+        conn.execute(f"echo '{encoded}' | base64 -d > {config_path}")
+    except Exception as e:
+        logging.getLogger(__name__).warning(f"Failed to apply observer overrides: {e}")
 
 
 async def _compute_recent_alert_summary(
@@ -932,7 +1030,8 @@ async def batch_action(
                     return {"array_id": array_id, "success": False, "error": "Array not connected"}
                 
                 deployer = AgentDeployer(conn, config)
-                result = deployer.deploy()
+                loop = asyncio.get_event_loop()
+                result = await asyncio.wait_for(loop.run_in_executor(None, deployer.deploy), timeout=120)
                 if result.get("ok"):
                     status_obj = _get_array_status(array_id)
                     status_obj.agent_deployed = True
@@ -945,7 +1044,8 @@ async def batch_action(
                     return {"array_id": array_id, "success": False, "error": "Array not connected"}
                 
                 deployer = AgentDeployer(conn, config)
-                result = deployer.start_agent()
+                loop = asyncio.get_event_loop()
+                result = await asyncio.wait_for(loop.run_in_executor(None, deployer.start_agent), timeout=60)
                 if result.get("ok"):
                     status_obj = _get_array_status(array_id)
                     status_obj.agent_running = True
@@ -958,7 +1058,8 @@ async def batch_action(
                     return {"array_id": array_id, "success": False, "error": "Array not connected"}
                 
                 deployer = AgentDeployer(conn, config)
-                result = deployer.stop_agent()
+                loop = asyncio.get_event_loop()
+                result = await asyncio.wait_for(loop.run_in_executor(None, deployer.stop_agent), timeout=30)
                 if result.get("ok"):
                     status_obj = _get_array_status(array_id)
                     status_obj.agent_running = False
@@ -971,7 +1072,8 @@ async def batch_action(
                     return {"array_id": array_id, "success": False, "error": "Array not connected"}
                 
                 deployer = AgentDeployer(conn, config)
-                result = deployer.restart_agent()
+                loop = asyncio.get_event_loop()
+                result = await asyncio.wait_for(loop.run_in_executor(None, deployer.restart_agent), timeout=60)
                 if result.get("ok"):
                     status_obj = _get_array_status(array_id)
                     status_obj.agent_running = True
@@ -1518,7 +1620,8 @@ async def refresh_array(
                         sys_error("arrays", f"Failed to parse alert", {"error": str(e)})
                 
                 if new_alerts:
-                    new_alerts_count = await alert_store.create_alerts_batch(db, new_alerts)
+                    new_alerts_count, created_db_alerts = await alert_store.create_alerts_batch(db, new_alerts)
+                    await _auto_ack_new_alerts(db, array_id, created_db_alerts)
                     sys_info("arrays", f"Synced {new_alerts_count} new alerts for {array_id}")
                     
                     for alert in new_alerts[-10:]:
@@ -1686,7 +1789,11 @@ async def deploy_agent(
 
     config = get_config()
     deployer = AgentDeployer(conn, config)
-    result = deployer.deploy()
+    loop = asyncio.get_event_loop()
+    try:
+        result = await asyncio.wait_for(loop.run_in_executor(None, deployer.deploy), timeout=120)
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=504, detail="Deploy timed out (120s)")
     if not result.get("ok"):
         sys_error(
             "arrays",
@@ -1697,6 +1804,8 @@ async def deploy_agent(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=result.get("error", "Deploy failed")
         )
+
+    await _apply_observer_overrides(conn, config, db)
 
     status_obj = _get_array_status(array_id)
     status_obj.agent_deployed = deployer.check_deployed()
@@ -1723,7 +1832,11 @@ async def start_agent(
 
     config = get_config()
     deployer = AgentDeployer(conn, config)
-    result = deployer.start_agent()
+    loop = asyncio.get_event_loop()
+    try:
+        result = await asyncio.wait_for(loop.run_in_executor(None, deployer.start_agent), timeout=60)
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=504, detail="Start agent timed out (60s)")
     if not result.get("ok"):
         sys_error(
             "arrays",
@@ -1760,7 +1873,11 @@ async def stop_agent(
 
     config = get_config()
     deployer = AgentDeployer(conn, config)
-    result = deployer.stop_agent()
+    loop = asyncio.get_event_loop()
+    try:
+        result = await asyncio.wait_for(loop.run_in_executor(None, deployer.stop_agent), timeout=30)
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=504, detail="Stop agent timed out (30s)")
     if not result.get("ok"):
         sys_error(
             "arrays",
@@ -1797,7 +1914,11 @@ async def restart_agent(
 
     config = get_config()
     deployer = AgentDeployer(conn, config)
-    result = deployer.restart_agent()
+    loop = asyncio.get_event_loop()
+    try:
+        result = await asyncio.wait_for(loop.run_in_executor(None, deployer.restart_agent), timeout=60)
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=504, detail="Restart agent timed out (60s)")
     if not result.get("ok"):
         sys_error(
             "arrays",
@@ -2126,10 +2247,16 @@ async def update_agent_config(
             "message": "Configuration updated successfully"
         }
         
-        # Optionally restart agent
+        # Optionally restart agent (non-blocking)
         if restart_agent_flag:
             deployer = AgentDeployer(conn, config)
-            restart_result = deployer.restart_agent()
+            loop = asyncio.get_event_loop()
+            try:
+                restart_result = await asyncio.wait_for(
+                    loop.run_in_executor(None, deployer.restart_agent), timeout=60
+                )
+            except asyncio.TimeoutError:
+                restart_result = {"ok": False, "error": "restart timed out (60s)"}
             result["agent_restarted"] = restart_result.get("ok", False)
             if not restart_result.get("ok"):
                 result["restart_error"] = restart_result.get("error")

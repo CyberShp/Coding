@@ -137,6 +137,8 @@
           empty-text="暂无告警，请刷新以同步"
           @select="openAlertDrawer"
           @ack="handleAck"
+          @undo-ack="handleUndoAck"
+          @modify-ack="handleModifyAck"
         />
       </el-card>
 
@@ -406,13 +408,31 @@ async function handleAck({ alertIds, ackType = 'dismiss' }) {
     recentAlerts.value.forEach(a => {
       if (alertIds.includes(a.id)) a.is_acked = true
     })
-    // Also remove from active issues if applicable
-    if (array.value?.active_issues) {
-      // Refresh to get updated active issues
-      await loadArray()
-    }
+    if (array.value?.active_issues) await loadArray()
   } catch (e) {
     ElMessage.error('确认失败: ' + errMsg(e, '未知错误'))
+  }
+}
+
+async function handleUndoAck({ alertIds }) {
+  try {
+    await api.batchUndoAck(alertIds)
+    ElMessage.success('已撤销确认')
+    recentAlerts.value.forEach(a => {
+      if (alertIds.includes(a.id)) a.is_acked = false
+    })
+    if (array.value?.active_issues) await loadArray()
+  } catch (e) {
+    ElMessage.error('撤销失败: ' + errMsg(e, '未知错误'))
+  }
+}
+
+async function handleModifyAck({ alertIds, ackType }) {
+  try {
+    await api.batchModifyAck(alertIds, ackType)
+    ElMessage.success('已更改确认类型')
+  } catch (e) {
+    ElMessage.error('更改失败: ' + errMsg(e, '未知错误'))
   }
 }
 

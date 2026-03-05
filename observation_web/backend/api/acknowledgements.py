@@ -11,10 +11,11 @@ Track who acknowledged (by client IP), and undo acknowledgements.
 
 import logging
 from datetime import datetime, timedelta
-from typing import List
+from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Query, status
-from sqlalchemy import select, delete, exists
+from fastapi import APIRouter, Depends, HTTPException, Request, Query, status, Body
+from pydantic import BaseModel
+from sqlalchemy import select, delete, exists, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..db.database import get_db
@@ -191,6 +192,62 @@ async def unack_alert(
     await db.delete(ack)
     await db.commit()
     return {"status": "unacknowledged", "alert_id": alert_id}
+
+
+class BatchUndoRequest(BaseModel):
+    alert_ids: List[int]
+
+
+class BatchModifyRequest(BaseModel):
+    alert_ids: List[int]
+    new_ack_type: str = "dismiss"
+    expires_hours: Optional[int] = None
+
+
+@router.post("/ack/batch-undo", response_model=dict)
+async def batch_undo_ack(
+    body: BatchUndoRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Batch revoke acknowledgements for multiple alerts."""
+    if not body.alert_ids:
+        return {"undone_count": 0, "message": "No alert IDs provided"}
+    result = await db.execute(delete(AlertAckModel).where(AlertAckModel.alert_id.in_(body.alert_ids)))
+    await db.commit()
+    undone = result.rowcount
+    try:
+        await _clear_acked_active_issues(db, [])  # Cache invalidation not needed for undo
+    except Exception:
+        pass
+    return {"undone_count": undone, "message": f"Revoked {undone} acknowledgements"}
+
+
+@router.post("/ack/batch-modify", response_model=dict)
+async def batch_modify_ack(
+    body: BatchModifyRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Batch change ack type for multiple alerts. Updates existing ack records."""
+    if not body.alert_ids:
+        return {"modified_count": 0, "message": "No alert IDs provided"}
+    valid_types = {t.value for t in AckType}
+    ack_type = body.new_ack_type if body.new_ack_type in valid_types else AckType.DISMISS.value
+    expires_at = None
+    if ack_type == AckType.DISMISS.value:
+        expires_at = datetime.now() + timedelta(hours=_DISMISS_DEFAULT_HOURS)
+    elif ack_type == AckType.DEFERRED.value:
+        hours = body.expires_hours or 72
+        expires_at = datetime.now() + timedelta(hours=hours)
+
+    result = await db.execute(
+        update(AlertAckModel)
+        .where(AlertAckModel.alert_id.in_(body.alert_ids))
+        .values(ack_type=ack_type, ack_expires_at=expires_at)
+    )
+    await db.commit()
+    modified = result.rowcount
+    return {"modified_count": modified, "message": f"Modified {modified} acknowledgements"}
 
 
 @router.get("/{alert_id}/ack", response_model=List[AlertAckResponse])

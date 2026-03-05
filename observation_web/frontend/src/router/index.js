@@ -1,4 +1,5 @@
 import { createRouter, createWebHistory } from 'vue-router'
+import { useAuthStore } from '../stores/auth'
 
 const routes = [
   {
@@ -35,6 +36,17 @@ const routes = [
     path: '/admin/login',
     name: 'AdminLogin',
     component: () => import('../views/AdminLogin.vue'),
+  },
+  {
+    path: '/admin/monitors',
+    name: 'AdminMonitors',
+    component: () => import('../views/AdminMonitors.vue'),
+    beforeEnter: () => {
+      const auth = useAuthStore()
+      if (!auth.isAdmin) {
+        return { path: '/admin/login', query: { redirect: '/admin/monitors' } }
+      }
+    },
   },
   {
     path: '/settings',

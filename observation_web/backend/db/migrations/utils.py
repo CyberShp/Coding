@@ -65,3 +65,15 @@ def table_exists(conn, table: str) -> bool:
     except Exception as e:
         logger.warning("table_exists failed for %s: %s", table, e)
         return False
+
+
+def create_table_if_not_exists(conn, table: str, columns_sql: str):
+    """
+    Create a table if it does not exist.
+    columns_sql: full column definitions, e.g. "id INTEGER PRIMARY KEY, name TEXT"
+    """
+    if table_exists(conn, table):
+        logger.debug("Table %s already exists, skipping", table)
+        return
+    conn.execute(text(f"CREATE TABLE {table} ({columns_sql})"))
+    logger.info("Created table %s", table)

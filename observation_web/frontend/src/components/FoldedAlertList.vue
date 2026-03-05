@@ -2,14 +2,29 @@
   <div class="folded-alerts" :class="{ compact }">
     <template v-for="(group, gIdx) in foldedAlerts" :key="gIdx">
       <!-- Single alert (no fold) -->
-      <div v-if="group.count === 1" class="fold-item" :class="{ 'is-acked': group.items[0].is_acked }" @click="$emit('select', group.items[0])">
+      <div v-if="group.count === 1" class="fold-item" :class="{ 'is-acked': group.items[0].is_acked }" @click="handleRowClick(group.items[0])">
         <div class="fold-row">
+          <el-checkbox
+            v-if="selectable"
+            :model-value="selectedIdsSet.has(group.items[0].id)"
+            @click.stop
+            @update:model-value="toggleSelect(group.items[0].id)"
+          />
           <span class="fold-time">{{ formatDateTime(group.items[0].timestamp) }}</span>
           <el-tag :type="getLevelType(group.items[0].level)" size="small">{{ getLevelText(group.items[0].level) }}</el-tag>
           <span v-if="showArrayId" class="fold-array">{{ group.items[0].array_name || group.items[0].array_id }}</span>
           <span class="fold-obs">{{ getObserverLabel(group.items[0].observer_name) }}</span>
           <span class="fold-msg">{{ getSummary(group.items[0]) }}</span>
-          <el-tag v-if="group.items[0].is_acked" type="success" size="small" effect="plain" class="ack-badge">已确认</el-tag>
+          <el-dropdown v-if="group.items[0].is_acked" trigger="click" @command="(cmd) => handleAckedAction(group.items[0], cmd)">
+            <el-tag type="success" size="small" effect="plain" class="ack-badge ack-action">已确认<el-icon class="el-icon--right"><ArrowDown /></el-icon></el-tag>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item command="undo">撤销确认</el-dropdown-item>
+                <el-dropdown-item command="confirmed_ok">更改为 确认无问题</el-dropdown-item>
+                <el-dropdown-item command="dismiss">更改为 忽略24h</el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
           <el-dropdown v-else trigger="click" @command="(cmd) => handleAckSingle(group.items[0], cmd)">
             <el-button size="small" text type="success" class="ack-btn">
               <el-icon><Check /></el-icon>确认<el-icon class="el-icon--right"><ArrowDown /></el-icon>
@@ -27,6 +42,13 @@
       <!-- Folded repeated alerts -->
       <div v-else class="fold-item fold-group" :class="{ expanded: group.expanded }">
         <div class="fold-row fold-header" @click="handleToggle(group)">
+          <el-checkbox
+            v-if="selectable"
+            :model-value="isGroupAllSelected(group)"
+            :indeterminate="isGroupPartiallySelected(group)"
+            @click.stop
+            @update:model-value="toggleGroupSelect(group)"
+          />
           <span class="fold-time">{{ formatDateTime(group.latestTime) }}</span>
           <el-tag :type="getLevelType(group.worstLevel)" size="small">{{ getLevelText(group.worstLevel) }}</el-tag>
           <span v-if="showArrayId" class="fold-array">{{ group.arrayName || group.arrayId }}</span>
@@ -35,7 +57,16 @@
           <el-tag type="warning" size="small" effect="plain" round>
             &times; {{ group.count }}
           </el-tag>
-          <el-tag v-if="isGroupAllAcked(group)" type="success" size="small" effect="plain" class="ack-badge">全部已确认</el-tag>
+          <el-dropdown v-if="isGroupAllAcked(group)" trigger="click" @command="(cmd) => handleAckedGroupAction(group, cmd)">
+            <el-tag type="success" size="small" effect="plain" class="ack-badge ack-action">全部已确认<el-icon class="el-icon--right"><ArrowDown /></el-icon></el-tag>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item command="undo">撤销全组确认</el-dropdown-item>
+                <el-dropdown-item command="confirmed_ok">更改为 全部确认无问题</el-dropdown-item>
+                <el-dropdown-item command="dismiss">更改为 全部忽略24h</el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
           <el-dropdown v-else trigger="click" @command="(cmd) => handleAckGroup(group, cmd)">
             <el-button size="small" text type="success" class="ack-btn" @click.stop>
               <el-icon><Check /></el-icon>确认全组<el-icon class="el-icon--right"><ArrowDown /></el-icon>
@@ -59,10 +90,25 @@
               :class="{ 'is-acked': item.is_acked }"
               @click.stop="handleChildClick(item)"
             >
+              <el-checkbox
+                v-if="selectable"
+                :model-value="selectedIdsSet.has(item.id)"
+                @click.stop
+                @update:model-value="toggleSelect(item.id)"
+              />
               <span class="fold-time">{{ formatDateTime(item.timestamp) }}</span>
               <el-tag :type="getLevelType(item.level)" size="small">{{ getLevelText(item.level) }}</el-tag>
               <span class="fold-msg">{{ getSummary(item) }}</span>
-              <el-tag v-if="item.is_acked" type="success" size="small" effect="plain" class="ack-badge">已确认</el-tag>
+              <el-dropdown v-if="item.is_acked" trigger="click" @command="(cmd) => handleAckedAction(item, cmd)">
+                <el-tag type="success" size="small" effect="plain" class="ack-badge ack-action">已确认<el-icon class="el-icon--right"><ArrowDown /></el-icon></el-tag>
+                <template #dropdown>
+                  <el-dropdown-menu>
+                    <el-dropdown-item command="undo">撤销确认</el-dropdown-item>
+                    <el-dropdown-item command="confirmed_ok">更改为 确认无问题</el-dropdown-item>
+                    <el-dropdown-item command="dismiss">更改为 忽略24h</el-dropdown-item>
+                  </el-dropdown-menu>
+                </template>
+              </el-dropdown>
               <el-dropdown v-else trigger="click" @command="(cmd) => handleAckSingle(item, cmd)">
                 <el-button size="small" text type="success" class="ack-btn" @click.stop>
                   <el-icon><Check /></el-icon>确认<el-icon class="el-icon--right"><ArrowDown /></el-icon>
@@ -88,7 +134,7 @@
 import { ArrowRight, ArrowDown, Check } from '@element-plus/icons-vue'
 import { translateAlert, getObserverName, LEVEL_LABELS, LEVEL_TAG_TYPES } from '@/utils/alertTranslator'
 import { useAlertFolding } from '@/composables/useAlertFolding'
-import { toRef } from 'vue'
+import { toRef, computed } from 'vue'
 
 const props = defineProps({
   /** Raw alert array (reactive) */
@@ -99,14 +145,55 @@ const props = defineProps({
   compact: { type: Boolean, default: false },
   /** Empty state text */
   emptyText: { type: String, default: '暂无告警' },
+  /** Enable multi-select with checkboxes */
+  selectable: { type: Boolean, default: false },
+  /** Selected alert IDs (v-model:selectedIds) */
+  selectedIds: { type: Array, default: () => [] },
 })
 
-const emit = defineEmits(['select', 'ack'])
+const emit = defineEmits(['select', 'ack', 'undoAck', 'modifyAck', 'update:selectedIds'])
 
 const { foldedAlerts, toggleExpand } = useAlertFolding(toRef(props, 'alerts'))
 
+const selectedIdsSet = computed(() => new Set(props.selectedIds || []))
+
 function handleToggle(group) {
   toggleExpand(group.key)
+}
+
+function handleRowClick(item) {
+  emit('select', item)
+}
+
+function toggleSelect(id) {
+  const set = new Set(props.selectedIds || [])
+  if (set.has(id)) return emit('update:selectedIds', props.selectedIds.filter(x => x !== id))
+  emit('update:selectedIds', [...(props.selectedIds || []), id])
+}
+
+function toggleGroupSelect(group) {
+  const ids = group.items.filter(i => i.id).map(i => i.id)
+  const set = new Set(props.selectedIds || [])
+  const allSelected = ids.every(id => set.has(id))
+  if (allSelected) {
+    emit('update:selectedIds', (props.selectedIds || []).filter(x => !ids.includes(x)))
+  } else {
+    const merged = new Set([...(props.selectedIds || []), ...ids])
+    emit('update:selectedIds', Array.from(merged))
+  }
+}
+
+function isGroupAllSelected(group) {
+  const ids = group.items.filter(i => i.id).map(i => i.id)
+  const set = selectedIdsSet.value
+  return ids.length > 0 && ids.every(id => set.has(id))
+}
+
+function isGroupPartiallySelected(group) {
+  const ids = group.items.filter(i => i.id).map(i => i.id)
+  const set = selectedIdsSet.value
+  const count = ids.filter(id => set.has(id)).length
+  return count > 0 && count < ids.length
 }
 
 function handleChildClick(item) {
@@ -123,6 +210,25 @@ function handleAckGroup(group, ackType = 'dismiss') {
   const ids = group.items.filter(i => i.id && !i.is_acked).map(i => i.id)
   if (ids.length) {
     emit('ack', { alertIds: ids, ackType })
+  }
+}
+
+function handleAckedAction(item, cmd) {
+  if (!item.id) return
+  if (cmd === 'undo') {
+    emit('undoAck', { alertIds: [item.id] })
+  } else {
+    emit('modifyAck', { alertIds: [item.id], ackType: cmd })
+  }
+}
+
+function handleAckedGroupAction(group, cmd) {
+  const ids = group.items.filter(i => i.id).map(i => i.id)
+  if (!ids.length) return
+  if (cmd === 'undo') {
+    emit('undoAck', { alertIds: ids })
+  } else {
+    emit('modifyAck', { alertIds: ids, ackType: cmd })
   }
 }
 
