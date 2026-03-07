@@ -23,6 +23,10 @@
               <el-icon><Collection /></el-icon>
               添加标签
             </el-button>
+            <el-button @click="downloadTemplate">
+              <el-icon><Download /></el-icon>
+              下载模板
+            </el-button>
             <el-button @click="triggerImport" :loading="importing">
               <el-icon><Upload /></el-icon>
               批量导入
@@ -331,7 +335,7 @@ import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
-  Plus, Search, Collection, MoreFilled, Edit, Delete, Upload, ArrowRight
+  Plus, Search, Collection, MoreFilled, Edit, Delete, Upload, Download, ArrowRight
 } from '@element-plus/icons-vue'
 import api from '../api'
 import { usePreferencesStore } from '../stores/preferences'
@@ -526,6 +530,20 @@ function clearSearch() {
 
 function goToTag(tagId) {
   router.push(`/arrays/tag/${tagId}`)
+}
+
+function downloadTemplate() {
+  const BOM = '\uFEFF'
+  const header = 'name,host,port,username,tag_l1,tag_l2,color'
+  const example = '示例阵列,192.168.1.100,22,root,机房A,机柜01,#409EFF'
+  const csv = BOM + header + '\n' + example + '\n'
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = '阵列批量导入模板.csv'
+  a.click()
+  URL.revokeObjectURL(url)
 }
 
 function triggerImport() {
