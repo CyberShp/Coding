@@ -70,6 +70,19 @@
               </el-breadcrumb>
             </div>
             <div class="header-right">
+              <!-- Personal View Toggle -->
+              <el-tooltip :content="preferencesStore.personalViewActive ? '切换到全局视图' : '切换到个人视图'">
+                <el-button
+                  :type="preferencesStore.personalViewActive ? 'primary' : 'default'"
+                  size="small"
+                  round
+                  @click="preferencesStore.togglePersonalView"
+                >
+                  <el-icon><Star /></el-icon>
+                  {{ preferencesStore.personalViewActive ? '个人' : '全局' }}
+                </el-button>
+              </el-tooltip>
+
               <!-- Online Users Indicator -->
               <el-popover
                 placement="bottom"
@@ -197,15 +210,17 @@ import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import zhCn from 'element-plus/dist/locale/zh-cn.mjs'
-import { Monitor, Odometer, Cpu, Bell, Search, Setting, User, Warning, Files, Timer, WarningFilled, Stopwatch, UserFilled, ChatDotRound, InfoFilled, Box } from '@element-plus/icons-vue'
+import { Monitor, Odometer, Cpu, Bell, Search, Setting, User, Warning, Files, Timer, WarningFilled, Stopwatch, UserFilled, ChatDotRound, InfoFilled, Box, Star } from '@element-plus/icons-vue'
 import { useAlertStore } from './stores/alerts'
 import { useAuthStore } from './stores/auth'
+import { usePreferencesStore } from './stores/preferences'
 import { setSoundEnabled } from './utils/notification'
 import api from './api'
 
 const route = useRoute()
 const alertStore = useAlertStore()
 const authStore = useAuthStore()
+const preferencesStore = usePreferencesStore()
 const soundOn = ref(false)
 const showSuppressedDetail = ref(false)
 
@@ -340,6 +355,7 @@ async function claimNickname() {
 onMounted(() => {
   alertStore.connectWebSocket()
   loadCurrentUser()
+  preferencesStore.load()
   loadUserCount()
   userCountInterval = setInterval(loadUserCount, 60000)
 })

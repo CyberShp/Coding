@@ -25,8 +25,6 @@
         </el-card>
       </el-tab-pane>
 
-      <!-- Personal Preferences: TODO(Feature5) Plan also called for watched_tag_ids, watched_array_ids,
-           watched_observers, muted_observers, alert_sound. Phase 1 only implements default_tag_id. -->
       <el-tab-pane label="个人偏好" name="preferences">
         <el-card>
           <template #header>
@@ -40,14 +38,48 @@
                 clearable
                 style="width: 280px"
               >
-                <el-option
-                  v-for="tag in tags"
-                  :key="tag.id"
+                <el-option v-for="tag in tags" :key="tag.id"
                   :label="tag.parent_name ? `${tag.parent_name} / ${tag.name}` : tag.name"
-                  :value="tag.id"
-                />
+                  :value="tag.id" />
               </el-select>
               <div class="form-help">仪表盘与阵列管理将默认按此标签筛选阵列</div>
+            </el-form-item>
+            <el-divider />
+            <el-form-item label="关注标签">
+              <el-select v-model="preferences.watched_tag_ids" multiple collapse-tags collapse-tags-tooltip
+                placeholder="选择要关注的标签" style="width: 380px">
+                <el-option v-for="tag in tags" :key="tag.id"
+                  :label="tag.parent_name ? `${tag.parent_name} / ${tag.name}` : tag.name"
+                  :value="tag.id" />
+              </el-select>
+              <div class="form-help">个人视图模式下，只显示关注标签下的阵列和告警</div>
+            </el-form-item>
+            <el-form-item label="关注阵列">
+              <el-select v-model="preferences.watched_array_ids" multiple collapse-tags collapse-tags-tooltip
+                filterable placeholder="选择要关注的阵列" style="width: 380px">
+                <el-option v-for="arr in allArrays" :key="arr.array_id"
+                  :label="`${arr.name} (${arr.host})`"
+                  :value="arr.array_id" />
+              </el-select>
+              <div class="form-help">个人视图模式下，只显示已关注阵列的告警</div>
+            </el-form-item>
+            <el-form-item label="关注观察点">
+              <el-select v-model="preferences.watched_observers" multiple collapse-tags collapse-tags-tooltip
+                placeholder="选择要关注的观察点" style="width: 380px">
+                <el-option v-for="obs in observerOptions" :key="obs" :label="obs" :value="obs" />
+              </el-select>
+              <div class="form-help">个人视图模式下，只显示选中观察点的告警（留空则显示所有）</div>
+            </el-form-item>
+            <el-form-item label="静音观察点">
+              <el-select v-model="preferences.muted_observers" multiple collapse-tags collapse-tags-tooltip
+                placeholder="选择要静音的观察点" style="width: 380px">
+                <el-option v-for="obs in observerOptions" :key="obs" :label="obs" :value="obs" />
+              </el-select>
+              <div class="form-help">这些观察点的告警将不会发出提示音</div>
+            </el-form-item>
+            <el-form-item label="告警提示音">
+              <el-switch v-model="preferences.alert_sound" />
+              <div class="form-help">关闭后所有告警都不会发出提示音</div>
             </el-form-item>
             <el-form-item>
               <el-button type="primary" :loading="savingPrefs" @click="savePreferences">保存偏好</el-button>
@@ -233,15 +265,42 @@ const preferencesStore = usePreferencesStore()
 
 // Personal preferences
 const tags = ref([])
-const preferences = reactive({ default_tag_id: null })
+const allArrays = ref([])
+const observerOptions = ref([
+  'alarm_type', 'card_info', 'card_recovery', 'disk_error', 'eth_link',
+  'fc_link', 'log_watcher', 'port_error', 'process_monitor',
+])
+const preferences = reactive({
+  default_tag_id: null,
+  watched_tag_ids: [],
+  watched_array_ids: [],
+  watched_observers: [],
+  muted_observers: [],
+  alert_sound: true,
+})
 const savingPrefs = ref(false)
 
 async function loadPreferences() {
   try {
     const res = await api.getPreferences()
-    preferences.default_tag_id = res.data?.default_tag_id ?? null
+    const d = res.data || {}
+    preferences.default_tag_id = d.default_tag_id ?? null
+    preferences.watched_tag_ids = d.watched_tag_ids || []
+    preferences.watched_array_ids = d.watched_array_ids || []
+    preferences.watched_observers = d.watched_observers || []
+    preferences.muted_observers = d.muted_observers || []
+    preferences.alert_sound = d.alert_sound !== false
   } catch {
     preferences.default_tag_id = null
+  }
+}
+
+async function loadAllArrays() {
+  try {
+    const res = await api.getArrayStatuses()
+    allArrays.value = res.data || []
+  } catch {
+    allArrays.value = []
   }
 }
 
@@ -257,7 +316,14 @@ async function loadTagsForPrefs() {
 async function savePreferences() {
   savingPrefs.value = true
   try {
-    await preferencesStore.update({ default_tag_id: preferences.default_tag_id })
+    await preferencesStore.update({
+      default_tag_id: preferences.default_tag_id,
+      watched_tag_ids: preferences.watched_tag_ids,
+      watched_array_ids: preferences.watched_array_ids,
+      watched_observers: preferences.watched_observers,
+      muted_observers: preferences.muted_observers,
+      alert_sound: preferences.alert_sound,
+    })
     ElMessage.success('偏好已保存')
   } catch (e) {
     ElMessage.error('保存失败: ' + (e.response?.data?.detail || e.message))
@@ -395,6 +461,7 @@ onMounted(() => {
   loadAIConfig()
   loadPreferences()
   loadTagsForPrefs()
+  loadAllArrays()
 })
 </script>
 

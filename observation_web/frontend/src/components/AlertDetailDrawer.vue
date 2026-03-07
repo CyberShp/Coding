@@ -271,8 +271,8 @@
         <!-- Not acknowledged — 3-type selector -->
         <div v-else class="ack-form">
           <el-radio-group v-model="ackType" style="margin-bottom:10px">
-            <el-radio-button value="dismiss">暂时忽略 (24h)</el-radio-button>
-            <el-radio-button value="confirmed_ok">确认无问题</el-radio-button>
+            <el-radio-button value="dismiss">暂时忽略 (24h内不再通报)</el-radio-button>
+            <el-radio-button value="confirmed_ok">确认无问题 (过期后恢复通报)</el-radio-button>
             <el-radio-button value="deferred">延期处理</el-radio-button>
           </el-radio-group>
           <div v-if="ackType === 'deferred'" style="margin-bottom:10px">

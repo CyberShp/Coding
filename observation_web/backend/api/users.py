@@ -5,12 +5,14 @@ Lightweight user tracking based on IP address.
 No authentication required.
 """
 
+import json
 import logging
 from datetime import datetime, timedelta
-from typing import List
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from sqlalchemy import select
+from pydantic import BaseModel
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..db.database import get_db
@@ -24,21 +26,26 @@ from ..models.user_session import (
 from ..models.array_lock import ArrayLockModel
 from ..models.user_preference import UserPreferenceModel
 from ..middleware.user_session import ip_to_color, get_all_presence
-from sqlalchemy import update
-from pydantic import BaseModel
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
 
 class UserPreferencesResponse(BaseModel):
     default_tag_id: Optional[int] = None
+    watched_tag_ids: list[int] = []
+    watched_array_ids: list[str] = []
+    watched_observers: list[str] = []
+    muted_observers: list[str] = []
+    alert_sound: bool = True
 
 
 class UserPreferencesUpdate(BaseModel):
     default_tag_id: Optional[int] = None
-    # TODO(Feature5): Plan called for watched_tag_ids, watched_array_ids, watched_observers,
-    # muted_observers, alert_sound. Phase 1 only implements default_tag_id.
+    watched_tag_ids: Optional[list[int]] = None
+    watched_array_ids: Optional[list[str]] = None
+    watched_observers: Optional[list[str]] = None
+    muted_observers: Optional[list[str]] = None
+    alert_sound: Optional[bool] = None
 
 
 router = APIRouter(prefix="/users", tags=["users"])
@@ -243,7 +250,6 @@ async def claim_nickname(
     )
 
     # Update previous_ips
-    import json
     try:
         prev_ips = json.loads(old_session.previous_ips or "[]")
     except (json.JSONDecodeError, TypeError):
@@ -278,20 +284,24 @@ async def get_my_preferences(
     request: Request,
     db: AsyncSession = Depends(get_db),
 ):
-    """Get current user's preferences (e.g. default tag for personal view)."""
+    """Get current user's preferences for personal view."""
     user_ip = getattr(request.state, 'user_ip', None)
     if not user_ip:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Unable to determine user IP",
-        )
+        raise HTTPException(status_code=400, detail="Unable to determine user IP")
     result = await db.execute(
         select(UserPreferenceModel).where(UserPreferenceModel.ip == user_ip)
     )
     pref = result.scalar_one_or_none()
     if not pref:
-        return UserPreferencesResponse(default_tag_id=None)
-    return UserPreferencesResponse(default_tag_id=pref.default_tag_id)
+        return UserPreferencesResponse()
+    return UserPreferencesResponse(
+        default_tag_id=pref.default_tag_id,
+        watched_tag_ids=json.loads(pref.watched_tag_ids or "[]"),
+        watched_array_ids=json.loads(pref.watched_array_ids or "[]"),
+        watched_observers=json.loads(pref.watched_observers or "[]"),
+        muted_observers=json.loads(pref.muted_observers or "[]"),
+        alert_sound=pref.alert_sound if pref.alert_sound is not None else True,
+    )
 
 
 @router.put("/me/preferences", response_model=UserPreferencesResponse)
@@ -303,21 +313,39 @@ async def update_my_preferences(
     """Update current user's preferences."""
     user_ip = getattr(request.state, 'user_ip', None)
     if not user_ip:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Unable to determine user IP",
-        )
+        raise HTTPException(status_code=400, detail="Unable to determine user IP")
     result = await db.execute(
         select(UserPreferenceModel).where(UserPreferenceModel.ip == user_ip)
     )
     pref = result.scalar_one_or_none()
-    if pref:
+    if not pref:
+        pref = UserPreferenceModel(ip=user_ip)
+        db.add(pref)
+    if body.default_tag_id is not None:
         pref.default_tag_id = body.default_tag_id
-        pref.updated_at = datetime.now()
-    else:
-        db.add(UserPreferenceModel(ip=user_ip, default_tag_id=body.default_tag_id))
+    elif 'default_tag_id' in body.model_fields_set:
+        pref.default_tag_id = None
+    if body.watched_tag_ids is not None:
+        pref.watched_tag_ids = json.dumps(body.watched_tag_ids)
+    if body.watched_array_ids is not None:
+        pref.watched_array_ids = json.dumps(body.watched_array_ids)
+    if body.watched_observers is not None:
+        pref.watched_observers = json.dumps(body.watched_observers)
+    if body.muted_observers is not None:
+        pref.muted_observers = json.dumps(body.muted_observers)
+    if body.alert_sound is not None:
+        pref.alert_sound = body.alert_sound
+    pref.updated_at = datetime.now()
     await db.commit()
-    return UserPreferencesResponse(default_tag_id=body.default_tag_id)
+    await db.refresh(pref)
+    return UserPreferencesResponse(
+        default_tag_id=pref.default_tag_id,
+        watched_tag_ids=json.loads(pref.watched_tag_ids or "[]"),
+        watched_array_ids=json.loads(pref.watched_array_ids or "[]"),
+        watched_observers=json.loads(pref.watched_observers or "[]"),
+        muted_observers=json.loads(pref.muted_observers or "[]"),
+        alert_sound=pref.alert_sound if pref.alert_sound is not None else True,
+    )
 
 
 @router.get("/count")

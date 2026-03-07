@@ -1,13 +1,10 @@
-"""User preferences model for personal view settings.
+"""User preferences model for personal view settings."""
 
-Phase 1: default_tag_id only. Plan called for watched_tag_ids, watched_array_ids,
-watched_observers, muted_observers, alert_sound - see TODO in users.py.
-"""
+from datetime import datetime
+from typing import Optional, List
 
-from typing import Optional
-
-from pydantic import BaseModel
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey
+from pydantic import BaseModel, ConfigDict
+from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, Boolean
 from sqlalchemy.sql import func
 
 from ..db.database import Base
@@ -19,12 +16,21 @@ class UserPreferenceModel(Base):
 
     ip = Column(String(64), primary_key=True)
     default_tag_id = Column(Integer, ForeignKey("tags.id", ondelete="SET NULL"), nullable=True)
+    watched_tag_ids = Column(Text, default="[]")
+    watched_array_ids = Column(Text, default="[]")
+    watched_observers = Column(Text, default="[]")
+    muted_observers = Column(Text, default="[]")
+    alert_sound = Column(Boolean, default=True)
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
 
 class UserPreferenceResponse(BaseModel):
     """Schema for preferences response."""
     default_tag_id: Optional[int] = None
+    watched_tag_ids: List[int] = []
+    watched_array_ids: List[str] = []
+    watched_observers: List[str] = []
+    muted_observers: List[str] = []
+    alert_sound: bool = True
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)

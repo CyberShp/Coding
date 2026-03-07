@@ -3,12 +3,17 @@
     <el-card>
       <template #header>
         <div class="card-header">
-          <span>卡件列表</span>
+          <div class="header-left">
+            <span>卡件列表</span>
+            <el-tag v-if="lastSync" type="info" size="small" effect="plain" class="last-sync">
+              最后更新: {{ lastSync }}
+            </el-tag>
+          </div>
           <div class="header-actions">
             <el-input
               v-model="searchQuery"
-              placeholder="搜索名称、型号、描述"
-              style="width: 220px"
+              placeholder="搜索 型号/BoardId/CardNo/阵列名/IP（空格分隔多关键词）"
+              style="width: 360px"
               clearable
               @keyup.enter="loadData"
               @clear="loadData"
@@ -19,124 +24,79 @@
                 </el-button>
               </template>
             </el-input>
-            <el-select
-              v-model="filterDeviceType"
-              placeholder="器件类型"
-              clearable
-              style="width: 140px"
-              @change="loadData"
-            >
-              <el-option
-                v-for="t in deviceTypes"
-                :key="t"
-                :label="t"
-                :value="t"
-              />
-            </el-select>
-            <el-button type="primary" @click="showAddDialog">
-              <el-icon><Plus /></el-icon>
-              添加卡件
+            <el-button type="primary" :loading="syncing" @click="syncCards">
+              <el-icon><Refresh /></el-icon>
+              同步卡件
             </el-button>
           </div>
         </div>
       </template>
 
-      <el-table :data="cards" v-loading="loading" stripe>
-        <el-table-column prop="name" label="名称" min-width="120" />
-        <el-table-column prop="device_type" label="器件类型" width="120">
+      <el-table :data="cards" v-loading="loading" stripe max-height="calc(100vh - 220px)">
+        <el-table-column prop="board_id" label="BoardId" min-width="100" show-overflow-tooltip />
+        <el-table-column prop="card_no" label="CardNo" width="80" />
+        <el-table-column prop="health_state" label="HealthState" width="110">
           <template #default="{ row }">
-            <el-tag size="small" effect="plain">{{ row.device_type }}</el-tag>
+            <el-tag
+              :type="row.health_state === 'Normal' ? 'success' : (row.health_state ? 'warning' : 'info')"
+              size="small" effect="plain"
+            >{{ row.health_state || '--' }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column prop="model" label="型号" min-width="120" />
-        <el-table-column prop="description" label="描述" min-width="180" show-overflow-tooltip />
-        <el-table-column label="操作" width="140" fixed="right">
+        <el-table-column prop="running_state" label="RunningState" width="120">
           <template #default="{ row }">
-            <el-button size="small" @click="showEditDialog(row)">编辑</el-button>
-            <el-button size="small" type="danger" @click="handleDelete(row)">删除</el-button>
+            <el-tag
+              :type="row.running_state === 'Normal' ? 'success' : (row.running_state ? 'warning' : 'info')"
+              size="small" effect="plain"
+            >{{ row.running_state || '--' }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column prop="model" label="Model" min-width="200" show-overflow-tooltip />
+        <el-table-column prop="array_name" label="阵列名称" min-width="120" show-overflow-tooltip />
+        <el-table-column prop="array_host" label="IP" width="130">
+          <template #default="{ row }">
+            <code>{{ row.array_host || '--' }}</code>
+          </template>
+        </el-table-column>
+        <el-table-column prop="tag_l1" label="一级标签" width="100">
+          <template #default="{ row }">
+            <span>{{ row.tag_l1 || '--' }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column prop="tag_l2" label="二级标签" width="100">
+          <template #default="{ row }">
+            <span>{{ row.tag_l2 || '--' }}</span>
           </template>
         </el-table-column>
       </el-table>
-    </el-card>
 
-    <!-- Add/Edit Dialog -->
-    <el-dialog
-      v-model="dialogVisible"
-      :title="editingId ? '编辑卡件' : '添加卡件'"
-      width="480px"
-      @closed="resetForm"
-    >
-      <el-form :model="form" :rules="rules" ref="formRef" label-width="100px">
-        <el-form-item label="名称" prop="name">
-          <el-input v-model="form.name" placeholder="卡件名称" />
-        </el-form-item>
-        <el-form-item label="器件类型" prop="device_type">
-          <el-select v-model="form.device_type" placeholder="选择类型" style="width: 100%">
-            <el-option v-for="t in deviceTypes" :key="t" :label="t" :value="t" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="型号" prop="model">
-          <el-input v-model="form.model" placeholder="型号（可选）" />
-        </el-form-item>
-        <el-form-item label="描述" prop="description">
-          <el-input v-model="form.description" type="textarea" :rows="3" placeholder="描述（可选）" />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="dialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="submitting" @click="handleSubmit">
-          {{ editingId ? '保存' : '添加' }}
-        </el-button>
-      </template>
-    </el-dialog>
+      <div class="table-footer">
+        <span class="total-count">共 {{ cards.length }} 条卡件</span>
+      </div>
+    </el-card>
   </div>
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
-import { Plus, Search } from '@element-plus/icons-vue'
+import { ref, onMounted } from 'vue'
+import { ElMessage } from 'element-plus'
+import { Search, Refresh } from '@element-plus/icons-vue'
 import api from '../api'
 
 const loading = ref(false)
-const submitting = ref(false)
+const syncing = ref(false)
 const cards = ref([])
-const deviceTypes = ref([])
 const searchQuery = ref('')
-const filterDeviceType = ref('')
-const dialogVisible = ref(false)
-const editingId = ref(null)
-const formRef = ref(null)
-
-const form = reactive({
-  name: '',
-  device_type: '',
-  model: '',
-  description: '',
-})
-
-const rules = {
-  name: [{ required: true, message: '请输入名称', trigger: 'blur' }],
-  device_type: [{ required: true, message: '请选择器件类型', trigger: 'change' }],
-}
-
-async function loadDeviceTypes() {
-  try {
-    const res = await api.getCardDeviceTypes()
-    deviceTypes.value = res.data || []
-  } catch (e) {
-    deviceTypes.value = ['FC卡', '以太网卡', 'RAID卡', '控制器卡', '扩展卡', '其他']
-  }
-}
+const lastSync = ref('')
 
 async function loadData() {
   loading.value = true
   try {
     const params = {}
     if (searchQuery.value?.trim()) params.q = searchQuery.value.trim()
-    if (filterDeviceType.value) params.device_type = filterDeviceType.value
     const res = await api.getCardInventory(params)
     cards.value = res.data || []
+    updateLastSync()
   } catch (e) {
     console.error('Failed to load card inventory:', e)
     cards.value = []
@@ -145,79 +105,38 @@ async function loadData() {
   }
 }
 
-function showAddDialog() {
-  editingId.value = null
-  Object.assign(form, { name: '', device_type: '', model: '', description: '' })
-  dialogVisible.value = true
-}
-
-function showEditDialog(row) {
-  editingId.value = row.id
-  Object.assign(form, {
-    name: row.name,
-    device_type: row.device_type,
-    model: row.model || '',
-    description: row.description || '',
-  })
-  dialogVisible.value = true
-}
-
-function resetForm() {
-  editingId.value = null
-  formRef.value?.resetFields()
-}
-
-async function handleSubmit() {
-  try {
-    await formRef.value.validate()
-  } catch {
-    return
-  }
-  submitting.value = true
-  try {
-    if (editingId.value) {
-      await api.updateCardItem(editingId.value, {
-        name: form.name,
-        device_type: form.device_type,
-        model: form.model,
-        description: form.description,
-      })
-      ElMessage.success('已更新')
-    } else {
-      await api.createCardItem({
-        name: form.name,
-        device_type: form.device_type,
-        model: form.model,
-        description: form.description,
-      })
-      ElMessage.success('已添加')
+function updateLastSync() {
+  if (cards.value.length > 0) {
+    const dates = cards.value
+      .map(c => c.last_updated)
+      .filter(Boolean)
+      .sort()
+      .reverse()
+    if (dates.length > 0) {
+      lastSync.value = new Date(dates[0]).toLocaleString('zh-CN')
     }
-    dialogVisible.value = false
-    await loadData()
-  } catch (e) {
-    ElMessage.error(e.response?.data?.detail || '操作失败')
-  } finally {
-    submitting.value = false
   }
 }
 
-async function handleDelete(row) {
-  await ElMessageBox.confirm(`确定删除「${row.name}」？`, '确认删除', {
-    type: 'warning',
-  })
+async function syncCards() {
+  syncing.value = true
   try {
-    await api.deleteCardItem(row.id)
-    ElMessage.success('已删除')
+    const res = await api.syncCardInventory()
+    const d = res.data || {}
+    if (d.errors && d.errors.length > 0) {
+      ElMessage.warning(`同步完成: ${d.synced} 条, ${d.errors.length} 个阵列出错`)
+    } else {
+      ElMessage.success(`同步完成: ${d.synced} 条卡件已更新`)
+    }
     await loadData()
   } catch (e) {
-    ElMessage.error(e.response?.data?.detail || '删除失败')
+    ElMessage.error('同步失败: ' + (e.response?.data?.detail || e.message))
+  } finally {
+    syncing.value = false
   }
 }
 
-onMounted(async () => {
-  await loadDeviceTypes()
-  await loadData()
-})
+onMounted(loadData)
 </script>
 
 <style scoped>
@@ -229,9 +148,23 @@ onMounted(async () => {
   justify-content: space-between;
   align-items: center;
 }
+.header-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
 .header-actions {
   display: flex;
   gap: 10px;
   align-items: center;
+}
+.last-sync {
+  font-size: 12px;
+}
+.table-footer {
+  padding: 12px 0;
+  text-align: right;
+  color: var(--el-text-color-secondary);
+  font-size: 13px;
 }
 </style>

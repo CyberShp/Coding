@@ -67,11 +67,9 @@ export default {
   }),
 
   // Card Inventory
-  getCardDeviceTypes: () => http.get('/card-inventory/device-types'),
   getCardInventory: (params = {}) => http.get('/card-inventory', { params }),
-  createCardItem: (data) => http.post('/card-inventory', data),
-  updateCardItem: (id, data) => http.put(`/card-inventory/${id}`, data),
-  deleteCardItem: (id) => http.delete(`/card-inventory/${id}`),
+  syncCardInventory: () => httpLong.post('/card-inventory/sync'),
+  getCardLastSync: () => http.get('/card-inventory/last-sync'),
 
   // Tags
   getTags: () => http.get('/tags'),

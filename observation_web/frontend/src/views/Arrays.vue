@@ -55,9 +55,88 @@
           class="search-alert"
         />
 
-        <!-- Tags Grid -->
-        <div class="tags-grid">
-          <!-- Display filtered tags in search mode, all tags otherwise -->
+        <!-- Grouped Tags View -->
+        <div v-if="!isSearchMode" class="tags-grouped">
+          <div v-for="group in groupedTags" :key="group.l1 ? group.l1.id : 'ungrouped'" class="tag-group">
+            <!-- L1 Group Header -->
+            <div v-if="group.l1" class="group-header" :style="{ borderLeftColor: group.l1.color }">
+              <div class="group-title" @click="toggleGroup(group.l1.id)">
+                <el-icon class="expand-icon" :class="{ expanded: expandedGroups.has(group.l1.id) }">
+                  <ArrowRight />
+                </el-icon>
+                <span class="group-name">{{ group.l1.name }}</span>
+                <el-tag size="small" effect="plain" class="group-count">{{ group.totalArrays }} 阵列</el-tag>
+              </div>
+              <div class="group-actions">
+                <el-button text size="small" @click.stop="goToTag(group.l1.id)">查看全部</el-button>
+                <el-dropdown @click.stop trigger="click" @command="(cmd) => handleTagAction(cmd, group.l1)">
+                  <el-button text size="small" @click.stop>
+                    <el-icon><MoreFilled /></el-icon>
+                  </el-button>
+                  <template #dropdown>
+                    <el-dropdown-menu>
+                      <el-dropdown-item command="edit"><el-icon><Edit /></el-icon> 编辑</el-dropdown-item>
+                      <el-dropdown-item command="delete" divided><el-icon><Delete /></el-icon> 删除</el-dropdown-item>
+                    </el-dropdown-menu>
+                  </template>
+                </el-dropdown>
+              </div>
+            </div>
+            <!-- L2 Children (collapsible) -->
+            <div v-show="!group.l1 || expandedGroups.has(group.l1.id)" class="group-children">
+              <div class="tags-grid">
+                <div v-for="tag in group.children" :key="tag.id" class="tag-card" @click="goToTag(tag.id)">
+                  <div class="tag-header" :style="{ borderLeftColor: tag.color }">
+                    <span class="tag-name">{{ tag.name }}</span>
+                    <el-dropdown @click.stop trigger="click" @command="(cmd) => handleTagAction(cmd, tag)">
+                      <el-button text size="small" @click.stop>
+                        <el-icon><MoreFilled /></el-icon>
+                      </el-button>
+                      <template #dropdown>
+                        <el-dropdown-menu>
+                          <el-dropdown-item command="edit"><el-icon><Edit /></el-icon> 编辑</el-dropdown-item>
+                          <el-dropdown-item command="delete" divided><el-icon><Delete /></el-icon> 删除</el-dropdown-item>
+                        </el-dropdown-menu>
+                      </template>
+                    </el-dropdown>
+                  </div>
+                  <div class="tag-body">
+                    <div class="tag-stat">
+                      <span class="stat-value">{{ tag.array_count }}</span>
+                      <span class="stat-label">阵列</span>
+                    </div>
+                    <div class="tag-status" v-if="tagStatuses[tag.id]">
+                      <el-tag v-if="tagStatuses[tag.id].connected > 0" type="success" size="small" effect="plain">{{ tagStatuses[tag.id].connected }} 已连接</el-tag>
+                      <el-tag v-if="tagStatuses[tag.id].error > 0" type="danger" size="small" effect="plain">{{ tagStatuses[tag.id].error }} 异常</el-tag>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Untagged Arrays Card (non-search mode) -->
+        <div
+          v-if="!isSearchMode && untaggedCount > 0"
+          class="tags-grid"
+          style="margin-top: 16px"
+        >
+          <div class="tag-card untagged-card" @click="goToUntagged">
+            <div class="tag-header">
+              <span class="tag-name">未分类阵列</span>
+            </div>
+            <div class="tag-body">
+              <div class="tag-stat">
+                <span class="stat-value">{{ untaggedCount }}</span>
+                <span class="stat-label">阵列</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Flat view for search mode -->
+        <div v-if="isSearchMode" class="tags-grid">
           <div
             v-for="tag in displayTags"
             :key="tag.id"
@@ -95,8 +174,7 @@
                   {{ tagStatuses[tag.id].error }} 异常
                 </el-tag>
               </div>
-              <!-- Show matching arrays in search mode -->
-              <div v-if="isSearchMode && getSearchTagArrays(tag.id).length" class="search-matches">
+              <div v-if="getSearchTagArrays(tag.id).length" class="search-matches">
                 <div v-for="arr in getSearchTagArrays(tag.id)" :key="arr.array_id" class="match-item">
                   <span class="match-name">{{ arr.name }}</span>
                   <span class="match-ip">{{ arr.host }}</span>
@@ -105,9 +183,9 @@
             </div>
           </div>
 
-          <!-- Untagged Arrays Card -->
+          <!-- Untagged Arrays Card (search mode) -->
           <div
-            v-if="untaggedCount > 0 || (isSearchMode && searchResult.untagged_arrays?.length)"
+            v-if="searchResult.untagged_arrays?.length"
             class="tag-card untagged-card"
             @click="goToUntagged"
           >
@@ -116,11 +194,10 @@
             </div>
             <div class="tag-body">
               <div class="tag-stat">
-                <span class="stat-value">{{ isSearchMode ? searchResult.untagged_arrays?.length : untaggedCount }}</span>
+                <span class="stat-value">{{ searchResult.untagged_arrays?.length }}</span>
                 <span class="stat-label">阵列</span>
               </div>
-              <!-- Show matching untagged arrays in search mode -->
-              <div v-if="isSearchMode && searchResult.untagged_arrays?.length" class="search-matches">
+              <div v-if="searchResult.untagged_arrays?.length" class="search-matches">
                 <div v-for="arr in searchResult.untagged_arrays" :key="arr.array_id" class="match-item">
                   <span class="match-name">{{ arr.name }}</span>
                   <span class="match-ip">{{ arr.host }}</span>
@@ -250,11 +327,11 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
-  Plus, Search, Collection, MoreFilled, Edit, Delete, Upload
+  Plus, Search, Collection, MoreFilled, Edit, Delete, Upload, ArrowRight
 } from '@element-plus/icons-vue'
 import api from '../api'
 import { usePreferencesStore } from '../stores/preferences'
@@ -312,6 +389,53 @@ const tagRules = {
 }
 
 const l1Tags = computed(() => tags.value.filter(t => t.level === 1))
+
+const expandedGroups = ref(new Set())
+
+const groupedTags = computed(() => {
+  const l1Map = new Map()
+  const standalone = []
+
+  for (const tag of tags.value) {
+    if (tag.level === 1) {
+      l1Map.set(tag.id, { l1: tag, children: [], totalArrays: tag.array_count || 0 })
+    }
+  }
+
+  for (const tag of tags.value) {
+    if (tag.level === 2 || tag.level !== 1) {
+      if (tag.parent_id && l1Map.has(tag.parent_id)) {
+        const group = l1Map.get(tag.parent_id)
+        group.children.push(tag)
+        group.totalArrays += (tag.array_count || 0)
+      } else {
+        standalone.push(tag)
+      }
+    }
+  }
+
+  const groups = [...l1Map.values()]
+  if (standalone.length > 0) {
+    groups.push({ l1: null, children: standalone, totalArrays: standalone.reduce((s, t) => s + (t.array_count || 0), 0) })
+  }
+  return groups
+})
+
+watch(groupedTags, (groups) => {
+  for (const g of groups) {
+    if (g.l1 && !expandedGroups.value.has(g.l1.id)) {
+      expandedGroups.value.add(g.l1.id)
+    }
+  }
+}, { immediate: true })
+
+function toggleGroup(l1Id) {
+  if (expandedGroups.value.has(l1Id)) {
+    expandedGroups.value.delete(l1Id)
+  } else {
+    expandedGroups.value.add(l1Id)
+  }
+}
 
 const displayTags = computed(() => {
   if (!isSearchMode.value) return tags.value
@@ -681,5 +805,63 @@ onMounted(async () => {
   width: 10px;
   height: 10px;
   border-radius: 50%;
+}
+
+.tags-grouped {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.tag-group {
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.group-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 16px;
+  background: var(--el-fill-color-light);
+  border-left: 4px solid var(--el-color-primary);
+}
+
+.group-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  flex: 1;
+}
+
+.expand-icon {
+  transition: transform 0.2s;
+  font-size: 14px;
+  color: var(--el-text-color-secondary);
+}
+
+.expand-icon.expanded {
+  transform: rotate(90deg);
+}
+
+.group-name {
+  font-weight: 600;
+  font-size: 16px;
+}
+
+.group-count {
+  margin-left: 4px;
+}
+
+.group-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.group-children {
+  padding: 16px;
 }
 </style>
