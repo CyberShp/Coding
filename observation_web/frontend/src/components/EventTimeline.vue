@@ -1,18 +1,18 @@
 <template>
   <div class="event-timeline">
     <div class="timeline-header">
-      <el-select v-model="timeRange" size="small" style="width: 130px" @change="fetchData">
+      <el-select v-model="timeRange" size="small" style="width: 130px" @change="() => fetchData(true)">
         <el-option label="最近 1 小时" :value="1" />
         <el-option label="最近 6 小时" :value="6" />
         <el-option label="最近 24 小时" :value="24" />
         <el-option label="最近 3 天" :value="72" />
       </el-select>
-      <el-select v-model="filterCategory" size="small" placeholder="全部分类" clearable style="width: 120px" @change="fetchData">
+      <el-select v-model="filterCategory" size="small" placeholder="全部分类" clearable style="width: 120px" @change="() => fetchData(true)">
         <el-option label="端口级" value="port" />
         <el-option label="卡件级" value="card" />
         <el-option label="系统级" value="system" />
       </el-select>
-      <el-button size="small" @click="fetchData" :loading="loading">刷新</el-button>
+      <el-button size="small" @click="onRefresh" :loading="loading">刷新</el-button>
     </div>
 
     <div v-loading="loading" class="timeline-body">
@@ -21,6 +21,13 @@
 
       <!-- Event detail tooltip -->
       <el-empty v-if="!loading && events.length === 0" description="暂无事件" :image-size="80" />
+    </div>
+
+    <!-- Pagination -->
+    <div v-if="total > limit" class="timeline-pagination">
+      <el-button size="small" :disabled="offset <= 0" @click="prevPage">上一页</el-button>
+      <span class="pagination-info">{{ offset + 1 }}-{{ Math.min(offset + limit, total) }} / {{ total }}</span>
+      <el-button size="small" :disabled="offset + limit >= total" @click="nextPage">下一页</el-button>
     </div>
 
     <!-- Event table below chart -->
@@ -60,6 +67,9 @@ const loading = ref(false)
 const events = ref([])
 const taskWindows = ref([])
 const chartContainer = ref(null)
+const limit = 20
+const offset = ref(0)
+const total = ref(0)
 let chartInstance = null
 
 const LEVEL_COLORS = {
@@ -72,14 +82,16 @@ const LEVEL_COLORS = {
 const CAT_Y = { port: 1, card: 2, system: 3 }
 const CAT_LABELS = { 1: '端口级', 2: '卡件级', 3: '系统级' }
 
-async function fetchData() {
+async function fetchData(resetOffset = false) {
+  if (resetOffset) offset.value = 0
   loading.value = true
   try {
-    const params = { hours: timeRange.value }
+    const params = { hours: timeRange.value, limit, offset: offset.value }
     if (filterCategory.value) params.category = filterCategory.value
     const res = await api.getTimeline(props.arrayId, params)
     events.value = res.data.events || []
     taskWindows.value = res.data.task_windows || []
+    total.value = res.data.total ?? 0
     await nextTick()
     renderChart()
   } catch (e) {
@@ -87,6 +99,23 @@ async function fetchData() {
   } finally {
     loading.value = false
   }
+}
+
+function onRefresh() {
+  offset.value = 0
+  fetchData()
+}
+
+function prevPage() {
+  if (offset.value <= 0) return
+  offset.value = Math.max(0, offset.value - limit)
+  fetchData()
+}
+
+function nextPage() {
+  if (offset.value + limit >= total.value) return
+  offset.value += limit
+  fetchData()
 }
 
 function renderChart() {
@@ -176,12 +205,14 @@ onBeforeUnmount(() => {
   chartInstance?.dispose()
 })
 
-watch(() => props.arrayId, () => fetchData())
+watch(() => props.arrayId, () => { offset.value = 0; fetchData() })
 </script>
 
 <style scoped>
 .event-timeline { width: 100%; }
 .timeline-header { display: flex; gap: 8px; margin-bottom: 12px; align-items: center; }
+.timeline-pagination { display: flex; gap: 12px; align-items: center; margin: 12px 0; }
+.pagination-info { font-size: 13px; color: var(--el-text-color-secondary); }
 .chart-container { width: 100%; height: 200px; }
 .event-table-section { margin-top: 12px; }
 

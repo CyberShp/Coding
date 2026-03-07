@@ -60,7 +60,18 @@ export default {
   updateArray: (id, data) => http.put(`/arrays/${id}`, data),
   deleteArray: (id) => http.delete(`/arrays/${id}`),
   getArrayStatus: (id) => http.get(`/arrays/${id}/status`),
+  getArrayWatchers: (id) => http.get(`/arrays/${id}/watchers`),
   searchArrays: (ip) => http.get('/arrays/search', { params: { ip } }),
+  importArrays: (formData) => httpLong.post('/arrays/import', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  }),
+
+  // Card Inventory
+  getCardDeviceTypes: () => http.get('/card-inventory/device-types'),
+  getCardInventory: (params = {}) => http.get('/card-inventory', { params }),
+  createCardItem: (data) => http.post('/card-inventory', data),
+  updateCardItem: (id, data) => http.put(`/card-inventory/${id}`, data),
+  deleteCardItem: (id) => http.delete(`/card-inventory/${id}`),
 
   // Tags
   getTags: () => http.get('/tags'),
@@ -106,6 +117,8 @@ export default {
   setNickname: (nickname) => http.post('/users/me/nickname', { nickname }),
   claimNickname: (nickname) => http.post('/users/claim', { nickname }),
   getUserCount: () => http.get('/users/count'),
+  getPreferences: () => http.get('/users/me/preferences'),
+  updatePreferences: (data) => http.put('/users/me/preferences', data),
   // Long operations use httpLong with 60s timeout
   connectArray: (id, password) => httpLong.post(`/arrays/${id}/connect`, null, { params: { password } }),
   disconnectArray: (id) => http.post(`/arrays/${id}/disconnect`),

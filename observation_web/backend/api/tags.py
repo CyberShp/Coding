@@ -33,12 +33,28 @@ async def _get_tag_or_404(tag_id: int, db: AsyncSession) -> TagModel:
     return tag
 
 
+def _tag_to_response(tag: TagModel, array_count: int = 0, parent_name: Optional[str] = None) -> TagResponse:
+    """Build TagResponse from TagModel with optional parent_name."""
+    return TagResponse(
+        id=tag.id,
+        name=tag.name,
+        color=tag.color,
+        description=tag.description or "",
+        parent_id=tag.parent_id,
+        level=tag.level,
+        parent_name=parent_name,
+        created_at=tag.created_at,
+        updated_at=tag.updated_at,
+        array_count=array_count,
+    )
+
+
 @router.get("", response_model=List[TagResponse])
 async def list_tags(
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Get all tags with array counts.
+    Get all tags with array counts. L1 tags first, then L2 under each.
     """
     result = await db.execute(
         select(
@@ -47,22 +63,23 @@ async def list_tags(
         )
         .outerjoin(ArrayModel, ArrayModel.tag_id == TagModel.id)
         .group_by(TagModel.id)
-        .order_by(TagModel.name)
+        .order_by(TagModel.level, TagModel.name)
     )
     rows = result.all()
 
+    # Fetch parent names for L2 tags
+    parent_ids = {tag.parent_id for tag, _ in rows if tag.parent_id}
+    parent_map: dict[int, str] = {}
+    if parent_ids:
+        parent_result = await db.execute(
+            select(TagModel.id, TagModel.name).where(TagModel.id.in_(parent_ids))
+        )
+        parent_map = {r[0]: r[1] for r in parent_result.all()}
+
     tags = []
     for tag, count in rows:
-        tag_dict = {
-            "id": tag.id,
-            "name": tag.name,
-            "color": tag.color,
-            "description": tag.description or "",
-            "created_at": tag.created_at,
-            "updated_at": tag.updated_at,
-            "array_count": count,
-        }
-        tags.append(TagResponse(**tag_dict))
+        parent_name = parent_map.get(tag.parent_id) if tag.parent_id else None
+        tags.append(_tag_to_response(tag, array_count=count, parent_name=parent_name))
 
     return tags
 
@@ -89,6 +106,8 @@ async def create_tag(
         name=tag.name,
         color=tag.color,
         description=tag.description,
+        parent_id=tag.parent_id,
+        level=tag.level,
     )
     db.add(db_tag)
     await db.commit()
@@ -96,15 +115,12 @@ async def create_tag(
 
     logger.info(f"Created tag: {tag.name}")
 
-    return TagResponse(
-        id=db_tag.id,
-        name=db_tag.name,
-        color=db_tag.color,
-        description=db_tag.description or "",
-        created_at=db_tag.created_at,
-        updated_at=db_tag.updated_at,
-        array_count=0,
-    )
+    parent_name = None
+    if db_tag.parent_id:
+        pr = await db.execute(select(TagModel.name).where(TagModel.id == db_tag.parent_id))
+        parent_name = pr.scalar_one_or_none()
+
+    return _tag_to_response(db_tag, array_count=0, parent_name=parent_name)
 
 
 @router.get("/{tag_id}", response_model=TagWithArrays)
@@ -135,16 +151,13 @@ async def get_tag(
         for a in arrays
     ]
 
-    return TagWithArrays(
-        id=tag.id,
-        name=tag.name,
-        color=tag.color,
-        description=tag.description or "",
-        created_at=tag.created_at,
-        updated_at=tag.updated_at,
-        array_count=len(arrays),
-        arrays=array_list,
-    )
+    parent_name = None
+    if tag.parent_id:
+        pr = await db.execute(select(TagModel.name).where(TagModel.id == tag.parent_id))
+        parent_name = pr.scalar_one_or_none()
+
+    base = _tag_to_response(tag, array_count=len(arrays), parent_name=parent_name)
+    return TagWithArrays(**base.model_dump(), arrays=array_list)
 
 
 @router.get("/{tag_id}/arrays")
@@ -224,15 +237,12 @@ async def update_tag(
 
     logger.info(f"Updated tag: {tag.name}")
 
-    return TagResponse(
-        id=tag.id,
-        name=tag.name,
-        color=tag.color,
-        description=tag.description or "",
-        created_at=tag.created_at,
-        updated_at=tag.updated_at,
-        array_count=array_count,
-    )
+    parent_name = None
+    if tag.parent_id:
+        pr = await db.execute(select(TagModel.name).where(TagModel.id == tag.parent_id))
+        parent_name = pr.scalar_one_or_none()
+
+    return _tag_to_response(tag, array_count=array_count, parent_name=parent_name)
 
 
 @router.delete("/{tag_id}", status_code=status.HTTP_204_NO_CONTENT)

@@ -29,3 +29,6 @@ python-multipart>=0.0.5
 
 # HTTP client for AI API
 httpx>=0.24.0
+
+# Excel import for batch array import
+openpyxl>=3.0.0

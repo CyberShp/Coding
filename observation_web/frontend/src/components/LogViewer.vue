@@ -118,7 +118,7 @@ const props = defineProps({
 })
 
 // State
-const selectedPath = ref('/var/log/messages')
+const selectedPath = ref('/OSM/log/cur_debug/messages')
 const lineCount = ref(100)
 const keyword = ref('')
 const logContent = ref(null)
@@ -134,6 +134,7 @@ const refreshInterval = ref(5)
 let refreshTimer = null
 
 const commonPaths = [
+  '/OSM/log/cur_debug/messages',
   '/var/log/messages',
   '/var/log/syslog',
   '/var/log/dmesg',

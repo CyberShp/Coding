@@ -62,7 +62,12 @@ async def ack_alerts(
     elif ack_type == AckType.DEFERRED.value:
         hours = body.expires_hours or 72  # default 3 days for deferred
         expires_at = datetime.now() + timedelta(hours=hours)
-    # confirmed_ok has no expiry (None)
+    elif ack_type == AckType.CONFIRMED_OK.value and body.expires_hours:
+        # confirmed_ok with optional expiry: 2/4/6/8/12/24 hours
+        h = body.expires_hours
+        if h not in (2, 4, 6, 8, 12, 24):
+            h = 24
+        expires_at = datetime.now() + timedelta(hours=h)
 
     # Verify all alert IDs exist
     result = await db.execute(
@@ -134,6 +139,8 @@ async def ack_all_visible(
         expires_at = datetime.now() + timedelta(hours=_DISMISS_DEFAULT_HOURS)
     elif ack_type_val == AckType.DEFERRED.value:
         expires_at = datetime.now() + timedelta(hours=72)
+    elif ack_type_val == AckType.CONFIRMED_OK.value:
+        expires_at = datetime.now() + timedelta(hours=24)  # ack-all default 24h for confirmed_ok
 
     # Find unacked alerts in time range
     since = datetime.now() - timedelta(hours=hours)
@@ -201,7 +208,7 @@ class BatchUndoRequest(BaseModel):
 class BatchModifyRequest(BaseModel):
     alert_ids: List[int]
     new_ack_type: str = "dismiss"
-    expires_hours: Optional[int] = None
+    expires_hours: Optional[int] = None  # For confirmed_ok: 2/4/6/8/12/24
 
 
 @router.post("/ack/batch-undo", response_model=dict)
@@ -239,6 +246,11 @@ async def batch_modify_ack(
     elif ack_type == AckType.DEFERRED.value:
         hours = body.expires_hours or 72
         expires_at = datetime.now() + timedelta(hours=hours)
+    elif ack_type == AckType.CONFIRMED_OK.value and body.expires_hours:
+        h = body.expires_hours
+        if h not in (2, 4, 6, 8, 12, 24):
+            h = 24
+        expires_at = datetime.now() + timedelta(hours=h)
 
     result = await db.execute(
         update(AlertAckModel)
@@ -257,12 +269,26 @@ async def get_alert_ack_details(
 ):
     """
     Get acknowledgement details for a specific alert (lazy-loaded by detail drawer).
-    Returns a list (usually 0 or 1 item).
+    Returns a list (usually 0 or 1 item). Includes acked_by_nickname when available.
     """
     result = await db.execute(
         select(AlertAckModel).where(AlertAckModel.alert_id == alert_id)
     )
-    return result.scalars().all()
+    acks = result.scalars().all()
+    if not acks:
+        return []
+    from .arrays import _resolve_ips_to_nicknames
+    ips = list({a.acked_by_ip for a in acks})
+    nick_map = await _resolve_ips_to_nicknames(db, ips)
+    return [
+        AlertAckResponse(
+            id=a.id, alert_id=a.alert_id, acked_by_ip=a.acked_by_ip, acked_at=a.acked_at,
+            comment=a.comment or "", ack_type=a.ack_type or "dismiss",
+            ack_expires_at=a.ack_expires_at, note=a.note or "",
+            acked_by_nickname=nick_map.get(a.acked_by_ip) or None,
+        )
+        for a in acks
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -271,29 +297,54 @@ async def get_alert_ack_details(
 
 async def _clear_acked_active_issues(db: AsyncSession, acked_alert_ids: List[int]):
     """
-    After acknowledging alerts, try to remove matching entries from
-    the in-memory active_issues cache so the active panel updates
-    without waiting for the next refresh cycle.
+    After acknowledging alerts, update matching entries in the in-memory
+    active_issues cache to mark them as suppressed (仍显示，灰色样式).
+    Fetches ack details (acked_by_ip, ack_expires_at, acked_by_nickname) and merges into issues.
     """
-    from .arrays import _array_status_cache
+    from .arrays import _array_status_cache, _resolve_ips_to_nicknames
 
-    # Look up the observer_name and array_id for the acked alerts
+    if not acked_alert_ids:
+        return
+
+    # Fetch alert + ack info for acked alerts
     result = await db.execute(
-        select(AlertModel.id, AlertModel.array_id, AlertModel.observer_name)
+        select(
+            AlertModel.id,
+            AlertModel.array_id,
+            AlertModel.observer_name,
+            AlertAckModel.acked_by_ip,
+            AlertAckModel.ack_expires_at,
+        )
+        .join(AlertAckModel, AlertAckModel.alert_id == AlertModel.id)
         .where(AlertModel.id.in_(acked_alert_ids))
     )
     rows = result.all()
-    acked_set = set(acked_alert_ids)
+    ips = list({r[3] for r in rows if r[3]})
+    nick_map = await _resolve_ips_to_nicknames(db, ips)
+    ack_info = {
+        r[0]: {
+            'acked_by_ip': r[3],
+            'ack_expires_at': r[4].isoformat() if r[4] else None,
+            'acked_by_nickname': nick_map.get(r[3]) or None,
+        }
+        for r in rows
+    }
 
-    for _id, array_id, observer_name in rows:
+    for _id, array_id, observer_name, _, _ in rows:
         status_obj = _array_status_cache.get(array_id)
-        if status_obj and status_obj.active_issues:
-            # Remove issues whose alert_id matches the acked set,
-            # or fall back to observer_name match if no alert_id on the issue
-            status_obj.active_issues = [
-                issue for issue in status_obj.active_issues
-                if not (
-                    issue.get('alert_id') in acked_set
-                    or (not issue.get('alert_id') and issue.get('observer') == observer_name)
-                )
-            ]
+        if not status_obj or not status_obj.active_issues:
+            continue
+        info = ack_info.get(_id, {})
+        suppressed = {
+            'suppressed': True,
+            'acked_by_ip': info.get('acked_by_ip'),
+            'ack_expires_at': info.get('ack_expires_at'),
+            'acked_by_nickname': info.get('acked_by_nickname'),
+        }
+        for issue in status_obj.active_issues:
+            if issue.get('alert_id') == _id:
+                issue.update(suppressed)
+                break
+            if not issue.get('alert_id') and issue.get('observer') == observer_name:
+                issue.update(suppressed)
+                break

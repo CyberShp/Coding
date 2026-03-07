@@ -626,7 +626,7 @@ class TestDeriveActiveIssuesRecoveryAck:
     """
 
     async def test_acked_latest_alert_skipped(self, db_session):
-        """Standard behavior: acked latest alert → no active issue."""
+        """Acked latest alert → still visible but marked as suppressed (per plan 4b)."""
         from backend.api.arrays import _derive_active_issues_from_db
 
         now = datetime.now()
@@ -652,7 +652,8 @@ class TestDeriveActiveIssuesRecoveryAck:
 
         issues = await _derive_active_issues_from_db(db_session, "arr-test")
         cpu_issues = [i for i in issues if i["observer"] == "cpu_usage"]
-        assert len(cpu_issues) == 0
+        assert len(cpu_issues) == 1  # still visible per plan 4b (被抑制告警仍然可见)
+        assert cpu_issues[0].get("suppressed") is True
 
     async def test_recovery_between_ack_and_latest_invalidates(self, db_session):
         """
@@ -704,7 +705,7 @@ class TestDeriveActiveIssuesRecoveryAck:
         assert len(cpu_issues) == 1  # relapse should surface
 
     async def test_no_recovery_ack_stays_valid(self, db_session):
-        """Without intermediate recovery, ack remains valid."""
+        """Without intermediate recovery, ack remains valid — issue still visible but suppressed."""
         from backend.api.arrays import _derive_active_issues_from_db
 
         now = datetime.now()
@@ -741,7 +742,8 @@ class TestDeriveActiveIssuesRecoveryAck:
 
         issues = await _derive_active_issues_from_db(db_session, "arr-test3")
         cpu_issues = [i for i in issues if i["observer"] == "cpu_usage"]
-        assert len(cpu_issues) == 0  # ack is valid, no recovery
+        assert len(cpu_issues) == 1  # still visible per plan 4b, marked suppressed
+        assert cpu_issues[0].get("suppressed") is True
 
 
 # ═══════════════════════════════════════════════════════════════════════════

@@ -38,6 +38,21 @@ def get_client_ip(request: Request) -> str:
     return "unknown"
 
 
+def _api_path_to_page(path: str) -> str:
+    """
+    Map API request path to frontend page path for watchers presence.
+
+    Watchers expect page = /arrays/{array_id} (frontend route).
+    Middleware records request.url.path which is /api/arrays/{id}/status etc.
+    """
+    if path.startswith("/api/arrays/") and path != "/api/arrays":
+        parts = path.split("/")
+        if len(parts) >= 4:
+            array_id = parts[3]
+            return f"/arrays/{array_id}"
+    return path
+
+
 def ip_to_color(ip: str) -> str:
     """
     Generate a consistent color from IP address.
@@ -72,8 +87,13 @@ class UserSessionMiddleware(BaseHTTPMiddleware):
         request.state.user_ip = user_ip
         request.state.user_color = ip_to_color(user_ip)
 
+        # Update presence (which page user is viewing) - used by watchers API
+        # Map API path to frontend page (e.g. /api/arrays/xxx/status -> /arrays/xxx)
+        page = _api_path_to_page(str(request.url.path))
+        update_user_presence(user_ip, page)
+
         # Update session in background (non-blocking)
-        await self._update_session(user_ip, str(request.url.path))
+        await self._update_session(user_ip, page)
 
         response = await call_next(request)
         return response
@@ -97,6 +117,9 @@ class UserSessionMiddleware(BaseHTTPMiddleware):
             'last_update': now,
             'current_page': current_page,
         }
+
+        # Update presence (for watchers - every request updates, cheap dict op)
+        update_user_presence(ip, current_page)
 
         # Update database (async, non-blocking)
         try:

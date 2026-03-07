@@ -49,6 +49,10 @@
               <el-icon><ChatDotRound /></el-icon>
               <span>建议反馈</span>
             </el-menu-item>
+            <el-menu-item index="/card-inventory">
+              <el-icon><Box /></el-icon>
+              <span>卡件列表</span>
+            </el-menu-item>
             <el-menu-item v-if="authStore.isAdmin" index="/admin/monitors">
               <el-icon><Bell /></el-icon>
               <span>告警管理</span>
@@ -193,7 +197,7 @@ import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import zhCn from 'element-plus/dist/locale/zh-cn.mjs'
-import { Monitor, Odometer, Cpu, Bell, Search, Setting, User, Warning, Files, Timer, WarningFilled, Stopwatch, UserFilled, ChatDotRound, InfoFilled } from '@element-plus/icons-vue'
+import { Monitor, Odometer, Cpu, Bell, Search, Setting, User, Warning, Files, Timer, WarningFilled, Stopwatch, UserFilled, ChatDotRound, InfoFilled, Box } from '@element-plus/icons-vue'
 import { useAlertStore } from './stores/alerts'
 import { useAuthStore } from './stores/auth'
 import { setSoundEnabled } from './utils/notification'
@@ -246,6 +250,7 @@ const currentRoute = computed(() => {
     '/data': '数据管理',
     '/tasks': '定时任务',
     '/test-tasks': '测试任务',
+    '/card-inventory': '卡件列表',
   }
   return routes[route.path] || ''
 })
@@ -264,6 +269,7 @@ function getPageName(path) {
     '/alerts': '告警中心',
     '/query': '查询',
     '/test-tasks': '测试任务',
+    '/card-inventory': '卡件列表',
   }
   for (const [p, name] of Object.entries(names)) {
     if (path.startsWith(p) && p !== '/') return name

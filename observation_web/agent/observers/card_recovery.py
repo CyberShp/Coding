@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from ..core.base import BaseObserver, ObserverResult, AlertLevel
-from ..utils.helpers import tail_file
+from ..utils.helpers import tail_file, get_bus_to_slot_mapping
 
 logger = logging.getLogger(__name__)
 
@@ -28,8 +28,8 @@ class CardRecoveryObserver(BaseObserver):
     - 记录最近3次修复的时间和 PCIe 槽位号
     """
     
-    # PCIe 槽位号提取正则：完整提取 dev(0:x.0) 或 top(0:x.0) 格式
-    PCIE_SLOT_PATTERN = re.compile(r'((?:dev|top)\(0:\d+\.0\))', re.IGNORECASE)
+    # PCIe bus 信息提取：dev(0:x.x.x) 或 top(0:x.x.x)，支持 4.40.0 等格式
+    PCIE_SLOT_PATTERN = re.compile(r'((?:dev|top)\(0:[\d.]+\))', re.IGNORECASE)
     
     # 日志时间戳格式
     TIMESTAMP_PATTERNS = [
@@ -73,18 +73,21 @@ class CardRecoveryObserver(BaseObserver):
         
         # 本次检测到的事件数
         new_count = 0
-        
+        bus_to_slot: Dict[str, str] = {}
+
         # 分析每一行
         for line in new_lines:
             if self.keyword.lower() in line.lower():
                 new_count += 1
                 self._total_count += 1
-                
-                # 解析事件详情
-                event = self._parse_event(line)
+                # 首次匹配时获取 bus->slot_id 映射（避免无匹配时调用 diagsh）
+                if not bus_to_slot:
+                    bus_to_slot = get_bus_to_slot_mapping()
+                # 解析事件详情（传入映射以解析 slot_id）
+                event = self._parse_event(line, bus_to_slot)
                 self._recent_events.append(event)
                 
-                logger.warning(f"[CardRecovery] slot={event['slot']} @{event['timestamp']}")
+                logger.warning(f"[CardRecovery] slot={event.get('slot_id') or event['slot']} @{event['timestamp']}")
         
         # 构建结果
         details = {
@@ -112,16 +115,32 @@ class CardRecoveryObserver(BaseObserver):
             details=details,
         )
     
-    def _parse_event(self, line: str) -> Dict[str, Any]:
-        """解析日志行，提取时间戳和PCIe槽位号"""
+    def _parse_event(self, line: str, bus_to_slot: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
+        """解析日志行，提取时间戳、PCIe bus 信息及 slot_id"""
         timestamp = self._parse_timestamp(line)
-        slot = self._parse_pcie_slot(line)
-        
+        bus_info = self._parse_pcie_slot(line)  # dev(0:4.40.0) 或 top(0:4.0)
+        slot_id = None
+        if bus_info and bus_to_slot:
+            # 从 bus 信息提取数字部分并规范化匹配
+            norm_bus = self._normalize_bus_from_log(bus_info)
+            slot_id = bus_to_slot.get(norm_bus)
         return {
             'timestamp': timestamp or datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-            'slot': slot,
-            'line': line[:200],  # 保留部分原始行
+            'slot': bus_info,
+            'slot_id': slot_id,
+            'line': line[:200],
         }
+
+    def _normalize_bus_from_log(self, bus_str: str) -> str:
+        """从日志中的 dev(0:4.40.0) 提取并规范化为 4.40.0 便于与映射表匹配"""
+        if not bus_str:
+            return ""
+        match = re.search(r'0:([\d.]+)', bus_str)
+        if match:
+            num_part = match.group(1)
+            parts = num_part.split(".")
+            return ".".join(str(int(p)) if p.isdigit() else p for p in parts)
+        return bus_str
     
     def _parse_timestamp(self, line: str) -> Optional[str]:
         """尝试从日志行解析时间戳"""
@@ -132,20 +151,23 @@ class CardRecoveryObserver(BaseObserver):
         return None
     
     def _parse_pcie_slot(self, line: str) -> Optional[str]:
-        """从日志行提取PCIe槽位号"""
+        """从日志行提取 PCIe bus 信息（dev/top 括号内）"""
         match = self.PCIE_SLOT_PATTERN.search(line)
         if match:
             return match.group(1)
         return None
-    
+
     def _format_recent_events(self) -> str:
-        """格式化最近事件列表"""
+        """格式化最近事件列表，优先显示 slot_id"""
         if not self._recent_events:
             return ""
-        
+
         items = []
         for event in self._recent_events:
-            slot_str = f"slot={event['slot']}" if event['slot'] else "slot=未知"
+            if event.get('slot_id'):
+                slot_str = f"slot={event['slot_id']} (bus={event['slot']})" if event.get('slot') else f"slot={event['slot_id']}"
+            else:
+                slot_str = f"slot={event['slot']}" if event.get('slot') else "slot=未知"
             items.append(f"[{event['timestamp']} {slot_str}]")
-        
+
         return f"最近{len(items)}次: " + ", ".join(items)

@@ -78,6 +78,11 @@ const routes = [
     name: 'Issues',
     component: () => import('../views/Issues.vue'),
   },
+  {
+    path: '/card-inventory',
+    name: 'CardInventory',
+    component: () => import('../views/CardInventory.vue'),
+  },
 ]
 
 const router = createRouter({

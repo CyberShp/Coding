@@ -23,10 +23,21 @@
               <el-icon><Collection /></el-icon>
               添加标签
             </el-button>
+            <el-button @click="triggerImport" :loading="importing">
+              <el-icon><Upload /></el-icon>
+              批量导入
+            </el-button>
             <el-button type="primary" @click="showAddDialog">
               <el-icon><Plus /></el-icon>
               添加阵列
             </el-button>
+            <input
+              ref="importFileRef"
+              type="file"
+              accept=".csv,.xlsx,.xls"
+              style="display: none"
+              @change="handleImportFile"
+            />
           </div>
         </div>
       </template>
@@ -54,7 +65,7 @@
             @click="goToTag(tag.id)"
           >
             <div class="tag-header" :style="{ borderLeftColor: tag.color }">
-              <span class="tag-name">{{ tag.name }}</span>
+              <span class="tag-name">{{ tag.parent_name ? `${tag.parent_name} / ${tag.name}` : tag.name }}</span>
               <el-dropdown @click.stop trigger="click" @command="(cmd) => handleTagAction(cmd, tag)">
                 <el-button text size="small" @click.stop>
                   <el-icon><MoreFilled /></el-icon>
@@ -152,12 +163,12 @@
             <el-option
               v-for="tag in tags"
               :key="tag.id"
-              :label="tag.name"
+              :label="tag.parent_name ? `${tag.parent_name} / ${tag.name}` : tag.name"
               :value="tag.id"
             >
               <span class="tag-option">
                 <span class="tag-dot" :style="{ background: tag.color }"></span>
-                {{ tag.name }}
+                {{ tag.parent_name ? `${tag.parent_name} / ${tag.name}` : tag.name }}
               </span>
             </el-option>
           </el-select>
@@ -172,6 +183,16 @@
     <!-- Add Tag Dialog -->
     <el-dialog v-model="tagDialogVisible" :title="editingTag ? '编辑标签' : '添加标签'" width="400px" @keyup.enter="handleAddTag">
       <el-form :model="tagForm" :rules="tagRules" ref="tagFormRef" label-width="80px" @submit.prevent="handleAddTag">
+        <el-form-item label="上级标签">
+          <el-select v-model="tagForm.parent_id" placeholder="不选则为一级标签" clearable style="width: 100%">
+            <el-option
+              v-for="t in l1Tags"
+              :key="t.id"
+              :label="t.name"
+              :value="t.id"
+            />
+          </el-select>
+        </el-form-item>
         <el-form-item label="名称" prop="name">
           <el-input v-model="tagForm.name" placeholder="标签名称" @keyup.enter="handleAddTag" />
         </el-form-item>
@@ -212,7 +233,7 @@
               <el-option
                 v-for="tag in tags"
                 :key="tag.id"
-                :label="tag.name"
+                :label="tag.parent_name ? `${tag.parent_name} / ${tag.name}` : tag.name"
                 :value="tag.id"
               />
             </el-select>
@@ -230,14 +251,17 @@
 
 <script setup>
 import { ref, reactive, computed, onMounted } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRouter, useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
-  Plus, Search, Collection, MoreFilled, Edit, Delete
+  Plus, Search, Collection, MoreFilled, Edit, Delete, Upload
 } from '@element-plus/icons-vue'
 import api from '../api'
+import { usePreferencesStore } from '../stores/preferences'
 
 const router = useRouter()
+const route = useRoute()
+const preferencesStore = usePreferencesStore()
 
 const loading = ref(false)
 const tags = ref([])
@@ -255,6 +279,8 @@ const tagSubmitting = ref(false)
 const loadingUntagged = ref(false)
 const formRef = ref(null)
 const tagFormRef = ref(null)
+const importFileRef = ref(null)
+const importing = ref(false)
 const editingTag = ref(null)
 const untaggedArrays = ref([])
 
@@ -272,6 +298,7 @@ const tagForm = reactive({
   name: '',
   color: '#409eff',
   description: '',
+  parent_id: null,
 })
 
 const rules = {
@@ -283,6 +310,8 @@ const rules = {
 const tagRules = {
   name: [{ required: true, message: '请输入标签名称', trigger: 'blur' }],
 }
+
+const l1Tags = computed(() => tags.value.filter(t => t.level === 1))
 
 const displayTags = computed(() => {
   if (!isSearchMode.value) return tags.value
@@ -375,6 +404,34 @@ function goToTag(tagId) {
   router.push(`/arrays/tag/${tagId}`)
 }
 
+function triggerImport() {
+  importFileRef.value?.click()
+}
+
+async function handleImportFile(ev) {
+  const file = ev.target?.files?.[0]
+  if (!file) return
+  ev.target.value = ''
+  importing.value = true
+  try {
+    const formData = new FormData()
+    formData.append('file', file)
+    const res = await api.importArrays(formData)
+    const d = res.data || {}
+    const msg = `导入完成：新增 ${d.created || 0} 个，跳过 ${d.skipped || 0} 个（已存在）`
+    if ((d.errors || []).length > 0) {
+      ElMessage.warning(`${msg}，${d.errors.length} 行有错误`)
+    } else {
+      ElMessage.success(msg)
+    }
+    await loadData()
+  } catch (e) {
+    ElMessage.error('导入失败: ' + (e.response?.data?.detail || e.message))
+  } finally {
+    importing.value = false
+  }
+}
+
 async function goToUntagged() {
   untaggedDialogVisible.value = true
   loadingUntagged.value = true
@@ -433,14 +490,14 @@ async function handleAdd() {
 
 function showAddTagDialog() {
   editingTag.value = null
-  Object.assign(tagForm, { name: '', color: '#409eff', description: '' })
+  Object.assign(tagForm, { name: '', color: '#409eff', description: '', parent_id: null })
   tagDialogVisible.value = true
 }
 
 function handleTagAction(action, tag) {
   if (action === 'edit') {
     editingTag.value = tag
-    Object.assign(tagForm, { name: tag.name, color: tag.color, description: tag.description })
+    Object.assign(tagForm, { name: tag.name, color: tag.color, description: tag.description, parent_id: tag.parent_id ?? null })
     tagDialogVisible.value = true
   } else if (action === 'delete') {
     deleteTag(tag)
@@ -465,13 +522,21 @@ async function handleAddTag() {
     return
   }
 
+  const payload = {
+    name: tagForm.name,
+    color: tagForm.color,
+    description: tagForm.description,
+    parent_id: tagForm.parent_id || null,
+    level: tagForm.parent_id ? 2 : 1,
+  }
+
   tagSubmitting.value = true
   try {
     if (editingTag.value) {
-      await api.updateTag(editingTag.value.id, tagForm)
+      await api.updateTag(editingTag.value.id, payload)
       ElMessage.success('更新成功')
     } else {
-      await api.createTag(tagForm)
+      await api.createTag(payload)
       ElMessage.success('创建成功')
     }
     tagDialogVisible.value = false
@@ -483,8 +548,14 @@ async function handleAddTag() {
   }
 }
 
-onMounted(() => {
-  loadData()
+onMounted(async () => {
+  await loadData()
+  if (route.path === '/arrays') {
+    await preferencesStore.load()
+    if (preferencesStore.defaultTagId) {
+      router.replace(`/arrays/tag/${preferencesStore.defaultTagId}`)
+    }
+  }
 })
 </script>
 

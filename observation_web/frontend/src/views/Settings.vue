@@ -25,6 +25,37 @@
         </el-card>
       </el-tab-pane>
 
+      <!-- Personal Preferences: TODO(Feature5) Plan also called for watched_tag_ids, watched_array_ids,
+           watched_observers, muted_observers, alert_sound. Phase 1 only implements default_tag_id. -->
+      <el-tab-pane label="个人偏好" name="preferences">
+        <el-card>
+          <template #header>
+            <span>个人视图偏好</span>
+          </template>
+          <el-form label-width="140px">
+            <el-form-item label="默认标签筛选">
+              <el-select
+                v-model="preferences.default_tag_id"
+                placeholder="不筛选（显示全部）"
+                clearable
+                style="width: 280px"
+              >
+                <el-option
+                  v-for="tag in tags"
+                  :key="tag.id"
+                  :label="tag.parent_name ? `${tag.parent_name} / ${tag.name}` : tag.name"
+                  :value="tag.id"
+                />
+              </el-select>
+              <div class="form-help">仪表盘与阵列管理将默认按此标签筛选阵列</div>
+            </el-form-item>
+            <el-form-item>
+              <el-button type="primary" :loading="savingPrefs" @click="savePreferences">保存偏好</el-button>
+            </el-form-item>
+          </el-form>
+        </el-card>
+      </el-tab-pane>
+
       <!-- Alert Rules -->
       <el-tab-pane label="告警规则" name="alerts">
         <el-card>
@@ -193,10 +224,47 @@ import { ref, reactive, computed, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useAlertStore } from '../stores/alerts'
 import { useAuthStore } from '../stores/auth'
+import { usePreferencesStore } from '../stores/preferences'
 import api from '../api'
 
 const alertStore = useAlertStore()
 const authStore = useAuthStore()
+const preferencesStore = usePreferencesStore()
+
+// Personal preferences
+const tags = ref([])
+const preferences = reactive({ default_tag_id: null })
+const savingPrefs = ref(false)
+
+async function loadPreferences() {
+  try {
+    const res = await api.getPreferences()
+    preferences.default_tag_id = res.data?.default_tag_id ?? null
+  } catch {
+    preferences.default_tag_id = null
+  }
+}
+
+async function loadTagsForPrefs() {
+  try {
+    const res = await api.getTags()
+    tags.value = res.data || []
+  } catch {
+    tags.value = []
+  }
+}
+
+async function savePreferences() {
+  savingPrefs.value = true
+  try {
+    await preferencesStore.update({ default_tag_id: preferences.default_tag_id })
+    ElMessage.success('偏好已保存')
+  } catch (e) {
+    ElMessage.error('保存失败: ' + (e.response?.data?.detail || e.message))
+  } finally {
+    savingPrefs.value = false
+  }
+}
 
 function handleLogout() {
   authStore.logout()
@@ -325,6 +393,8 @@ async function testAIConnection() {
 
 onMounted(() => {
   loadAIConfig()
+  loadPreferences()
+  loadTagsForPrefs()
 })
 </script>
 

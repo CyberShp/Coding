@@ -88,21 +88,11 @@ def init_db():
 
 
 async def create_tables():
-    """Create all tables and run migrations. Uses separate transactions so migration
-    failure does not roll back table creation."""
-    from ..models import array, alert, query, lifecycle, scheduler, traffic, task_session, snapshot, tag, user_session, array_lock, alert_rule, audit_log, issue, monitor_template, observer_config, ai_interpretation  # noqa: F401
+    """Create all tables. Schema migration (if needed) runs separately before init_db."""
+    from ..models import array, alert, query, lifecycle, scheduler, traffic, task_session, snapshot, tag, user_session, user_preference, array_lock, alert_rule, audit_log, issue, monitor_template, observer_config, ai_interpretation, card_inventory  # noqa: F401
 
-    # Transaction 1: Create tables (unaffected by migration failures)
     async with _async_engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-
-    # Transaction 2: Run migrations (independent; failure does not undo table creation)
-    from .migrations import run_migrations
-    try:
-        async with _async_engine.begin() as conn:
-            await conn.run_sync(run_migrations)
-    except Exception as e:
-        logger.error("Migration failed (tables still created): %s", e)
 
     # Startup diagnostic: verify all expected tables exist
     async with _async_engine.begin() as conn:

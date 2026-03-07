@@ -4,6 +4,16 @@
 # 使用方式: ./scripts/upgrade.sh <升级包.tar.gz>
 #          ./scripts/upgrade.sh --rollback  # 回滚到最近备份
 # ============================================================
+# Self-heal: strip CR if script was transferred with Windows line endings
+if [ -z "${_UPGRADE_SH_FIXED}" ]; then
+  export _UPGRADE_SH_FIXED=1
+  if command -v dos2unix >/dev/null 2>&1; then
+    dos2unix "$0" 2>/dev/null || true
+  else
+    sed -i 's/\r$//' "$0" 2>/dev/null || true
+  fi
+  exec "$0" "$@"
+fi
 
 set -e
 
@@ -114,16 +124,20 @@ else
     python3 -m pip install -r requirements.txt -q
 fi
 
-# 5. Run migrations
-echo -e "${YELLOW}执行数据库迁移...${NC}"
+# 5. Schema migration (create fresh DB + copy data) then create tables
+echo -e "${YELLOW}执行数据库升级...${NC}"
 python3 -c "
 import asyncio
 import sys
 sys.path.insert(0, '.')
+from backend.db.schema_migrate import migrate_if_needed
 from backend.db.database import init_db, create_tables
+migrated = migrate_if_needed()
+if migrated:
+    print('Schema migration OK')
 init_db()
 asyncio.run(create_tables())
-print('Migrations OK')
+print('Database OK')
 "
 
 # 6. Start service

@@ -46,13 +46,13 @@
               placeholder="选择标签"
               size="small"
               clearable
-              style="width: 160px"
+              style="width: 200px"
               @change="handleTagChange"
             >
               <el-option
                 v-for="tag in tags"
                 :key="tag.id"
-                :label="tag.name"
+                :label="tag.parent_name ? `${tag.parent_name} / ${tag.name}` : tag.name"
                 :value="tag.id"
               />
             </el-select>
@@ -89,29 +89,34 @@
             v-for="issue in activeIssues"
             :key="issue.key"
             class="issue-item"
-            :class="`issue-${issue.level}`"
+            :class="[`issue-${issue.level}`, { 'issue-suppressed': issue.suppressed }]"
             @click="openIssueDetail(issue)"
           >
             <div class="issue-header">
               <span class="issue-title">{{ issue.title }}</span>
-              <el-tag :type="issue.level === 'error' || issue.level === 'critical' ? 'danger' : 'warning'" size="small">
+              <el-tag v-if="!issue.suppressed" :type="issue.level === 'error' || issue.level === 'critical' ? 'danger' : 'warning'" size="small">
                 {{ issue.level === 'error' || issue.level === 'critical' ? '错误' : '警告' }}
               </el-tag>
+              <el-tag v-else type="info" size="small">已忽略</el-tag>
               <el-button
-                v-if="issue.alert_id"
+                v-if="issue.alert_id && !issue.suppressed"
                 size="small"
                 type="success"
                 text
                 class="issue-ack-btn"
                 @click.stop="handleAckIssue(issue)"
               >
-                <el-icon><Check /></el-icon> 确认消除
+                <el-icon><Check /></el-icon> 暂时忽略(24h)
               </el-button>
             </div>
             <div class="issue-message">{{ issue.message }}</div>
             <div class="issue-meta">
               <span class="issue-observer">{{ getObserverName(issue.observer) }}</span>
-              <span class="issue-since" v-if="issue.since">持续自 {{ formatRelativeTime(issue.since) }}</span>
+              <span class="issue-since" v-if="issue.since && !issue.suppressed">持续自 {{ formatRelativeTime(issue.since) }}</span>
+              <template v-if="issue.suppressed">
+                <span class="issue-acked">确认人: {{ (issue.acked_by_nickname || issue.acked_by_ip) || '--' }}</span>
+                <span class="issue-expires" v-if="issue.ack_expires_at">恢复时间: {{ formatDateTime(issue.ack_expires_at) }}</span>
+              </template>
             </div>
           </div>
         </div>
@@ -119,6 +124,28 @@
         <div v-else class="issues-empty">
           <el-icon :size="32" color="#67c23a"><CircleCheck /></el-icon>
           <p>所有监测项正常运行</p>
+        </div>
+      </el-card>
+
+      <!-- Watchers (who is viewing this array) -->
+      <el-card v-if="watchers.length > 0" class="watchers-card">
+        <template #header>
+          <div class="card-header">
+            <el-icon><User /></el-icon>
+            <span>当前关注 ({{ watchers.length }})</span>
+          </div>
+        </template>
+        <div class="watchers-list">
+          <el-tag
+            v-for="w in watchers"
+            :key="w.ip"
+            :style="{ borderColor: w.color, color: w.color }"
+            effect="plain"
+            size="small"
+            class="watcher-tag"
+          >
+            {{ w.nickname || w.ip }}
+          </el-tag>
         </div>
       </el-card>
 
@@ -267,17 +294,6 @@
         <LogViewer :array-id="array.array_id" />
       </el-card>
 
-      <!-- Agent Config -->
-      <el-card class="config-card" v-if="array.state === 'connected' && array.agent_deployed">
-        <template #header>
-          <div class="card-header">
-            <span>Agent 配置</span>
-            <el-tag type="info" size="small">远程同步</el-tag>
-          </div>
-        </template>
-        
-        <AgentConfig :array-id="array.array_id" />
-      </el-card>
     </div>
 
     <!-- Connect Dialog -->
@@ -304,12 +320,11 @@
 import { ref, reactive, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { Refresh, ArrowRight, CircleCheck, Check } from '@element-plus/icons-vue'
+import { Refresh, ArrowRight, CircleCheck, Check, User } from '@element-plus/icons-vue'
 import { useArrayStore } from '../stores/arrays'
 import { useAlertStore } from '../stores/alerts'
 import api from '../api'
 import LogViewer from '../components/LogViewer.vue'
-import AgentConfig from '../components/AgentConfig.vue'
 import PerformanceMonitor from '../components/PerformanceMonitor.vue'
 import PortTrafficChart from '../components/PortTrafficChart.vue'
 import EventTimeline from '../components/EventTimeline.vue'
@@ -340,6 +355,7 @@ const recentAlerts = ref([])
 const drawerVisible = ref(false)
 const selectedAlert = ref(null)
 const tags = ref([])
+const watchers = ref([])
 
 const activeIssues = computed(() => {
   return array.value?.active_issues || []
@@ -370,8 +386,10 @@ async function handleAckIssue(issue) {
 }
 
 function openIssueDetail(issue) {
-  // Build a pseudo-alert object from the issue for the drawer
+  // Build a pseudo-alert object from the issue for the drawer (id/array_id required for ack)
   selectedAlert.value = {
+    id: issue.alert_id,
+    array_id: array.value?.array_id,
     observer_name: issue.observer,
     level: issue.level,
     message: issue.message,
@@ -531,6 +549,16 @@ function formatDateTime(timestamp) {
   return new Date(timestamp).toLocaleString('zh-CN')
 }
 
+async function loadWatchers() {
+  if (!array.value?.array_id) return
+  try {
+    const res = await api.getArrayWatchers(array.value.array_id)
+    watchers.value = res.data || []
+  } catch {
+    watchers.value = []
+  }
+}
+
 async function loadArray() {
   loading.value = true
   try {
@@ -539,6 +567,7 @@ async function loadArray() {
     array.value = response.data
     // Load alerts from database instead of embedded in status
     await loadRecentAlerts()
+    await loadWatchers()
   } catch (error) {
     ElMessage.error('加载失败')
   } finally {
@@ -804,6 +833,9 @@ onUnmounted(() => {
 
 .issue-warning { border-left-color: #e6a23c; background: #fdf6ec; }
 .issue-error, .issue-critical { border-left-color: #f56c6c; background: #fef0f0; }
+.issue-suppressed { opacity: 0.75; background: #f5f7fa !important; border-left-color: #909399 !important; }
+.issue-suppressed .issue-title, .issue-suppressed .issue-message { color: #909399; }
+.issue-acked, .issue-expires { font-size: 12px; color: #909399; margin-left: 8px; }
 
 .issue-header {
   display: flex;

@@ -245,8 +245,8 @@
                 {{ ackTypeLabel(ackInfo.ack_type) }}
               </el-tag>
             </el-descriptions-item>
-            <el-descriptions-item label="确认人 IP">
-              <code>{{ ackInfo.acked_by_ip }}</code>
+            <el-descriptions-item :label="ackInfo.acked_by_nickname ? '确认人' : '确认人 IP'">
+              <code>{{ ackInfo.acked_by_nickname || ackInfo.acked_by_ip }}</code>
             </el-descriptions-item>
             <el-descriptions-item label="确认时间">
               {{ formatTime(ackInfo.acked_at) }}
@@ -281,6 +281,16 @@
               <el-option label="3 天后" :value="72" />
               <el-option label="7 天后" :value="168" />
               <el-option label="30 天后" :value="720" />
+            </el-select>
+          </div>
+          <div v-else-if="ackType === 'confirmed_ok'" style="margin-bottom:10px">
+            <el-select v-model="confirmOkHours" placeholder="确认时效" style="width:200px">
+              <el-option label="2 小时后恢复" :value="2" />
+              <el-option label="4 小时后恢复" :value="4" />
+              <el-option label="6 小时后恢复" :value="6" />
+              <el-option label="8 小时后恢复" :value="8" />
+              <el-option label="12 小时后恢复" :value="12" />
+              <el-option label="24 小时后恢复" :value="24" />
             </el-select>
           </div>
           <el-input
@@ -344,6 +354,7 @@ const ackActing = ref(false)
 const ackComment = ref('')
 const ackType = ref('dismiss')      // dismiss | confirmed_ok | deferred
 const deferHours = ref(72)          // default 3 days
+const confirmOkHours = ref(24)      // for confirmed_ok: 2/4/6/8/12/24 hours
 
 const ACK_TYPE_LABELS = {
   dismiss: '暂时忽略',
@@ -448,6 +459,8 @@ async function handleAck() {
     }
     if (ackType.value === 'deferred') {
       opts.expires_hours = deferHours.value
+    } else if (ackType.value === 'confirmed_ok') {
+      opts.expires_hours = confirmOkHours.value
     }
     await api.ackAlerts([alertId], ackComment.value, opts)
     ElMessage.success('已确认')

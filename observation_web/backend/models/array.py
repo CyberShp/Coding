@@ -91,6 +91,8 @@ class ArrayResponse(ArrayBase):
     tag_id: Optional[int] = None
     tag_name: Optional[str] = None
     tag_color: Optional[str] = None
+    tag_l1_name: Optional[str] = None  # L1 group name when tag is L2
+    tag_l2_name: Optional[str] = None  # L2 type name (array's tag)
     version: int = 1
     created_at: datetime
     updated_at: datetime
@@ -112,6 +114,8 @@ class ArrayStatus(BaseModel):
     tag_id: Optional[int] = None
     tag_name: Optional[str] = None
     tag_color: Optional[str] = None
+    tag_l1_name: Optional[str] = None
+    tag_l2_name: Optional[str] = None
     observer_status: Dict[str, Dict[str, str]] = {}
     active_issues: List[Dict[str, Any]] = []
     recent_alerts: List[Dict[str, Any]] = []

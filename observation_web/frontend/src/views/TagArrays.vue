@@ -10,7 +10,7 @@
             </el-button>
             <span class="tag-title" v-if="tag">
               <span class="tag-dot" :style="{ background: tag.color }"></span>
-              {{ tag.name }}
+              {{ tag.parent_name ? `${tag.parent_name} / ${tag.name}` : tag.name }}
               <el-tag size="small" effect="plain">{{ arrays.length }} 个阵列</el-tag>
             </span>
           </div>
@@ -41,8 +41,17 @@
                   <el-dropdown-item command="disconnect">
                     <el-icon><SwitchButton /></el-icon> 批量断开
                   </el-dropdown-item>
-                  <el-dropdown-item command="refresh" divided>
+                  <el-dropdown-item command="refresh">
                     <el-icon><Refresh /></el-icon> 批量刷新
+                  </el-dropdown-item>
+                  <el-dropdown-item command="deploy-agent" divided>
+                    <el-icon><Upload /></el-icon> 一键部署 Agent
+                  </el-dropdown-item>
+                  <el-dropdown-item command="restart-agent">
+                    <el-icon><RefreshRight /></el-icon> 一键重启 Agent
+                  </el-dropdown-item>
+                  <el-dropdown-item command="stop-agent">
+                    <el-icon><VideoPause /></el-icon> 一键停止 Agent
                   </el-dropdown-item>
                 </el-dropdown-menu>
               </template>
@@ -191,7 +200,8 @@ import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
-  Plus, ArrowDown, Link, SwitchButton, Refresh, ArrowLeft, Search
+  Plus, ArrowDown, Link, SwitchButton, Refresh, ArrowLeft, Search,
+  Upload, RefreshRight, VideoPause
 } from '@element-plus/icons-vue'
 import api from '../api'
 
@@ -372,7 +382,13 @@ async function handleBatchAction(action) {
     batchConnectDialogVisible.value = true
     return
   }
-  const actionNames = { disconnect: '断开', refresh: '刷新' }
+  const actionNames = {
+    disconnect: '断开',
+    refresh: '刷新',
+    'deploy-agent': '一键部署 Agent',
+    'restart-agent': '一键重启 Agent',
+    'stop-agent': '一键停止 Agent',
+  }
   await ElMessageBox.confirm(
     `确定要对 ${selectedArrays.value.length} 个阵列执行"${actionNames[action]}"操作吗？`,
     '确认批量操作',

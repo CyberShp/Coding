@@ -181,6 +181,7 @@ import { ElMessage } from 'element-plus'
 import { Cpu, CircleCheck, Bell, Warning, Refresh } from '@element-plus/icons-vue'
 import { useArrayStore } from '../stores/arrays'
 import { useAlertStore } from '../stores/alerts'
+import { usePreferencesStore } from '../stores/preferences'
 import api from '../api'
 import AlertDetailDrawer from '@/components/AlertDetailDrawer.vue'
 import FoldedAlertList from '@/components/FoldedAlertList.vue'
@@ -190,6 +191,7 @@ use([CanvasRenderer, LineChart, GridComponent, TooltipComponent, LegendComponent
 
 const arrayStore = useArrayStore()
 const alertStore = useAlertStore()
+const preferencesStore = usePreferencesStore()
 
 const summary = ref({})
 const stats = ref(null)
@@ -319,7 +321,8 @@ function formatTime(timestamp) {
 
 async function loadArrays() {
   try {
-    await arrayStore.fetchArrays()
+    const tagId = preferencesStore.defaultTagId ?? undefined
+    await arrayStore.fetchArrays(tagId)
   } catch (error) {
     console.error('Failed to load arrays:', error)
   }
@@ -340,6 +343,7 @@ async function loadActiveTask() {
 }
 
 async function loadData() {
+  await preferencesStore.load()
   // Load data in parallel with individual error handling
   const tasks = [
     loadArrays().catch(e => console.error('Load arrays failed:', e)),

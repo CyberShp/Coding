@@ -36,19 +36,21 @@ async def get_timeline(
     hours: int = Query(24, ge=1, le=168),
     observer: Optional[str] = Query(None),
     category: Optional[str] = Query(None),
+    limit: int = Query(20, ge=1, le=500, description="Events per page"),
+    offset: int = Query(0, ge=0, description="Offset for pagination"),
     db: AsyncSession = Depends(get_db),
 ):
     """
     Get timeline events for a specific array.
     Returns events sorted by time, grouped by observer category.
-    Also returns any active test task sessions for background marking.
+    Pagination: limit (default 20) per page, offset for page navigation.
 
     - observer: exact observer_name match
     - category: port/card/system - filters by observer category (expands to observer_name.in_())
     """
     start_time = datetime.now() - timedelta(hours=hours)
 
-    # Fetch alerts
+    # Build conditions
     cond = [
         AlertModel.array_id == array_id,
         AlertModel.timestamp >= start_time,
@@ -58,11 +60,20 @@ async def get_timeline(
     elif category and category in CATEGORIES:
         cond.append(AlertModel.observer_name.in_(CATEGORIES[category]))
 
+    # Total count
+    from sqlalchemy import func
+    count_result = await db.execute(
+        select(func.count(AlertModel.id)).where(and_(*cond))
+    )
+    total = count_result.scalar() or 0
+
+    # Fetch alerts with pagination
     result = await db.execute(
         select(AlertModel)
         .where(and_(*cond))
-        .order_by(AlertModel.timestamp.asc())
-        .limit(500)
+        .order_by(AlertModel.timestamp.desc())
+        .offset(offset)
+        .limit(limit)
     )
     alerts = result.scalars().all()
 
@@ -128,5 +139,5 @@ async def get_timeline(
     return {
         'events': events,
         'task_windows': task_windows,
-        'total': len(events),
+        'total': total,
     }

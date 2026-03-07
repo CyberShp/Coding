@@ -171,81 +171,44 @@ class TestMemoryLeakObserver:
 
 class TestMemoryLeakAlertWebBackend:
     """Test memory leak alert handling in web backend."""
-    
+
     @pytest.mark.asyncio
-    async def test_memory_leak_alert_creates_active_issue(self, app_client):
+    async def test_memory_leak_alert_creates_active_issue(self, app_client_with_db):
         """Memory leak alert should create an active issue."""
-        # First register an array
-        reg_data = {
-            "array_id": "test-array-1",
-            "hostname": "test-host",
-            "ip_address": "192.168.1.1",
-        }
-        await app_client.post("/api/arrays/register", json=reg_data)
-        
-        # Ingest memory leak alert
-        alert_data = {
-            "array_id": "test-array-1",
-            "alerts": [{
-                "observer_name": "memory_leak",
-                "level": "error",
-                "message": "Memory leak detected",
-                "details": {
-                    "current_used_mb": 8000,
-                    "consecutive_increases": 8,
-                }
-            }]
-        }
-        response = await app_client.post("/api/ingest", json=alert_data)
-        assert response.status_code == 200
-        
-        # Check array status has active issue
-        status_response = await app_client.get("/api/arrays/test-array-1/status")
+        from tests.conftest import create_test_array, inject_test_alert
+
+        client, db = app_client_with_db
+        await create_test_array(db, "test-array-1", host="192.168.1.1")
+        await inject_test_alert(
+            db, "test-array-1", "memory_leak", "error", "Memory leak detected",
+            {"current_used_mb": 8000, "consecutive_increases": 8},
+        )
+        await db.commit()
+
+        status_response = await client.get("/api/arrays/test-array-1/status")
         assert status_response.status_code == 200
         data = status_response.json()
         issues = data.get("active_issues", [])
         assert any(i.get("observer") == "memory_leak" for i in issues)
-    
+
     @pytest.mark.asyncio
-    async def test_memory_leak_recovery_removes_active_issue(self, app_client):
+    async def test_memory_leak_recovery_removes_active_issue(self, app_client_with_db):
         """Recovery alert should remove memory leak from active issues."""
-        # Register array
-        reg_data = {
-            "array_id": "test-array-2",
-            "hostname": "test-host-2",
-            "ip_address": "192.168.1.2",
-        }
-        await app_client.post("/api/arrays/register", json=reg_data)
-        
-        # First, create an active memory leak issue
-        alert_data = {
-            "array_id": "test-array-2",
-            "alerts": [{
-                "observer_name": "memory_leak",
-                "level": "error",
-                "message": "Memory leak detected",
-                "details": {"current_used_mb": 8000}
-            }]
-        }
-        await app_client.post("/api/ingest", json=alert_data)
-        
-        # Then send recovery alert
-        recovery_data = {
-            "array_id": "test-array-2",
-            "alerts": [{
-                "observer_name": "memory_leak",
-                "level": "info",
-                "message": "Memory leak recovered",
-                "details": {
-                    "current_used_mb": 4000,
-                    "recovered": True,
-                }
-            }]
-        }
-        await app_client.post("/api/ingest", json=recovery_data)
-        
-        # Check active issues no longer contain memory_leak
-        status_response = await app_client.get("/api/arrays/test-array-2/status")
+        from tests.conftest import create_test_array, inject_test_alert
+
+        client, db = app_client_with_db
+        await create_test_array(db, "test-array-2", host="192.168.1.2")
+        await inject_test_alert(
+            db, "test-array-2", "memory_leak", "error", "Memory leak detected",
+            {"current_used_mb": 8000},
+        )
+        await inject_test_alert(
+            db, "test-array-2", "memory_leak", "info", "Memory leak recovered",
+            {"current_used_mb": 4000, "recovered": True},
+        )
+        await db.commit()
+
+        status_response = await client.get("/api/arrays/test-array-2/status")
         assert status_response.status_code == 200
         data = status_response.json()
         issues = data.get("active_issues", [])

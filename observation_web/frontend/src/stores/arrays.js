@@ -20,11 +20,10 @@ export const useArrayStore = defineStore('arrays', () => {
   const totalCount = computed(() => arrays.value.length)
 
   // Actions
-  async function fetchArrays() {
+  async function fetchArrays(tagId = null) {
     loading.value = true
     try {
-      // Use statuses endpoint to get connection state
-      const response = await api.getArrayStatuses()
+      const response = await api.getArrayStatuses(tagId)
       arrays.value = response.data
       return response.data
     } finally {

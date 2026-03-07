@@ -5,11 +5,12 @@ Array management API endpoints.
 import asyncio
 import json
 import logging
+import shlex
 import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status, Body, Query
+from fastapi import APIRouter, Depends, File, HTTPException, status, Body, Query, UploadFile
 from pydantic import BaseModel
 from sqlalchemy import select, exists, func
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -25,6 +26,18 @@ from ..models.array import (
 )
 from ..models.lifecycle import SyncStateModel
 from ..models.alert import AlertModel, AlertAckModel
+from ..models.user_session import UserSessionModel
+from ..middleware.user_session import get_users_on_page, ip_to_color
+
+
+async def _resolve_ips_to_nicknames(db: AsyncSession, ips: List[str]) -> Dict[str, str]:
+    """Resolve IP addresses to nicknames from user_sessions."""
+    if not ips:
+        return {}
+    result = await db.execute(
+        select(UserSessionModel.ip, UserSessionModel.nickname).where(UserSessionModel.ip.in_(ips))
+    )
+    return {r[0]: ((r[1] or "").strip()) or r[0] for r in result.all()}
 
 
 class BatchActionRequest(BaseModel):
@@ -100,7 +113,9 @@ async def _auto_ack_new_alerts(
 
     now = datetime.now()
 
-    # Observers with confirmed_ok (permanent) - inherit for new alerts
+    # Observers with confirmed_ok (permanent only) - inherit for new alerts.
+    # Design: Time-limited confirmed_ok (e.g. 8h) is NOT inherited; only ack_expires_at=NULL
+    # is inherited. Rationale: User chose a time limit, so new alerts should surface after expiry.
     confirmed_result = await db.execute(
         select(AlertModel.observer_name).distinct()
         .join(AlertAckModel, AlertAckModel.alert_id == AlertModel.id)
@@ -589,6 +604,7 @@ async def _derive_active_issues_from_db(db: AsyncSession, array_id: str) -> List
 
         alert_row = recent_rows[0]  # latest
         alert_id = alert_row.id
+        suppressed_info = None
 
         # Parse details
         details = {}
@@ -607,6 +623,7 @@ async def _derive_active_issues_from_db(db: AsyncSession, array_id: str) -> List
             select(AlertAckModel).where(AlertAckModel.alert_id == alert_id).limit(1)
         )
         ack_row = ack_result.scalar_one_or_none()
+        suppressed_info = None
         if ack_row is not None:
             # Ack exists — but check if there was an intermediate recovery
             # If the second-most-recent alert shows recovery, the ack is stale
@@ -636,15 +653,20 @@ async def _derive_active_issues_from_db(db: AsyncSession, array_id: str) -> List
                     pass
 
             if not ack_is_stale:
-                continue  # ack is valid, skip this observer
-
-            # Ack is stale — auto-delete it so the alert resurfaces
-            try:
-                await db.delete(ack_row)
-                await db.flush()
-                logger.info(f"Auto-invalidated stale ack for alert {alert_id} (recovery detected)")
-            except Exception:
-                logger.debug(f"Failed to auto-delete stale ack for alert {alert_id}")
+                # Ack is valid — include issue but mark as suppressed (仍显示，灰色样式)
+                suppressed_info = {
+                    'suppressed': True,
+                    'acked_by_ip': ack_row.acked_by_ip,
+                    'ack_expires_at': ack_row.ack_expires_at.isoformat() if ack_row.ack_expires_at else None,
+                }
+            else:
+                # Ack is stale — auto-delete it so the alert resurfaces
+                try:
+                    await db.delete(ack_row)
+                    await db.flush()
+                    logger.info(f"Auto-invalidated stale ack for alert {alert_id} (recovery detected)")
+                except Exception:
+                    logger.debug(f"Failed to auto-delete stale ack for alert {alert_id}")
 
         level = alert_row.level or 'info'
         message = alert_row.message or ''
@@ -664,9 +686,23 @@ async def _derive_active_issues_from_db(db: AsyncSession, array_id: str) -> List
                     'alert_id': alert_id,
                     'since': al.get('timestamp', ts),
                     'latest': ts,
+                    **(suppressed_info or {}),
                 })
         elif obs_name in ('cpu_usage', 'memory_leak'):
             if level in ('warning', 'error', 'critical'):
+                # Preserve 'since' from oldest alert in problem chain (match _upsert_issue behavior)
+                since_ts = ts
+                for prev_row in reversed(recent_rows[1:]):
+                    prev_details = {}
+                    if prev_row.details:
+                        try:
+                            prev_details = json.loads(prev_row.details) if isinstance(prev_row.details, str) else prev_row.details
+                        except (json.JSONDecodeError, TypeError):
+                            pass
+                    if prev_details.get('recovered'):
+                        break
+                    if prev_row.level in ('warning', 'error', 'critical'):
+                        since_ts = prev_row.timestamp.isoformat() if prev_row.timestamp else ts
                 issues.append({
                     'key': obs_name,
                     'observer': obs_name,
@@ -675,8 +711,9 @@ async def _derive_active_issues_from_db(db: AsyncSession, array_id: str) -> List
                     'message': message[:200],
                     'details': details,
                     'alert_id': alert_id,
-                    'since': ts,
+                    'since': since_ts,
                     'latest': ts,
+                    **(suppressed_info or {}),
                 })
         elif obs_name == 'pcie_bandwidth':
             if level in ('warning', 'error', 'critical'):
@@ -692,6 +729,7 @@ async def _derive_active_issues_from_db(db: AsyncSession, array_id: str) -> List
                         'alert_id': alert_id,
                         'since': ts,
                         'latest': ts,
+                        **(suppressed_info or {}),
                     })
         elif obs_name == 'card_info':
             if level in ('warning', 'error', 'critical'):
@@ -712,6 +750,7 @@ async def _derive_active_issues_from_db(db: AsyncSession, array_id: str) -> List
                         'alert_id': alert_id,
                         'since': ts,
                         'latest': ts,
+                        **(suppressed_info or {}),
                     })
         elif obs_name == 'port_error_code':
             if level in ('warning', 'error', 'critical'):
@@ -727,6 +766,7 @@ async def _derive_active_issues_from_db(db: AsyncSession, array_id: str) -> List
                     'alert_id': alert_id,
                     'since': ts,
                     'latest': ts,
+                    **(suppressed_info or {}),
                 })
         elif obs_name == 'error_code':
             # 仅误码/PCIe 类别，不含丢包
@@ -744,7 +784,16 @@ async def _derive_active_issues_from_db(db: AsyncSession, array_id: str) -> List
                     'alert_id': alert_id,
                     'since': ts,
                     'latest': ts,
+                    **(suppressed_info or {}),
                 })
+
+    # Resolve acked_by_ip to nicknames for suppressed issues
+    ack_ips = list({i.get('acked_by_ip') for i in issues if i.get('suppressed') and i.get('acked_by_ip')})
+    if ack_ips:
+        nick_map = await _resolve_ips_to_nicknames(db, ack_ips)
+        for i in issues:
+            if i.get('suppressed') and i.get('acked_by_ip'):
+                i['acked_by_nickname'] = nick_map.get(i['acked_by_ip']) or i['acked_by_ip']
 
     return issues
 
@@ -764,18 +813,35 @@ async def list_arrays(
     result = await db.execute(query)
     arrays = result.scalars().all()
 
-    # Fetch tag info for each array
+    # Fetch tag info and parent names for L2 tags
     tag_ids = {a.tag_id for a in arrays if a.tag_id}
     tags_map = {}
+    parent_map = {}
     if tag_ids:
         tag_result = await db.execute(
             select(TagModel).where(TagModel.id.in_(tag_ids))
         )
         tags_map = {t.id: t for t in tag_result.scalars().all()}
+        parent_ids = {t.parent_id for t in tags_map.values() if t.parent_id}
+        if parent_ids:
+            parent_result = await db.execute(
+                select(TagModel.id, TagModel.name).where(TagModel.id.in_(parent_ids))
+            )
+            parent_map = {r[0]: r[1] for r in parent_result.all()}
+
+    def _l1_l2(tag):
+        if not tag:
+            return None, None
+        if tag.level == 2 and tag.parent_id:
+            return parent_map.get(tag.parent_id), tag.name
+        if tag.level == 1:
+            return tag.name, None
+        return None, tag.name  # fallback
 
     responses = []
     for arr in arrays:
         tag = tags_map.get(arr.tag_id) if arr.tag_id else None
+        l1, l2 = _l1_l2(tag)
         responses.append(ArrayResponse(
             id=arr.id,
             array_id=arr.array_id,
@@ -788,6 +854,8 @@ async def list_arrays(
             tag_id=arr.tag_id,
             tag_name=tag.name if tag else None,
             tag_color=tag.color if tag else None,
+            tag_l1_name=l1,
+            tag_l2_name=l2,
             created_at=arr.created_at,
             updated_at=arr.updated_at,
         ))
@@ -873,14 +941,30 @@ async def list_array_statuses(
     result = await db.execute(query)
     arrays = result.scalars().all()
 
-    # Fetch tag info
+    # Fetch tag info and parent names for L2 tags
     tag_ids = {a.tag_id for a in arrays if a.tag_id}
     tags_map = {}
+    parent_map = {}
     if tag_ids:
         tag_result = await db.execute(
             select(TagModel).where(TagModel.id.in_(tag_ids))
         )
         tags_map = {t.id: t for t in tag_result.scalars().all()}
+        parent_ids = {t.parent_id for t in tags_map.values() if t.parent_id}
+        if parent_ids:
+            parent_result = await db.execute(
+                select(TagModel.id, TagModel.name).where(TagModel.id.in_(parent_ids))
+            )
+            parent_map = {r[0]: r[1] for r in parent_result.all()}
+
+    def _l1_l2(tag):
+        if not tag:
+            return None, None
+        if tag.level == 2 and tag.parent_id:
+            return parent_map.get(tag.parent_id), tag.name
+        if tag.level == 1:
+            return tag.name, None
+        return None, tag.name
 
     statuses = []
     for array in arrays:
@@ -894,6 +978,9 @@ async def list_array_statuses(
         status_obj.tag_id = array.tag_id
         status_obj.tag_name = tag.name if tag else None
         status_obj.tag_color = tag.color if tag else None
+        l1, l2 = _l1_l2(tag)
+        status_obj.tag_l1_name = l1
+        status_obj.tag_l2_name = l2
         
         conn = ssh_pool.get_connection(array.array_id)
         if conn:
@@ -1104,6 +1191,199 @@ async def batch_action(
         "total": len(request.array_ids),
         "success_count": success_count,
         "results": results
+    }
+
+
+# High-contrast color pool for auto-created tags during import (plan PRESET_COLORS)
+_IMPORT_TAG_COLORS = [
+    "#409EFF", "#67C23A", "#E6A23C", "#F56C6C", "#909399",
+    "#00BCD4", "#9C27B0", "#FF5722", "#795548", "#607D8B",
+    "#E91E63", "#3F51B5", "#009688", "#FF9800", "#8BC34A",
+    "#CDDC39", "#03A9F4", "#673AB7", "#F44336", "#4CAF50",
+]
+
+
+def _parse_import_file(content: bytes, filename: str) -> List[Dict[str, Any]]:
+    """Parse CSV or Excel file into list of dicts. Expected columns: name, host, port?, username?, tag?"""
+    import csv
+    import io
+
+    name_lower = (filename or "").lower()
+    rows = []
+
+    if name_lower.endswith(".csv"):
+        text = content.decode("utf-8-sig", errors="replace")
+        reader = csv.DictReader(io.StringIO(text))
+        for r in reader:
+            rows.append({k.strip() if k else k: (v.strip() if v else "") for k, v in (r or {}).items()})
+    elif name_lower.endswith((".xlsx", ".xls")):
+        try:
+            import openpyxl
+        except ImportError:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Excel support requires openpyxl. Install with: pip install openpyxl",
+            )
+        wb = openpyxl.load_workbook(io.BytesIO(content), read_only=True, data_only=True)
+        ws = wb.active
+        if not ws:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Excel file has no sheets")
+        headers = [str(c.value or "").strip() for c in next(ws.iter_rows(min_row=1, max_row=1))]
+        for row in ws.iter_rows(min_row=2):
+            vals = [str(c.value or "").strip() if c.value is not None else "" for c in row]
+            rows.append(dict(zip(headers, vals)))
+        wb.close()
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Unsupported format. Use .csv or .xlsx",
+        )
+    return rows
+
+
+def _normalize_import_row(row: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Normalize row to array fields. Returns None if row is empty/invalid."""
+    # Support common column name variants (case-insensitive)
+    def get(key_variants, default=""):
+        for k in key_variants:
+            for rk, rv in row.items():
+                if (rk or "").strip().lower() == k.lower():
+                    return (rv or "").strip()
+        return default
+
+    name = get(["name", "名称", "array_name"])
+    host = get(["host", "ip", "地址", "hostname"])
+    if not name or not host:
+        return None
+    port_s = get(["port", "端口"], "22")
+    try:
+        port = int(port_s) if port_s else 22
+    except ValueError:
+        port = 22
+    username = get(["username", "user", "用户名"], "root")
+    tag_name = get(["tag", "标签", "tag_name"])
+    tag_l1 = get(["tag_l1", "一级标签", "tag_l1_name"])
+    tag_l2 = get(["tag_l2", "二级标签", "tag_l2_name"])
+    color = get(["color", "颜色"])
+    # Validate color if provided
+    if color and (not color.startswith("#") or len(color) not in (4, 7)):
+        color = ""
+    return {
+        "name": name,
+        "host": host,
+        "port": port,
+        "username": username,
+        "tag_name": tag_name or None,
+        "tag_l1": tag_l1 or None,
+        "tag_l2": tag_l2 or None,
+        "color": color or None,
+    }
+
+
+@router.post("/import")
+async def import_arrays(
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+    ssh_pool: SSHPool = Depends(get_ssh_pool),
+):
+    """Import arrays from CSV or Excel. Columns: name, host, port?, username?, tag?, tag_l1?, tag_l2?, color?"""
+    from ..models.tag import TagModel
+    content = await file.read()
+    if len(content) > 10 * 1024 * 1024:  # 10MB limit
+        raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="File too large (max 10MB)")
+    filename = file.filename or ""
+    rows = _parse_import_file(content, filename)
+    tag_cache: Dict[tuple, int] = {}  # (l1_name or "", l2_name) -> tag_id
+    color_idx = [0]
+
+    async def get_or_create_tag_from_import(norm: Dict[str, Any]) -> Optional[int]:
+        """Resolve tag_id from tag_l1, tag_l2, tag_name (legacy), color. Arrays use level-2 tag."""
+        tag_l1 = (norm.get("tag_l1") or "").strip()
+        tag_l2 = (norm.get("tag_l2") or norm.get("tag_name") or "").strip()
+        if not tag_l2 and tag_l1:
+            tag_l2 = tag_l1
+            tag_l1 = ""
+        if not tag_l2:
+            return None
+        color = (norm.get("color") or "").strip()
+        if not color or not color.startswith("#") or len(color) not in (4, 7):
+            color = _IMPORT_TAG_COLORS[color_idx[0] % len(_IMPORT_TAG_COLORS)]
+            color_idx[0] += 1
+        cache_key = (tag_l1, tag_l2)
+        if cache_key in tag_cache:
+            return tag_cache[cache_key]
+        parent_id = None
+        if tag_l1:
+            # Get or create L1 tag
+            r1 = await db.execute(select(TagModel).where(TagModel.name == tag_l1))
+            l1 = r1.scalar_one_or_none()
+            if not l1:
+                l1 = TagModel(name=tag_l1, color=color, level=1, parent_id=None)
+                db.add(l1)
+                await db.flush()
+                await db.refresh(l1)
+            parent_id = l1.id
+        r2 = await db.execute(
+            select(TagModel).where(TagModel.name == tag_l2, TagModel.parent_id == parent_id)
+        )
+        l2 = r2.scalar_one_or_none()
+        if not l2:
+            l2 = TagModel(name=tag_l2, color=color, level=2, parent_id=parent_id)
+            db.add(l2)
+            await db.flush()
+            await db.refresh(l2)
+        tag_cache[cache_key] = l2.id
+        return l2.id
+
+    created = 0
+    skipped = 0
+    errors: List[Dict[str, Any]] = []
+    existing_hosts = set()
+    result = await db.execute(select(ArrayModel.host))
+    existing_hosts = {r[0] for r in result.all()}
+
+    for i, row in enumerate(rows):
+        norm = _normalize_import_row(row)
+        if not norm:
+            continue
+        host = norm["host"]
+        if host in existing_hosts:
+            skipped += 1
+            errors.append({"row": i + 2, "host": host, "reason": "host_already_exists"})
+            continue
+        tag_id = await get_or_create_tag_from_import(norm)
+        array_id = f"arr_{uuid.uuid4().hex[:8]}"
+        try:
+            db_array = ArrayModel(
+                array_id=array_id,
+                name=norm["name"],
+                host=host,
+                port=norm.get("port", 22),
+                username=norm.get("username", "root"),
+                key_path="",
+                folder="",
+                tag_id=tag_id,
+            )
+            db.add(db_array)
+            ssh_pool.add_connection(
+                array_id=array_id,
+                host=host,
+                port=norm.get("port", 22),
+                username=norm.get("username", "root"),
+                password="",
+                key_path=None,
+            )
+            _array_status_cache[array_id] = ArrayStatus(array_id=array_id, name=norm["name"], host=host)
+            existing_hosts.add(host)
+            created += 1
+        except Exception as e:
+            errors.append({"row": i + 2, "host": host, "reason": str(e)})
+    await db.commit()
+    return {
+        "created": created,
+        "skipped": skipped,
+        "errors": errors,
+        "total_rows": len(rows),
     }
 
 
@@ -1345,8 +1625,55 @@ async def get_array_status(
         if tag:
             status_obj.tag_name = tag.name
             status_obj.tag_color = tag.color
-    
+            if tag.level == 2 and tag.parent_id:
+                pr = await db.execute(select(TagModel.name).where(TagModel.id == tag.parent_id))
+                status_obj.tag_l1_name = pr.scalar_one_or_none()
+                status_obj.tag_l2_name = tag.name
+            elif tag.level == 1:
+                status_obj.tag_l1_name = tag.name
+                status_obj.tag_l2_name = None
+            else:
+                status_obj.tag_l1_name = None
+                status_obj.tag_l2_name = tag.name
+
     return status_obj
+
+
+class ArrayWatcher(BaseModel):
+    """User currently viewing this array"""
+    ip: str
+    nickname: str = ""
+    color: str = ""
+
+
+@router.get("/{array_id}/watchers", response_model=List[ArrayWatcher])
+async def get_array_watchers(
+    array_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """Get list of users currently viewing this array (presence + nickname)."""
+    from ..middleware.user_session import get_users_on_page, ip_to_color
+
+    # Verify array exists
+    result = await db.execute(select(ArrayModel).where(ArrayModel.array_id == array_id))
+    if not result.scalars().first():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Array {array_id} not found")
+
+    page = f"/arrays/{array_id}"
+    watcher_ips = get_users_on_page(page, max_age_seconds=90)
+    if not watcher_ips:
+        return []
+
+    # Resolve nicknames
+    nick_result = await db.execute(
+        select(UserSessionModel.ip, UserSessionModel.nickname).where(UserSessionModel.ip.in_(watcher_ips))
+    )
+    nick_map = {r[0]: (r[1] or "").strip() for r in nick_result.all()}
+
+    return [
+        ArrayWatcher(ip=ip, nickname=nick_map.get(ip, "") or "", color=ip_to_color(ip))
+        for ip in watcher_ips
+    ]
 
 
 @router.post("/{array_id}/connect")
@@ -1938,6 +2265,9 @@ async def restart_agent(
     return result
 
 
+# Allowed log file path prefixes (security: prevent path traversal /etc/shadow etc.)
+ALLOWED_LOG_PREFIXES = ("/var/log", "/OSM/log")
+
 # Common log file paths for quick selection
 COMMON_LOG_PATHS = [
     "/var/log/messages",
@@ -1975,27 +2305,36 @@ async def get_logs(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Array not connected"
         )
-    
-    # Build command - using sudo to read system logs
-    if keyword:
-        # tail + grep with keyword
-        cmd = f"sudo tail -n {lines * 3} {file_path} 2>/dev/null | grep -i '{keyword}' | tail -n {lines}"
+
+    # Validate file_path: must be under allowed prefixes, no path traversal
+    if ".." in file_path or not any(file_path.startswith(p) for p in ALLOWED_LOG_PREFIXES):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid file_path: must start with {ALLOWED_LOG_PREFIXES}"
+        )
+
+    safe_path = shlex.quote(file_path)
+    safe_keyword = shlex.quote(keyword) if keyword else None
+
+    # Build command - using sudo to read system logs (keyword/path quoted to prevent injection)
+    if safe_keyword:
+        cmd = f"sudo tail -n {lines * 3} {safe_path} 2>/dev/null | grep -i -e {safe_keyword} | tail -n {lines}"
     else:
-        cmd = f"sudo tail -n {lines} {file_path} 2>/dev/null"
+        cmd = f"sudo tail -n {lines} {safe_path} 2>/dev/null"
     
     try:
         exit_code, output, error = conn.execute(cmd, timeout=10)
         
         if error and "permission denied" in error.lower():
             # Try without sudo
-            if keyword:
-                cmd = f"tail -n {lines * 3} {file_path} 2>/dev/null | grep -i '{keyword}' | tail -n {lines}"
+            if safe_keyword:
+                cmd = f"tail -n {lines * 3} {safe_path} 2>/dev/null | grep -i -e {safe_keyword} | tail -n {lines}"
             else:
-                cmd = f"tail -n {lines} {file_path} 2>/dev/null"
+                cmd = f"tail -n {lines} {safe_path} 2>/dev/null"
             exit_code, output, error = conn.execute(cmd, timeout=10)
         
         # Get file info
-        stat_cmd = f"stat --format='%s %Y' {file_path} 2>/dev/null || stat -f '%z %m' {file_path} 2>/dev/null"
+        stat_cmd = f"stat --format='%s %Y' {safe_path} 2>/dev/null || stat -f '%z %m' {safe_path} 2>/dev/null"
         _, stat_output, _ = conn.execute(stat_cmd, timeout=5)
         
         file_size = 0

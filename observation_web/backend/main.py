@@ -33,6 +33,7 @@ from .api.monitor_templates import router as monitor_templates_router
 from .api.observer_configs import router as observer_configs_router
 from .api.users import router as users_router
 from .api.ai import router as ai_router
+from .api.card_inventory import router as card_inventory_router
 from .middleware.user_session import UserSessionMiddleware
 from .core.ssh_pool import get_ssh_pool
 from .core.scheduler import get_scheduler
@@ -187,7 +188,7 @@ async def lifespan(app: FastAPI):
         logger.error("create_tables failed: %s", e, exc_info=True)
         # Fallback: create tables only (skip migrations)
         try:
-            from .models import array, alert, query, lifecycle, scheduler, traffic, task_session, snapshot, tag, user_session, array_lock, alert_rule, audit_log, issue, ai_interpretation  # noqa: F401
+            from .models import array, alert, query, lifecycle, scheduler, traffic, task_session, snapshot, tag, user_session, array_lock, alert_rule, audit_log, issue, ai_interpretation, card_inventory  # noqa: F401
             async with get_async_engine().begin() as conn:
                 await conn.run_sync(Base.metadata.create_all)
             logger.info("Fallback: tables created without migrations")
@@ -331,6 +332,7 @@ def create_app() -> FastAPI:
     app.include_router(monitor_templates_router, prefix="/api")
     app.include_router(observer_configs_router, prefix="/api")
     app.include_router(ai_router, prefix="/api")
+    app.include_router(card_inventory_router, prefix="/api")
     app.include_router(audit_router, prefix="/api")
     app.include_router(ws_router)
     

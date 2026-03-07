@@ -49,10 +49,14 @@ cp requirements.txt "$PACK_DIR/"
 cp start.sh "$PACK_DIR/"
 [ -f config.json.example ] && cp config.json.example "$PACK_DIR/" || true
 
-# Copy scripts (including upgrade.sh for server)
+# Copy scripts (including upgrade.sh for server) - force LF line endings
 mkdir -p "$PACK_DIR/scripts"
-cp scripts/pack.sh "$PACK_DIR/scripts/" 2>/dev/null || true
-[ -f scripts/upgrade.sh ] && cp scripts/upgrade.sh "$PACK_DIR/scripts/" || true
+for f in scripts/pack.sh scripts/upgrade.sh; do
+  if [ -f "$f" ]; then
+    sed 's/\r$//' "$f" > "$PACK_DIR/scripts/$(basename "$f")"
+    chmod +x "$PACK_DIR/scripts/$(basename "$f")"
+  fi
+done
 
 # Write VERSION file
 echo "$VERSION" > "$PACK_DIR/VERSION"

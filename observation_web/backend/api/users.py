@@ -22,10 +22,25 @@ from ..models.user_session import (
     ClaimNicknameRequest,
 )
 from ..models.array_lock import ArrayLockModel
+from ..models.user_preference import UserPreferenceModel
 from ..middleware.user_session import ip_to_color, get_all_presence
 from sqlalchemy import update
+from pydantic import BaseModel
+from typing import Optional
 
 logger = logging.getLogger(__name__)
+
+
+class UserPreferencesResponse(BaseModel):
+    default_tag_id: Optional[int] = None
+
+
+class UserPreferencesUpdate(BaseModel):
+    default_tag_id: Optional[int] = None
+    # TODO(Feature5): Plan called for watched_tag_ids, watched_array_ids, watched_observers,
+    # muted_observers, alert_sound. Phase 1 only implements default_tag_id.
+
+
 router = APIRouter(prefix="/users", tags=["users"])
 
 # Consider user "online" if active within last 5 minutes
@@ -256,6 +271,53 @@ async def claim_nickname(
         is_active=old_session.is_active,
         color=ip_to_color(old_session.ip),
     )
+
+
+@router.get("/me/preferences", response_model=UserPreferencesResponse)
+async def get_my_preferences(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Get current user's preferences (e.g. default tag for personal view)."""
+    user_ip = getattr(request.state, 'user_ip', None)
+    if not user_ip:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Unable to determine user IP",
+        )
+    result = await db.execute(
+        select(UserPreferenceModel).where(UserPreferenceModel.ip == user_ip)
+    )
+    pref = result.scalar_one_or_none()
+    if not pref:
+        return UserPreferencesResponse(default_tag_id=None)
+    return UserPreferencesResponse(default_tag_id=pref.default_tag_id)
+
+
+@router.put("/me/preferences", response_model=UserPreferencesResponse)
+async def update_my_preferences(
+    request: Request,
+    body: UserPreferencesUpdate,
+    db: AsyncSession = Depends(get_db),
+):
+    """Update current user's preferences."""
+    user_ip = getattr(request.state, 'user_ip', None)
+    if not user_ip:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Unable to determine user IP",
+        )
+    result = await db.execute(
+        select(UserPreferenceModel).where(UserPreferenceModel.ip == user_ip)
+    )
+    pref = result.scalar_one_or_none()
+    if pref:
+        pref.default_tag_id = body.default_tag_id
+        pref.updated_at = datetime.now()
+    else:
+        db.add(UserPreferenceModel(ip=user_ip, default_tag_id=body.default_tag_id))
+    await db.commit()
+    return UserPreferencesResponse(default_tag_id=body.default_tag_id)
 
 
 @router.get("/count")

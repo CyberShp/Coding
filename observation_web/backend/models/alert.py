@@ -139,7 +139,7 @@ class AlertAckCreate(BaseModel):
     alert_ids: List[int]
     comment: str = ""
     ack_type: str = "dismiss"           # dismiss | confirmed_ok | deferred
-    expires_hours: Optional[int] = None  # For deferred: hours until expiry
+    expires_hours: Optional[int] = None  # For deferred or confirmed_ok: 2/4/6/8/12/24
 
 
 class AlertAckResponse(BaseModel):
@@ -152,5 +152,6 @@ class AlertAckResponse(BaseModel):
     ack_type: str = "dismiss"
     ack_expires_at: Optional[datetime] = None
     note: str = ""
+    acked_by_nickname: Optional[str] = None  # Resolved from user_sessions
 
     model_config = ConfigDict(from_attributes=True)

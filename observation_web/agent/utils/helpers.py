@@ -5,6 +5,7 @@
 """
 
 import logging
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -240,6 +241,101 @@ def get_network_interfaces() -> List[str]:
                     interfaces.append(item.name)
     
     return sorted(interfaces)
+
+
+def get_bus_to_slot_mapping(timeout: int = 15) -> Dict[str, str]:
+    """
+    执行 diagsh pciemgt showcarddevice 获取 bus 到 slot_id 的映射。
+
+    命令输出为表格格式，(BS:SL.FN) 列为 bus 号，右侧为 SlotId 列。
+    日志中的 bus 可能省略前导零（如 4.40.0），命令输出可能为 04.40.00，
+    需做规范化匹配。
+
+    Returns:
+        {normalized_bus: slot_id} 例如 {"4.40.0": "3", "4.0": "1"}
+    """
+    mapping: Dict[str, str] = {}
+    cmd = 'diagsh --attach="devm_21" --cmd="pciemgt showcarddevice"'
+    ret, stdout, stderr = run_command(cmd, shell=True, timeout=timeout)
+    if ret != 0:
+        logger.debug("diagsh pciemgt showcarddevice 执行失败: %s", stderr[:200] if stderr else "unknown")
+        return mapping
+
+    def _normalize_bus(bus_str: str) -> str:
+        """规范化 bus 字符串便于匹配：04.40.00 -> 4.40.0"""
+        if not bus_str or not bus_str.strip():
+            return ""
+        parts = bus_str.strip().replace("(", "").replace(")", "").split(":")
+        if len(parts) >= 2:
+            bus_part = parts[-1].strip()  # 取冒号后的部分如 "04.40.00"
+        else:
+            bus_part = bus_str.strip()
+        # 去掉前导零：04.40.00 -> 4.40.0
+        segments = bus_part.split(".")
+        normalized = ".".join(str(int(s)) if s.isdigit() else s for s in segments)
+        return normalized
+
+    lines = stdout.split("\n")
+    # 查找表头行，定位 BS:SL.FN 和 SlotId 列
+    bs_col = -1
+    slot_col = -1
+    header_found = False
+
+    for i, line in enumerate(lines):
+        # 表头可能包含 BS:SL.FN 或类似，以及 SlotId
+        upper = line.upper()
+        if "BS:SL.FN" in upper or "BS:SL" in upper:
+            header_found = True
+            cols = line.split()
+            for j, c in enumerate(cols):
+                if "BS" in c.upper() or "SL.FN" in c.upper():
+                    bs_col = j
+                if "SLOTID" in c.upper() or "SLOT" in c.upper():
+                    slot_col = j
+            if bs_col < 0:
+                bs_col = 0
+            if slot_col < 0:
+                slot_col = bs_col + 1
+            break
+
+    if not header_found:
+        # 尝试简单解析：每行包含 bus 和 slot，bus 格式为 xx.xx.xx
+        for line in lines:
+            line = line.strip()
+            if not line or line.startswith("-") or line.startswith("="):
+                continue
+            # 匹配可能的 bus 格式：数字.数字.数字
+            bus_match = re.search(r"(\d+\.\d+(?:\.\d+)?)", line)
+            if bus_match:
+                bus_raw = bus_match.group(1)
+                parts = line.split()
+                slot_id = ""
+                for p in parts:
+                    if p != bus_raw and p.replace(".", "").isdigit() is False and p.isalnum():
+                        slot_id = p
+                        break
+                if not slot_id and len(parts) > 1:
+                    idx = line.find(bus_raw)
+                    rest = line[idx + len(bus_raw) :].strip().split()
+                    slot_id = rest[0] if rest else ""
+                if slot_id:
+                    mapping[_normalize_bus(bus_raw)] = slot_id
+        return mapping
+
+    # 按表头解析数据行
+    for line in lines[1:]:
+        line = line.strip()
+        if not line or line.startswith("-") or line.startswith("="):
+            continue
+        cols = line.split()
+        if bs_col < len(cols) and slot_col < len(cols):
+            bus_raw = cols[bs_col]
+            slot_id = cols[slot_col]
+            norm = _normalize_bus(bus_raw)
+            if norm and slot_id:
+                mapping[norm] = slot_id
+
+    return mapping
 
 
 def get_pcie_devices() -> List[Dict[str, str]]:
