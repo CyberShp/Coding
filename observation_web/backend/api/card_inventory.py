@@ -138,6 +138,7 @@ async def sync_cards(db: AsyncSession = Depends(get_db)):
 
             await db.commit()
         except Exception as e:
+            await db.rollback()
             errors.append(f"{array.name} ({array.host}): {str(e)}")
             logger.warning("Card sync failed for %s: %s", array.name, e)
 

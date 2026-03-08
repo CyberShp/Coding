@@ -145,12 +145,16 @@ import { Search, Download, ArrowRight } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import api from '../api'
 import { useAlertStore } from '@/stores/alerts'
+import { usePreferencesStore } from '@/stores/preferences'
+import { useArrayStore } from '@/stores/arrays'
 import AlertDetailDrawer from '@/components/AlertDetailDrawer.vue'
 import FoldedAlertList from '@/components/FoldedAlertList.vue'
 import { translateAlert, getObserverName, OBSERVER_NAMES, LEVEL_LABELS, LEVEL_TAG_TYPES } from '@/utils/alertTranslator'
 
 const route = useRoute()
 const alertStore = useAlertStore()
+const preferencesStore = usePreferencesStore()
+const arrayStore = useArrayStore()
 const loading = ref(false)
 const exporting = ref(false)
 const alerts = ref([])
@@ -171,6 +175,16 @@ const pagination = reactive({
   size: 20,
   total: 0,
 })
+
+function _getAllowedArrayIds() {
+  if (!preferencesStore.personalViewActive) return null
+  const watchedIds = preferencesStore.watchedArrayIds || []
+  const watchedTags = new Set(preferencesStore.watchedTagIds || [])
+  return new Set([
+    ...watchedIds,
+    ...arrayStore.arrays.filter(a => a.tag_id != null && watchedTags.has(a.tag_id)).map(a => a.array_id)
+  ])
+}
 
 function getLevelType(level) {
   return LEVEL_TAG_TYPES[level] || 'info'
@@ -288,10 +302,16 @@ async function loadAlerts() {
       alerts.value = response.data
     }
     
+    // Personal view: client-side filter by watched arrays/tags
+    const allowed = _getAllowedArrayIds()
+    if (allowed) {
+      alerts.value = alerts.value.filter(a => allowed.has(a.array_id))
+    }
+
     // Load stats
     const statsResponse = await api.getAlertStats(filters.hours)
     stats.value = statsResponse.data
-    pagination.total = statsResponse.data.total
+    pagination.total = allowed ? alerts.value.length : statsResponse.data.total
   } finally {
     loading.value = false
   }
@@ -371,6 +391,10 @@ watch(
     // Apply current filter — skip if it doesn't match
     if (filters.level && latest.level !== filters.level) return
     if (filters.observer && latest.observer_name !== filters.observer) return
+
+    // Personal view: skip alerts from non-watched arrays
+    const allowed = _getAllowedArrayIds()
+    if (allowed && !allowed.has(latest.array_id)) return
 
     // Prepend to the alert list (only in flat mode)
     if (!aggregateMode.value) {

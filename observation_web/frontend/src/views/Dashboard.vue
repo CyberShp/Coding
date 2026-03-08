@@ -44,7 +44,7 @@
               <el-icon size="28"><Bell /></el-icon>
             </div>
             <div class="stat-info">
-              <div class="stat-value">{{ summary.total || summary.total_24h || 0 }}</div>
+              <div class="stat-value">{{ filteredAlertTotal }}</div>
               <div class="stat-label">2h 告警</div>
             </div>
           </div>
@@ -57,7 +57,7 @@
               <el-icon size="28"><Warning /></el-icon>
             </div>
             <div class="stat-info">
-              <div class="stat-value">{{ summary.error_count || 0 }}</div>
+              <div class="stat-value">{{ filteredAlertErrorCount }}</div>
               <div class="stat-label">错误告警</div>
             </div>
           </div>
@@ -125,6 +125,9 @@
               </div>
             </div>
           </div>
+          <el-empty v-else-if="preferencesStore.personalViewActive" description="未配置关注的阵列或标签">
+            <el-button type="primary" @click="$router.push('/settings')">配置个人视图</el-button>
+          </el-empty>
           <el-empty v-else description="暂无阵列">
             <el-button type="primary" @click="$router.push('/arrays')">添加阵列</el-button>
           </el-empty>
@@ -231,15 +234,22 @@ const trendChartOption = computed(() => ({
   }]
 }))
 
-// Personal view: filter arrays by watched tags/arrays
-const filteredArrays = computed(() => {
-  if (!preferencesStore.personalViewActive) return arrayStore.arrays
+// Build allowed array ID set for personal view (shared by arrays & alerts filtering)
+const allowedArrayIds = computed(() => {
+  if (!preferencesStore.personalViewActive) return null
   const watchedIds = preferencesStore.watchedArrayIds || []
-  const watchedTags = preferencesStore.watchedTagIds || []
-  if (watchedIds.length === 0 && watchedTags.length === 0) return []
-  return arrayStore.arrays.filter(arr =>
-    watchedIds.includes(arr.array_id) || (arr.tag_id != null && watchedTags.includes(arr.tag_id))
-  )
+  const watchedTags = new Set(preferencesStore.watchedTagIds || [])
+  return new Set([
+    ...watchedIds,
+    ...arrayStore.arrays.filter(a => a.tag_id != null && watchedTags.has(a.tag_id)).map(a => a.array_id)
+  ])
+})
+
+const filteredArrays = computed(() => {
+  const allowed = allowedArrayIds.value
+  if (!allowed) return arrayStore.arrays
+  if (allowed.size === 0) return []
+  return arrayStore.arrays.filter(arr => allowed.has(arr.array_id))
 })
 
 const filteredTotalCount = computed(() => filteredArrays.value.length)
@@ -247,17 +257,21 @@ const filteredConnectedCount = computed(() =>
   filteredArrays.value.filter(a => a.state === 'connected').length
 )
 
-// Personal view: filter alerts by watched arrays/tags
 const filteredAlerts = computed(() => {
-  if (!preferencesStore.personalViewActive) return alertStore.recentAlerts
-  const watchedIds = preferencesStore.watchedArrayIds || []
-  const watchedTags = preferencesStore.watchedTagIds || []
-  if (watchedIds.length === 0 && watchedTags.length === 0) return []
-  const allowedArrayIds = new Set([
-    ...watchedIds,
-    ...arrayStore.arrays.filter(a => a.tag_id != null && watchedTags.includes(a.tag_id)).map(a => a.array_id)
-  ])
-  return alertStore.recentAlerts.filter(a => allowedArrayIds.has(a.array_id))
+  const allowed = allowedArrayIds.value
+  if (!allowed) return alertStore.recentAlerts
+  if (allowed.size === 0) return []
+  return alertStore.recentAlerts.filter(a => allowed.has(a.array_id))
+})
+
+const filteredAlertTotal = computed(() => {
+  if (!preferencesStore.personalViewActive) return summary.value.total || summary.value.total_24h || 0
+  return filteredAlerts.value.length
+})
+
+const filteredAlertErrorCount = computed(() => {
+  if (!preferencesStore.personalViewActive) return summary.value.error_count || 0
+  return filteredAlerts.value.filter(a => a.level === 'error' || a.level === 'critical').length
 })
 
 function getObserverLabel(name) {
