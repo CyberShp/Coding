@@ -18,7 +18,7 @@
               <el-icon size="28"><Cpu /></el-icon>
             </div>
             <div class="stat-info">
-              <div class="stat-value">{{ arrayStore.totalCount }}</div>
+              <div class="stat-value">{{ filteredTotalCount }}</div>
               <div class="stat-label">总阵列数</div>
             </div>
           </div>
@@ -31,7 +31,7 @@
               <el-icon size="28"><CircleCheck /></el-icon>
             </div>
             <div class="stat-info">
-              <div class="stat-value">{{ arrayStore.connectedCount }}</div>
+              <div class="stat-value">{{ filteredConnectedCount }}</div>
               <div class="stat-label">在线阵列</div>
             </div>
           </div>
@@ -90,9 +90,9 @@
               </el-button>
             </div>
           </template>
-          <div class="health-matrix" v-if="arrayStore.arrays.length > 0">
+          <div class="health-matrix" v-if="filteredArrays.length > 0">
             <div
-              v-for="arr in arrayStore.arrays"
+              v-for="arr in filteredArrays"
               :key="arr.array_id"
               class="health-tile"
               :class="getArrayStatusClass(arr)"
@@ -152,7 +152,7 @@
           </template>
           <div class="alerts-list">
             <FoldedAlertList
-              :alerts="alertStore.recentAlerts"
+              :alerts="filteredAlerts"
               :show-array-id="true"
               :compact="true"
               @select="openAlertDrawer"
@@ -230,6 +230,35 @@ const trendChartOption = computed(() => ({
     data: stats.value?.trend_24h?.map(t => t.count) || []
   }]
 }))
+
+// Personal view: filter arrays by watched tags/arrays
+const filteredArrays = computed(() => {
+  if (!preferencesStore.personalViewActive) return arrayStore.arrays
+  const watchedIds = preferencesStore.watchedArrayIds || []
+  const watchedTags = preferencesStore.watchedTagIds || []
+  if (watchedIds.length === 0 && watchedTags.length === 0) return []
+  return arrayStore.arrays.filter(arr =>
+    watchedIds.includes(arr.array_id) || (arr.tag_id != null && watchedTags.includes(arr.tag_id))
+  )
+})
+
+const filteredTotalCount = computed(() => filteredArrays.value.length)
+const filteredConnectedCount = computed(() =>
+  filteredArrays.value.filter(a => a.state === 'connected').length
+)
+
+// Personal view: filter alerts by watched arrays/tags
+const filteredAlerts = computed(() => {
+  if (!preferencesStore.personalViewActive) return alertStore.recentAlerts
+  const watchedIds = preferencesStore.watchedArrayIds || []
+  const watchedTags = preferencesStore.watchedTagIds || []
+  if (watchedIds.length === 0 && watchedTags.length === 0) return []
+  const allowedArrayIds = new Set([
+    ...watchedIds,
+    ...arrayStore.arrays.filter(a => a.tag_id != null && watchedTags.includes(a.tag_id)).map(a => a.array_id)
+  ])
+  return alertStore.recentAlerts.filter(a => allowedArrayIds.has(a.array_id))
+})
 
 function getObserverLabel(name) {
   return getObserverName(name)
@@ -321,7 +350,8 @@ function formatTime(timestamp) {
 
 async function loadArrays() {
   try {
-    const tagId = preferencesStore.defaultTagId ?? undefined
+    // When personal view is on, load all arrays and filter client-side
+    const tagId = preferencesStore.personalViewActive ? undefined : (preferencesStore.defaultTagId ?? undefined)
     await arrayStore.fetchArrays(tagId)
   } catch (error) {
     console.error('Failed to load arrays:', error)

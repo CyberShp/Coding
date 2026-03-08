@@ -102,8 +102,10 @@ async def sync_cards(db: AsyncSession = Depends(get_db)):
 
         try:
             cmd = "anytest intfboardallinfo"
-            stdin_, stdout_, stderr_ = conn.exec_command(cmd, timeout=15)
-            output = stdout_.read().decode("utf-8", errors="replace")
+            exit_code, output, err_output = await conn.execute_async(cmd, 15)
+            if exit_code != 0:
+                errors.append(f"{array.name} ({array.host}): exit={exit_code}, {err_output[:200]}")
+                continue
             cards_data = _parse_card_output(output)
 
             for card_data in cards_data:

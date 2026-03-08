@@ -9,7 +9,7 @@ export const usePreferencesStore = defineStore('preferences', () => {
   const watchedObservers = ref([])
   const mutedObservers = ref([])
   const alertSound = ref(true)
-  const personalViewActive = ref(false)
+  const personalViewActive = ref(localStorage.getItem('personalViewActive') === 'true')
 
   const hasPersonalView = computed(() => {
     return watchedTagIds.value.length > 0 ||
@@ -48,6 +48,7 @@ export const usePreferencesStore = defineStore('preferences', () => {
 
   function togglePersonalView() {
     personalViewActive.value = !personalViewActive.value
+    localStorage.setItem('personalViewActive', String(personalViewActive.value))
   }
 
   return {

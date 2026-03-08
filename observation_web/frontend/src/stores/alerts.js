@@ -3,6 +3,8 @@ import { ref, computed } from 'vue'
 import api from '../api'
 import { isCriticalAlert } from '../utils/alertTranslator'
 import { sendDesktopNotification, playAlertSound, requestNotificationPermission } from '../utils/notification'
+import { usePreferencesStore } from './preferences'
+import { useArrayStore } from './arrays'
 
 export const useAlertStore = defineStore('alerts', () => {
   // State
@@ -128,6 +130,21 @@ export const useAlertStore = defineStore('alerts', () => {
 
     // Check if critical
     if (isCriticalAlert(data)) {
+      // Personal view: skip banner/notification for alerts outside watched arrays/tags
+      const prefs = usePreferencesStore()
+      if (prefs.personalViewActive) {
+        const watchedIds = prefs.watchedArrayIds || []
+        const watchedTags = prefs.watchedTagIds || []
+        const arrStore = useArrayStore()
+        const allowedArrayIds = new Set([
+          ...watchedIds,
+          ...arrStore.arrays.filter(a => a.tag_id != null && watchedTags.includes(a.tag_id)).map(a => a.array_id)
+        ])
+        if (!allowedArrayIds.has(data.array_id)) {
+          return
+        }
+      }
+
       _cleanupExpiredSuppressions()
       const obs = data.observer_name || 'unknown'
       const expiry = suppressedObservers.value.get(obs)
