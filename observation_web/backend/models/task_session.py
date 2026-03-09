@@ -23,6 +23,7 @@ class TaskSessionModel(Base):
     name = Column(String(256), nullable=False)
     task_type = Column(String(64), nullable=False)  # normal_business, controller_poweroff, etc.
     array_ids = Column(Text, default="")  # JSON array of array_id strings
+    expected_observers = Column(Text, default="[]")  # JSON array of observer names
     notes = Column(Text, default="")
     status = Column(String(16), default="created")  # created, running, completed
     started_at = Column(DateTime, nullable=True)
@@ -82,6 +83,7 @@ class TaskSessionCreate(BaseModel):
     name: str
     task_type: str = 'custom'
     array_ids: List[str] = []
+    expected_observers: List[str] = []
     notes: str = ''
 
 
@@ -92,6 +94,7 @@ class TaskSessionResponse(BaseModel):
     task_type: str
     task_type_label: str = ''
     array_ids: List[str] = []
+    expected_observers: List[str] = []
     notes: str = ''
     status: str = 'created'
     started_at: Optional[datetime] = None
@@ -110,6 +113,8 @@ class TaskSummary(BaseModel):
     task_type: str
     duration_seconds: float = 0
     alert_total: int = 0
+    expected_count: int = 0
+    unexpected_count: int = 0
     by_level: Dict[str, int] = {}
     by_observer: Dict[str, int] = {}
     critical_events: List[Dict[str, Any]] = []

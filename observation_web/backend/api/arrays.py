@@ -11,6 +11,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, status, Body, Query, UploadFile
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import select, exists, func
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -1030,6 +1031,7 @@ async def list_array_statuses(
 async def batch_action(
     action: str,
     request: BatchActionRequest,
+    stream: bool = Query(False, description="Return SSE progress stream"),
     db: AsyncSession = Depends(get_db),
     ssh_pool: SSHPool = Depends(get_ssh_pool),
 ):
@@ -1074,22 +1076,26 @@ async def batch_action(
             config = get_config()
             
             if action == "connect":
+                effective_password = (request.password or getattr(array, "saved_password", "") or "").strip()
                 if not conn:
                     conn = ssh_pool.add_connection(
                         array_id=array_id,
                         host=array.host,
                         port=array.port,
                         username=array.username,
-                        password=request.password,
+                        password=effective_password,
                         key_path=array.key_path or None,
                     )
-                elif request.password:
-                    conn.password = request.password
+                else:
+                    conn.password = effective_password
                 
                 success = conn.connect()
                 if success:
                     status_obj = _get_array_status(array_id)
                     status_obj.state = conn.state
+                    if effective_password and (not array.saved_password or array.saved_password != effective_password):
+                        array.saved_password = effective_password
+                        await db.commit()
                     return {"array_id": array_id, "success": True, "message": "Connected"}
                 else:
                     return {"array_id": array_id, "success": False, "error": conn.last_error}
@@ -1122,7 +1128,12 @@ async def batch_action(
                 if result.get("ok"):
                     status_obj = _get_array_status(array_id)
                     status_obj.agent_deployed = True
-                    return {"array_id": array_id, "success": True, "message": "Agent deployed"}
+                    return {
+                        "array_id": array_id,
+                        "success": True,
+                        "message": "Agent deployed",
+                        "warnings": result.get("warnings", []),
+                    }
                 else:
                     return {"array_id": array_id, "success": False, "error": result.get("error")}
             
@@ -1173,25 +1184,60 @@ async def batch_action(
         except Exception as e:
             sys_error("batch", f"Batch action {action} failed for {array_id}", {"error": str(e)})
             return {"array_id": array_id, "success": False, "error": str(e)}
-    
-    # Execute all actions concurrently
-    results = await asyncio.gather(*[
-        execute_single(array_id) for array_id in request.array_ids
-    ])
-    
-    success_count = sum(1 for r in results if r.get("success"))
-    sys_info("batch", f"Batch {action} completed", {
-        "total": len(request.array_ids),
-        "success": success_count,
-        "failed": len(request.array_ids) - success_count
-    })
-    
-    return {
-        "action": action,
-        "total": len(request.array_ids),
-        "success_count": success_count,
-        "results": results
-    }
+
+    async def _run_batch() -> Dict[str, Any]:
+        results = []
+        for array_id in request.array_ids:
+            results.append(await execute_single(array_id))
+        success_count = sum(1 for r in results if r.get("success"))
+        sys_info("batch", f"Batch {action} completed", {
+            "total": len(request.array_ids),
+            "success": success_count,
+            "failed": len(request.array_ids) - success_count
+        })
+        return {
+            "action": action,
+            "total": len(request.array_ids),
+            "success_count": success_count,
+            "results": results
+        }
+
+    if not stream:
+        return await _run_batch()
+
+    async def _sse_stream():
+        total = len(request.array_ids)
+        completed = 0
+        success_count = 0
+        results = []
+        # Kick off event
+        yield f"data: {json.dumps({'type': 'start', 'action': action, 'total': total}, ensure_ascii=False)}\n\n"
+        for array_id in request.array_ids:
+            res = await execute_single(array_id)
+            results.append(res)
+            completed += 1
+            if res.get("success"):
+                success_count += 1
+            event = {
+                "type": "progress",
+                "action": action,
+                "completed": completed,
+                "total": total,
+                "success_count": success_count,
+                "result": res,
+            }
+            yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+        summary = {
+            "type": "done",
+            "action": action,
+            "completed": completed,
+            "total": total,
+            "success_count": success_count,
+            "results": results,
+        }
+        yield f"data: {json.dumps(summary, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(_sse_stream(), media_type="text/event-stream")
 
 
 # High-contrast color pool for auto-created tags during import (plan PRESET_COLORS)

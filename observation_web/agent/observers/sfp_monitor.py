@@ -35,7 +35,7 @@ class SfpMonitorObserver(BaseObserver):
     def check(self) -> ObserverResult:
         ret, stdout, stderr = run_command(self.command, shell=True, timeout=30)
         if ret != 0:
-            logger.warning(f"[sfp_monitor] 命令执行失败: {stderr[:200]}")
+            logger.info(f"[sfp_monitor] 命令执行失败，跳过本轮检测: {stderr[:200]}")
             return self.create_result(
                 has_alert=False,
                 message="光模块: 命令执行失败",

@@ -111,11 +111,14 @@ class AgentDeployer:
             if not start_result["ok"]:
                 return start_result
 
-            return {
+            resp = {
                 "ok": True,
                 "message": "Agent deployed and started",
                 "deploy_path": deploy_path,
             }
+            if start_result.get("warnings"):
+                resp["warnings"] = start_result.get("warnings", [])
+            return resp
         finally:
             if local_package:
                 try:

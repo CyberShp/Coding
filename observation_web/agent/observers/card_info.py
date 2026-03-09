@@ -64,7 +64,7 @@ class CardInfoObserver(BaseObserver):
         self.health_expect = config.get('health_state_expect', 'NORMAL')
 
         # Model 异常值列表（视同为空）
-        self._model_invalid_values = {'undefined', 'none', 'null', 'n/a', ''}
+        self._model_invalid_values = {'undefined', 'undefine', 'none', 'null', 'n/a', ''}
 
         # 用于检测异常→恢复的状态转换
         self._was_alerting = False
@@ -165,10 +165,11 @@ class CardInfoObserver(BaseObserver):
             # 提取 BoardId 用于定位
             board_id = fields.get('BoardId', '')
 
-            for issue in issues:
+            if issues:
                 alert_entry = {
                     'card': card_no,
-                    **issue,
+                    'fields': issues,
+                    'level': 'error' if any(i.get('level') == 'error' for i in issues) else 'warning',
                 }
                 if board_id:
                     alert_entry['board_id'] = board_id
@@ -185,9 +186,10 @@ class CardInfoObserver(BaseObserver):
                 card_label = a['card']
                 if a.get('board_id'):
                     card_label = f"{a['card']} (BoardId: {a['board_id']})"
-                msg_parts.append(
-                    f"卡件 {card_label} {a['field']} 异常: {a['value']} (预期: {a['expect']})"
-                )
+                field_msgs = []
+                for issue in a.get('fields', []):
+                    field_msgs.append(f"{issue.get('field')}: {issue.get('value')} (预期: {issue.get('expect')})")
+                msg_parts.append(f"卡件 {card_label} 异常: {', '.join(field_msgs)}")
             if len(alerts) > 6:
                 msg_parts.append(f"...共 {len(alerts)} 项异常")
 

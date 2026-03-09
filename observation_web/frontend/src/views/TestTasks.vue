@@ -159,6 +159,15 @@
         <el-form-item label="备注">
           <el-input v-model="form.notes" type="textarea" :rows="3" />
         </el-form-item>
+        <el-form-item label="预期观察点">
+          <el-transfer
+            v-model="form.expected_observers"
+            :data="observerTransferData"
+            :titles="['全量观察点', '预期观察点']"
+            filterable
+            style="width: 100%"
+          />
+        </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="showCreateDialog = false">取消</el-button>
@@ -350,6 +359,10 @@ const commonObservers = [
   'controller_state', 'card_info', 'card_recovery', 'disk_state',
   'cpu_usage', 'memory_leak', 'process_crash',
 ]
+const observerTransferData = commonObservers.map(name => ({
+  key: name,
+  label: getObserverName(name),
+}))
 
 const ruleForm = reactive({
   name: '',
@@ -404,6 +417,7 @@ const form = reactive({
   name: '',
   task_type: 'custom',
   array_ids: [],
+  expected_observers: [],
   notes: '',
 })
 
@@ -471,6 +485,7 @@ async function createTask() {
       name: form.name,
       task_type: form.task_type,
       array_ids: form.array_ids,
+      expected_observers: form.expected_observers,
       notes: form.notes,
     })
     ElMessage.success('任务创建成功')
@@ -478,6 +493,7 @@ async function createTask() {
     form.name = ''
     form.notes = ''
     form.array_ids = []
+    form.expected_observers = []
     await loadTasks()
   } finally {
     creating.value = false

@@ -8,6 +8,9 @@
             <el-tag v-if="lastSync" type="info" size="small" effect="plain" class="last-sync">
               最后更新: {{ lastSync }}
             </el-tag>
+            <el-tag type="warning" size="small" effect="plain" class="last-sync">
+              下次自动同步: {{ nextAutoSyncText }}
+            </el-tag>
           </div>
           <div class="header-actions">
             <el-input
@@ -103,7 +106,7 @@
         <el-table-column prop="health_state" label="HealthState" width="110">
           <template #default="{ row }">
             <el-tag
-              :type="row.health_state === 'Normal' ? 'success' : (row.health_state ? 'warning' : 'info')"
+              :type="stateTagType(row.health_state, 'NORMAL')"
               size="small" effect="plain"
             >{{ row.health_state || '--' }}</el-tag>
           </template>
@@ -111,7 +114,7 @@
         <el-table-column prop="running_state" label="RunningState" width="120">
           <template #default="{ row }">
             <el-tag
-              :type="row.running_state === 'Normal' ? 'success' : (row.running_state ? 'warning' : 'info')"
+              :type="stateTagType(row.running_state, 'RUNNING')"
               size="small" effect="plain"
             >{{ row.running_state || '--' }}</el-tag>
           </template>
@@ -133,6 +136,11 @@
             <span>{{ row.tag_l2 || '--' }}</span>
           </template>
         </el-table-column>
+        <el-table-column prop="last_updated" label="最后更新时间" min-width="160">
+          <template #default="{ row }">
+            <span>{{ formatRelativeTime(row.last_updated) }}</span>
+          </template>
+        </el-table-column>
       </el-table>
 
       <div class="table-footer">
@@ -150,10 +158,12 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Search, Refresh } from '@element-plus/icons-vue'
 import api from '../api'
+
+const AUTO_SYNC_SECONDS = 300
 
 const loading = ref(false)
 const syncing = ref(false)
@@ -169,6 +179,8 @@ const filters = ref({
 })
 const currentPage = ref(1)
 const pageSize = ref(50)
+const nextAutoSyncAt = ref(Date.now() + AUTO_SYNC_SECONDS * 1000)
+const nowTs = ref(Date.now())
 
 const modelOptions = computed(() => [...new Set(allCards.value.map(c => (c.model || '').trim()).filter(Boolean))].sort())
 const hostOptions = computed(() => [...new Set(allCards.value.map(c => (c.array_host || '').trim()).filter(Boolean))].sort())
@@ -197,6 +209,13 @@ const paginatedCards = computed(() => {
   return filteredCards.value.slice(start, start + pageSize.value)
 })
 
+const nextAutoSyncText = computed(() => {
+  const diff = Math.max(0, Math.floor((nextAutoSyncAt.value - nowTs.value) / 1000))
+  const mm = String(Math.floor(diff / 60)).padStart(2, '0')
+  const ss = String(diff % 60).padStart(2, '0')
+  return `${mm}:${ss}`
+})
+
 async function loadData() {
   loading.value = true
   try {
@@ -223,6 +242,24 @@ function updateLastSync() {
       lastSync.value = new Date(dates[0]).toLocaleString('zh-CN')
     }
   }
+}
+
+function stateTagType(value, expected) {
+  if (!value) return 'info'
+  return String(value).toUpperCase() === expected ? 'success' : 'danger'
+}
+
+function formatRelativeTime(ts) {
+  if (!ts) return '--'
+  const ms = new Date(ts).getTime()
+  if (Number.isNaN(ms)) return '--'
+  const diffSec = Math.floor((Date.now() - ms) / 1000)
+  if (diffSec < 60) return `${Math.max(diffSec, 0)} 秒前`
+  const diffMin = Math.floor(diffSec / 60)
+  if (diffMin < 60) return `${diffMin} 分钟前`
+  const diffHour = Math.floor(diffMin / 60)
+  if (diffHour < 24) return `${diffHour} 小时前`
+  return new Date(ms).toLocaleString('zh-CN')
 }
 
 function selectAll(field) {
@@ -267,6 +304,7 @@ async function syncCards() {
       ElMessage.success(`同步完成: ${d.synced} 条卡件已更新`)
     }
     await loadData()
+    nextAutoSyncAt.value = Date.now() + AUTO_SYNC_SECONDS * 1000
   } catch (e) {
     ElMessage.error('同步失败: ' + (e.response?.data?.detail || e.message))
   } finally {
@@ -274,10 +312,31 @@ async function syncCards() {
   }
 }
 
-onMounted(loadData)
+onMounted(async () => {
+  await loadData()
+})
 
 onMounted(() => {
   restoreFilters()
+})
+
+let autoSyncTimer = null
+let secondTicker = null
+
+onMounted(() => {
+  autoSyncTimer = setInterval(() => {
+    if (!syncing.value) {
+      syncCards()
+    }
+  }, AUTO_SYNC_SECONDS * 1000)
+  secondTicker = setInterval(() => {
+    nowTs.value = Date.now()
+  }, 1000)
+})
+
+onUnmounted(() => {
+  if (autoSyncTimer) clearInterval(autoSyncTimer)
+  if (secondTicker) clearInterval(secondTicker)
 })
 
 watch(filters, (val) => {

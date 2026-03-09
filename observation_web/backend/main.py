@@ -8,6 +8,7 @@ import asyncio
 import logging
 import sys
 from contextlib import asynccontextmanager
+from datetime import datetime
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -39,6 +40,8 @@ from .middleware.user_session import UserSessionMiddleware
 from .core.ssh_pool import get_ssh_pool
 from .core.scheduler import get_scheduler
 from .core.alert_sync import start_alert_sync, stop_alert_sync
+from .models.array import ArrayModel
+from sqlalchemy import select
 
 # Configure logging
 logging.basicConfig(
@@ -174,6 +177,56 @@ async def _idle_connection_cleaner():
             logger.warning(f"Idle connection cleanup error: {e}")
 
 
+async def _auto_reconnect_saved_arrays():
+    """Try to reconnect arrays that have saved passwords after backend restart."""
+    from .db.database import AsyncSessionLocal
+    from .api.arrays import _get_array_status
+
+    if AsyncSessionLocal is None:
+        logger.warning("AsyncSessionLocal is unavailable, skip auto reconnect")
+        return
+
+    ssh_pool = get_ssh_pool()
+    semaphore = asyncio.Semaphore(10)
+
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(
+            select(ArrayModel).where(ArrayModel.saved_password.is_not(None))
+        )
+        candidates = [
+            arr for arr in result.scalars().all()
+            if (arr.saved_password or "").strip()
+        ]
+
+    if not candidates:
+        logger.info("Auto reconnect: no arrays with saved password")
+        return
+
+    async def _connect_one(array: ArrayModel):
+        async with semaphore:
+            def _do_connect():
+                conn = ssh_pool.add_connection(
+                    array_id=array.array_id,
+                    host=array.host,
+                    port=array.port,
+                    username=array.username,
+                    password=array.saved_password or "",
+                    key_path=array.key_path or None,
+                )
+                return conn.connect(), conn
+
+            ok, conn = await asyncio.get_event_loop().run_in_executor(None, _do_connect)
+            status_obj = _get_array_status(array.array_id)
+            status_obj.state = conn.state
+            status_obj.last_refresh = datetime.now()
+            if ok:
+                logger.info("Auto reconnect success: %s (%s)", array.name, array.host)
+            else:
+                logger.info("Auto reconnect skipped/failed: %s (%s): %s", array.name, array.host, conn.last_error)
+
+    await asyncio.gather(*[_connect_one(arr) for arr in candidates], return_exceptions=True)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan handler"""
@@ -200,6 +253,12 @@ async def lifespan(app: FastAPI):
     # Initialize SSH pool
     get_ssh_pool()
     logger.info("SSH pool initialized")
+
+    # Auto reconnect arrays that have saved password
+    try:
+        await _auto_reconnect_saved_arrays()
+    except Exception as e:
+        logger.warning("Auto reconnect on startup failed: %s", e)
     
     # Start task scheduler
     scheduler = get_scheduler()
@@ -341,7 +400,7 @@ def create_app() -> FastAPI:
     # Health check endpoint
     @app.get("/health")
     async def health_check():
-        from ..config import __version__
+        from .config import __version__
         return {"status": "healthy", "version": __version__}
     
     # API info endpoint

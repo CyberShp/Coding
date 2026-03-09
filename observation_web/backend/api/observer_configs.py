@@ -28,7 +28,7 @@ VALID_OBSERVERS = [
     'port_error_code', 'sfp_monitor', 'card_recovery', 'card_info',
     'pcie_bandwidth', 'alarm_type', 'cpu_usage', 'memory_leak',
     'process_crash', 'process_restart', 'io_timeout', 'abnormal_reset',
-    'cmd_response', 'sig_monitor', 'sensitive_info', 'custom_commands',
+    'cmd_response', 'sig_monitor', 'sensitive_info', 'custom_commands', 'start_work',
     'controller_state', 'disk_state',
 ]
 

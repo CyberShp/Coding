@@ -145,6 +145,11 @@ class ConfigLoader:
                     'failure recovery reset',
                 ],
             },
+            'start_work': {
+                'enabled': False,
+                'interval': 180,
+                'command': 'anytest sysgetstartwork',
+            },
         },
     }
 

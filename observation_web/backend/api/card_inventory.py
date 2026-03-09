@@ -88,18 +88,38 @@ async def sync_cards(db: AsyncSession = Depends(get_db)):
     """Sync card inventory from all connected arrays using SSH."""
     from ..core.ssh_pool import get_ssh_pool
     from ..models.array import ArrayModel
+    from .arrays import _get_array_status
 
     ssh_pool = get_ssh_pool()
     synced = 0
     errors = []
+    start_work_enabled = False
+
+    try:
+        from ..models.observer_config import ObserverConfigModel
+        cfg = await db.execute(
+            select(ObserverConfigModel).where(ObserverConfigModel.observer_name == "start_work")
+        )
+        row = cfg.scalar_one_or_none()
+        start_work_enabled = bool(row.enabled) if row is not None else False
+    except Exception:
+        start_work_enabled = False
 
     result = await db.execute(select(ArrayModel))
     arrays = result.scalars().all()
 
     for array in arrays:
         conn = ssh_pool.get_connection(array.array_id)
-        if not conn:
+        if not conn or not conn.is_connected():
             continue
+        status_obj = _get_array_status(array.array_id)
+        if not getattr(status_obj, "agent_deployed", False):
+            continue
+        if start_work_enabled:
+            started = await _check_start_work(conn)
+            if not started:
+                errors.append(f"{array.name} ({array.host}): 阵列未开工，跳过卡件同步")
+                continue
 
         try:
             cmd = "anytest intfboardallinfo"
@@ -155,6 +175,8 @@ _RE_CARD_NO = re.compile(_FIELD_PATTERN_TEMPLATE.format(keyword="CardNo"), re.IG
 _RE_RUNNING = re.compile(_FIELD_PATTERN_TEMPLATE.format(keyword="RunningState"), re.IGNORECASE)
 _RE_HEALTH = re.compile(_FIELD_PATTERN_TEMPLATE.format(keyword="HealthState"), re.IGNORECASE)
 _RE_MODEL = re.compile(_FIELD_PATTERN_TEMPLATE.format(keyword="Model"), re.IGNORECASE)
+_INVALID_MODEL_VALUES = {"undefined", "undefine", "none", "null", "n/a"}
+_START_WORK_LINE_RE = re.compile(r"^\s*[A-Za-z0-9_]+\s*[:：]\s*([0-9]+)\s*$")
 
 
 def _parse_card_output(output: str) -> list[dict]:
@@ -220,6 +242,9 @@ def _parse_card_output(output: str) -> list[dict]:
             "model": fields.get("model") or _get_from_raw(raw, "Model", "model"),
             "raw_fields": raw,
         }
+        model_lower = (current.get("model") or "").strip().lower()
+        if model_lower in _INVALID_MODEL_VALUES:
+            current["model"] = ""
         cards.append(current)
 
     return cards
@@ -233,3 +258,22 @@ def _get_from_raw(raw: dict, *keys: str) -> str:
         if v is not None:
             return v
     return ""
+
+
+async def _check_start_work(conn) -> bool:
+    """Return True if all sysgetstartwork module states are 1."""
+    try:
+        exit_code, output, _ = await conn.execute_async("anytest sysgetstartwork", 15)
+        if exit_code != 0:
+            return False
+        matched = False
+        for line in (output or "").splitlines():
+            m = _START_WORK_LINE_RE.match(line.strip())
+            if not m:
+                continue
+            matched = True
+            if m.group(1) != "1":
+                return False
+        return matched
+    except Exception:
+        return False

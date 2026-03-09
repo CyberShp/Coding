@@ -36,6 +36,7 @@ class Scheduler:
         self.reporter = reporter
         self._running = False
         self._observers = []  # type: List[Tuple[BaseObserver, float]]
+        self._start_work_ready = True
         self._updater = AgentUpdater(config)
         self._next_update_check = time.time() + 60
         self._update_interval_seconds = int((config.get('global', {}) or {}).get('update_check_interval_seconds', 1800))
@@ -110,6 +111,7 @@ class Scheduler:
         from ..observers.sfp_monitor import SfpMonitorObserver
         from ..observers.abnormal_reset import AbnormalResetObserver
         from ..observers.custom_monitor import CustomMonitorObserver
+        from ..observers.start_work import StartWorkObserver
         
         return {
             'error_code': ErrorCodeObserver,
@@ -135,6 +137,7 @@ class Scheduler:
             'process_restart': ProcessRestartObserver,
             'sfp_monitor': SfpMonitorObserver,
             'abnormal_reset': AbnormalResetObserver,
+            'start_work': StartWorkObserver,
             'custom_monitor': CustomMonitorObserver,
         }
     
@@ -162,12 +165,41 @@ class Scheduler:
             if now >= self._next_update_check:
                 self._updater.check_and_apply_update()
                 self._next_update_check = now + max(300, self._update_interval_seconds)
+
+            # Execute start_work first (if configured) to decide whether to skip other observers.
+            for i, (observer, next_run) in enumerate(self._observers):
+                if observer.name != 'start_work' or not observer.is_enabled():
+                    continue
+                if now < next_run:
+                    continue
+                try:
+                    result = observer.check()
+                    self._start_work_ready = bool((result.details or {}).get('started', not result.has_alert))
+                    if result.has_alert:
+                        self.reporter.report(result)
+                except Exception as e:
+                    self._start_work_ready = False
+                    logger.error(f"[{observer.name}] 执行失败: {e}")
+                next_run = now + observer.get_interval()
+                self._observers[i] = (observer, next_run)
+                break
             
             for i, (observer, next_run) in enumerate(self._observers):
                 if not observer.is_enabled():
                     continue
+                if observer.name == 'start_work':
+                    if next_run < next_wakeup:
+                        next_wakeup = next_run
+                    continue
                 
                 if now >= next_run:
+                    if not self._start_work_ready:
+                        # Array is not started, skip other observers in this cycle.
+                        next_run = now + observer.get_interval()
+                        self._observers[i] = (observer, next_run)
+                        if next_run < next_wakeup:
+                            next_wakeup = next_run
+                        continue
                     # 执行检查
                     try:
                         # Pass reporter to observers that support metrics recording

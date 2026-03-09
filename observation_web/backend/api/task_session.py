@@ -133,6 +133,7 @@ async def create_task(
         name=body.name,
         task_type=body.task_type,
         array_ids=json.dumps(body.array_ids),
+        expected_observers=json.dumps(body.expected_observers or [], ensure_ascii=False),
         notes=body.notes,
         status='created',
     )
@@ -272,9 +273,18 @@ async def get_task_summary(task_id: int, db: AsyncSession = Depends(get_db)):
     by_level = {}
     by_observer = {}
     critical_events = []
+    expected_observers = _parse_array_ids(getattr(task, "expected_observers", "") or "")
+    expected_set = set(expected_observers)
+    expected_count = 0
+    unexpected_count = 0
     for a in alert_list:
         by_level[a.level] = by_level.get(a.level, 0) + 1
         by_observer[a.observer_name] = by_observer.get(a.observer_name, 0) + 1
+        if expected_set:
+            if a.observer_name in expected_set:
+                expected_count += 1
+            else:
+                unexpected_count += 1
         if a.level in ('error', 'critical'):
             critical_events.append({
                 'id': a.id,
@@ -290,6 +300,8 @@ async def get_task_summary(task_id: int, db: AsyncSession = Depends(get_db)):
         task_type=task.task_type,
         duration_seconds=duration,
         alert_total=len(alert_list),
+        expected_count=expected_count,
+        unexpected_count=unexpected_count if expected_set else max(0, len(alert_list) - expected_count),
         by_level=by_level,
         by_observer=by_observer,
         critical_events=critical_events[:50],
@@ -316,6 +328,7 @@ def _to_response(task: TaskSessionModel) -> TaskSessionResponse:
         task_type=task.task_type,
         task_type_label=TASK_TYPES.get(task.task_type, task.task_type),
         array_ids=_parse_array_ids(task.array_ids),
+        expected_observers=_parse_array_ids(getattr(task, "expected_observers", "") or ""),
         notes=task.notes or '',
         status=task.status or 'created',
         started_at=task.started_at,

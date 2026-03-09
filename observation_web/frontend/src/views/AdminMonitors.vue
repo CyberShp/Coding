@@ -290,6 +290,7 @@ const BUILTIN_OBSERVERS = [
   { name: 'process_restart', label: '进程重拉', category: 'system', description: '进程 -v 参数变化检测（重拉/重启）', interval: 30, alert_level: 'warning' },
   { name: 'io_timeout', label: 'IO 超时', category: 'system', description: '日志中 I/O error、scsi error、timeout 等异常', interval: 30, alert_level: 'error' },
   { name: 'abnormal_reset', label: '异常复位', category: 'system', description: 'log_reset.txt 中异常复位事件检测', interval: 120, alert_level: 'warning' },
+  { name: 'start_work', label: '开工状态检查', category: 'system', description: '执行 anytest sysgetstartwork；未开工时仅保留该检查并跳过其他观察点', interval: 180, alert_level: 'warning' },
   { name: 'cmd_response', label: '命令响应', category: 'system', description: '监测命令执行耗时，超时告警', interval: 60, alert_level: 'warning' },
   { name: 'sig_monitor', label: '信号监测', category: 'system', description: 'messages 中异常信号检测（白名单外）', interval: 30, alert_level: 'warning' },
   { name: 'sensitive_info', label: '敏感信息', category: 'system', description: '日志中明文密码、NQN/IQN 等敏感信息检测', interval: 120, alert_level: 'info' },

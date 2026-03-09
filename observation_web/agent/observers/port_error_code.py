@@ -127,7 +127,7 @@ class PortErrorCodeObserver(BaseObserver):
         cmd_fc = f"{self.cmd_list_ports_fc} | grep -iE 'portId' | grep -aiE '0x2|0x11'"
         ret, stdout, stderr = run_command(cmd_fc, shell=True, timeout=15)
         if ret != 0:
-            logger.warning(f"[port_error_code] 获取 FC 端口列表失败: {stderr[:200]}")
+            logger.info(f"[port_error_code] FC 端口列表不可用，跳过 FC 检查: {stderr[:200]}")
         else:
             for line in stdout.strip().split('\n'):
                 line = line.strip()

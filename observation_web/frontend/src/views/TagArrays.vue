@@ -176,13 +176,14 @@
     <!-- Batch Connect Dialog -->
     <el-dialog v-model="batchConnectDialogVisible" title="批量连接" width="400px" @keyup.enter="doBatchConnect">
       <p class="batch-info">将连接 {{ selectedArrays.length }} 个阵列</p>
+      <p class="batch-hint">已保存密码的阵列会自动使用本地密码；此处密码仅用于未保存密码的阵列。</p>
       <el-form :model="batchConnectForm" @submit.prevent="doBatchConnect">
         <el-form-item label="统一密码">
           <el-input
             v-model="batchConnectForm.password"
             type="password"
             show-password
-            placeholder="所有阵列使用相同的 SSH 密码"
+            placeholder="可留空（自动使用已保存密码）"
             @keyup.enter="doBatchConnect"
           />
         </el-form-item>
@@ -192,6 +193,16 @@
         <el-button type="primary" @click="doBatchConnect" :loading="batchOperating">连接</el-button>
       </template>
     </el-dialog>
+
+    <BatchProgressDialog
+      :visible="progressVisible"
+      :action-label="progressActionLabel"
+      :total="progressTotal"
+      :completed="progressCompleted"
+      :success-count="progressSuccessCount"
+      :rows="progressRows"
+      @close="progressVisible = false"
+    />
   </div>
 </template>
 
@@ -204,6 +215,7 @@ import {
   Upload, RefreshRight, VideoPause
 } from '@element-plus/icons-vue'
 import api from '../api'
+import BatchProgressDialog from '../components/BatchProgressDialog.vue'
 
 const route = useRoute()
 
@@ -235,6 +247,12 @@ const form = reactive({
 
 const connectForm = reactive({ password: '' })
 const batchConnectForm = reactive({ password: '' })
+const progressVisible = ref(false)
+const progressTotal = ref(0)
+const progressCompleted = ref(0)
+const progressSuccessCount = ref(0)
+const progressRows = ref([])
+const progressActionLabel = ref('')
 
 const rules = {
   name: [{ required: true, message: '请输入阵列名称', trigger: 'blur' }],
@@ -411,17 +429,90 @@ async function executeBatchAction(action, password = null) {
   batchOperating.value = true
   try {
     const arrayIds = selectedArrays.value.map(a => a.array_id)
-    const res = await api.batchAction(action, arrayIds, password)
-    if (res.data.success_count === res.data.total) {
-      ElMessage.success(`批量操作完成：全部成功`)
-    } else if (res.data.success_count > 0) {
-      ElMessage.warning(`批量操作完成：${res.data.success_count}/${res.data.total} 成功`)
+    const actionMap = {
+      connect: '批量连接',
+      disconnect: '批量断开',
+      refresh: '批量刷新',
+      'deploy-agent': '一键部署 Agent',
+      'restart-agent': '一键重启 Agent',
+      'stop-agent': '一键停止 Agent',
+    }
+    progressActionLabel.value = actionMap[action] || action
+    progressVisible.value = true
+    progressTotal.value = arrayIds.length
+    progressCompleted.value = 0
+    progressSuccessCount.value = 0
+    const arrayMap = new Map(selectedArrays.value.map(a => [a.array_id, a]))
+    progressRows.value = arrayIds.map(id => {
+      const meta = arrayMap.get(id) || {}
+      return {
+        array_id: id,
+        name: meta.name || id,
+        host: meta.host || '',
+        status: '等待中',
+        detail: '',
+      }
+    })
+
+    const token = localStorage.getItem('admin_token')
+    const headers = {
+      'Content-Type': 'application/json',
+      Accept: 'text/event-stream',
+    }
+    if (token) headers.Authorization = `Bearer ${token}`
+    const resp = await fetch(`/api/arrays/batch/${action}?stream=true`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ array_ids: arrayIds, password }),
+    })
+    if (!resp.ok || !resp.body) {
+      throw new Error(`HTTP ${resp.status}`)
+    }
+
+    const decoder = new TextDecoder('utf-8')
+    const reader = resp.body.getReader()
+    let buffer = ''
+    while (true) {
+      const { value, done } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      let idx = buffer.indexOf('\n\n')
+      while (idx >= 0) {
+        const rawEvent = buffer.slice(0, idx).trim()
+        buffer = buffer.slice(idx + 2)
+        idx = buffer.indexOf('\n\n')
+        const dataLine = rawEvent
+          .split('\n')
+          .find(line => line.startsWith('data: '))
+        if (!dataLine) continue
+        const payload = JSON.parse(dataLine.slice(6))
+        if (payload.type === 'progress' && payload.result) {
+          const r = payload.result
+          const row = progressRows.value.find(item => item.array_id === r.array_id)
+          if (row) {
+            row.status = r.success ? '成功' : '失败'
+            const warnings = r.warnings?.length ? `（${r.warnings.length} 条警告）` : ''
+            row.detail = r.success ? `${r.message || '完成'}${warnings}` : (r.error || '失败')
+          }
+          progressCompleted.value = payload.completed || progressCompleted.value
+          progressSuccessCount.value = payload.success_count || progressSuccessCount.value
+        } else if (payload.type === 'done') {
+          progressCompleted.value = payload.completed || progressCompleted.value
+          progressSuccessCount.value = payload.success_count || progressSuccessCount.value
+        }
+      }
+    }
+
+    if (progressSuccessCount.value === progressTotal.value) {
+      ElMessage.success('批量操作完成：全部成功')
+    } else if (progressSuccessCount.value > 0) {
+      ElMessage.warning(`批量操作完成：${progressSuccessCount.value}/${progressTotal.value} 成功`)
     } else {
-      ElMessage.error(`批量操作失败`)
+      ElMessage.error('批量操作失败')
     }
     await loadArrays()
   } catch (error) {
-    ElMessage.error(error.response?.data?.detail || '批量操作失败')
+    ElMessage.error(error.response?.data?.detail || error.message || '批量操作失败')
   } finally {
     batchOperating.value = false
   }
@@ -473,5 +564,11 @@ watch(tagId, async () => {
 .batch-info {
   margin-bottom: 15px;
   color: #606266;
+}
+
+.batch-hint {
+  margin-bottom: 12px;
+  color: #909399;
+  font-size: 12px;
 }
 </style>
