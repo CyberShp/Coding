@@ -257,11 +257,17 @@ const filteredConnectedCount = computed(() =>
   filteredArrays.value.filter(a => a.state === 'connected').length
 )
 
+const RECENT_ALERTS_CUTOFF_MS = 2 * 60 * 60 * 1000
+
 const filteredAlerts = computed(() => {
+  const cutoff = Date.now() - RECENT_ALERTS_CUTOFF_MS
+  const within2h = alertStore.recentAlerts.filter(
+    a => new Date(a.timestamp || 0).getTime() > cutoff
+  )
   const allowed = allowedArrayIds.value
-  if (!allowed) return alertStore.recentAlerts
+  if (!allowed) return within2h
   if (allowed.size === 0) return []
-  return alertStore.recentAlerts.filter(a => allowed.has(a.array_id))
+  return within2h.filter(a => allowed.has(a.array_id))
 })
 
 const filteredAlertTotal = computed(() => {

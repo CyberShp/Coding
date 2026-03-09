@@ -2,6 +2,7 @@
 
 import json
 import logging
+import re
 from datetime import datetime
 from typing import List, Optional
 
@@ -145,46 +146,90 @@ async def sync_cards(db: AsyncSession = Depends(get_db)):
     return CardSyncResult(synced=synced, errors=errors)
 
 
+# Regex for agent-style output: "No001  BoardId: xxxx" (card prefix + field: value)
+_CARD_NO_PATTERN = re.compile(r"(No\d+)", re.IGNORECASE)
+_SEPARATOR_PATTERN = re.compile(r"-{3,}")
+_FIELD_PATTERN_TEMPLATE = r"{keyword}\s*[=:\s]*\s*(\S*)"
+_RE_BOARD_ID = re.compile(_FIELD_PATTERN_TEMPLATE.format(keyword="BoardId"), re.IGNORECASE)
+_RE_CARD_NO = re.compile(_FIELD_PATTERN_TEMPLATE.format(keyword="CardNo"), re.IGNORECASE)
+_RE_RUNNING = re.compile(_FIELD_PATTERN_TEMPLATE.format(keyword="RunningState"), re.IGNORECASE)
+_RE_HEALTH = re.compile(_FIELD_PATTERN_TEMPLATE.format(keyword="HealthState"), re.IGNORECASE)
+_RE_MODEL = re.compile(_FIELD_PATTERN_TEMPLATE.format(keyword="Model"), re.IGNORECASE)
+
+
 def _parse_card_output(output: str) -> list[dict]:
     """Parse the output of 'anytest intfboardallinfo' command.
 
-    Expected format - lines with key:value pairs per card section,
-    separated by blank lines or dashes.
+    Supports two formats:
+    1. Agent-style: "No001  BoardId: xxxx", "No001  RunningState: RUNNING", blocks separated by ---
+    2. Legacy: "BoardId: xxxx", "CardNo: No001", same separators.
     """
+    blocks = _SEPARATOR_PATTERN.split(output)
     cards = []
-    current: dict = {}
-    raw: dict = {}
 
-    for line in output.splitlines():
-        line = line.strip()
-        if not line or line.startswith("---") or line.startswith("==="):
-            if current:
-                current["raw_fields"] = raw
-                cards.append(current)
-                current = {}
-                raw = {}
+    for block in blocks:
+        block = block.strip()
+        if not block:
             continue
 
-        if ":" in line:
-            key, _, value = line.partition(":")
-            key = key.strip()
-            value = value.strip()
-            raw[key] = value
-            key_lower = key.lower().replace(" ", "_")
+        card_no_match = _CARD_NO_PATTERN.search(block)
+        card_no = card_no_match.group(1) if card_no_match else ""
+        fields = {}
+        raw = {}
 
-            if key_lower in ("boardid", "board_id"):
-                current["board_id"] = value
-            elif key_lower in ("cardno", "card_no"):
-                current["card_no"] = value
-            elif key_lower in ("healthstate", "health_state"):
-                current["health_state"] = value
-            elif key_lower in ("runningstate", "running_state"):
-                current["running_state"] = value
-            elif key_lower == "model":
-                current["model"] = value
+        for line in block.split("\n"):
+            line = line.strip()
+            if not line:
+                continue
 
-    if current:
-        current["raw_fields"] = raw
+            # Collect key:value for raw_fields
+            if ":" in line:
+                key, _, value = line.partition(":")
+                key = key.strip()
+                value = value.strip()
+                key_clean = re.sub(r"^No\d+\s+", "", key, flags=re.IGNORECASE).strip() or key
+                raw[key_clean] = value
+
+            # Extract fields via regex (handles "No001  BoardId: xxxx")
+            m = _RE_BOARD_ID.search(line)
+            if m:
+                fields["board_id"] = m.group(1).strip()
+            m = _RE_CARD_NO.search(line)
+            if m:
+                fields["card_no"] = m.group(1).strip()
+            m = _RE_RUNNING.search(line)
+            if m:
+                fields["running_state"] = m.group(1).strip()
+            m = _RE_HEALTH.search(line)
+            if m:
+                fields["health_state"] = m.group(1).strip()
+            m = _RE_MODEL.search(line)
+            if m:
+                fields["model"] = m.group(1).strip()
+
+        if not card_no:
+            card_no = fields.get("card_no") or (card_no_match.group(1) if card_no_match else "")
+        if not card_no:
+            card_no = f"Unknown_{len(cards)}"
+
+        current = {
+            "card_no": card_no,
+            "board_id": fields.get("board_id") or _get_from_raw(raw, "BoardId", "board_id"),
+            "running_state": fields.get("running_state") or _get_from_raw(raw, "RunningState", "running_state"),
+            "health_state": fields.get("health_state") or _get_from_raw(raw, "HealthState", "health_state"),
+            "model": fields.get("model") or _get_from_raw(raw, "Model", "model"),
+            "raw_fields": raw,
+        }
         cards.append(current)
 
     return cards
+
+
+def _get_from_raw(raw: dict, *keys: str) -> str:
+    """Get first matching key from raw (case-insensitive)."""
+    raw_lower = {k.lower(): v for k, v in raw.items()}
+    for k in keys:
+        v = raw_lower.get(k.lower())
+        if v is not None:
+            return v
+    return ""

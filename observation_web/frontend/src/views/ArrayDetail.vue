@@ -92,12 +92,18 @@
             :class="[`issue-${issue.level}`, { 'issue-suppressed': issue.suppressed }]"
             @click="openIssueDetail(issue)"
           >
-            <div class="issue-header">
+            <div class="issue-row">
               <span class="issue-title">{{ issue.title }}</span>
               <el-tag v-if="!issue.suppressed" :type="issue.level === 'error' || issue.level === 'critical' ? 'danger' : 'warning'" size="small">
                 {{ issue.level === 'error' || issue.level === 'critical' ? '错误' : '警告' }}
               </el-tag>
               <el-tag v-else type="info" size="small">已忽略</el-tag>
+              <span class="issue-observer">{{ getObserverName(issue.observer) }}</span>
+              <span class="issue-since" v-if="issue.since && !issue.suppressed">持续自 {{ formatRelativeTime(issue.since) }}</span>
+              <template v-if="issue.suppressed">
+                <span class="issue-acked">确认人: {{ (issue.acked_by_nickname || issue.acked_by_ip) || '--' }}</span>
+                <span class="issue-expires" v-if="issue.ack_expires_at">恢复: {{ formatDateTime(issue.ack_expires_at) }}</span>
+              </template>
               <el-button
                 v-if="issue.alert_id && !issue.suppressed"
                 size="small"
@@ -106,24 +112,44 @@
                 class="issue-ack-btn"
                 @click.stop="handleAckIssue(issue)"
               >
-                <el-icon><Check /></el-icon> 暂时忽略(24h)
+                <el-icon><Check /></el-icon> 忽略
               </el-button>
             </div>
             <div class="issue-message">{{ issue.message }}</div>
-            <div class="issue-meta">
-              <span class="issue-observer">{{ getObserverName(issue.observer) }}</span>
-              <span class="issue-since" v-if="issue.since && !issue.suppressed">持续自 {{ formatRelativeTime(issue.since) }}</span>
-              <template v-if="issue.suppressed">
-                <span class="issue-acked">确认人: {{ (issue.acked_by_nickname || issue.acked_by_ip) || '--' }}</span>
-                <span class="issue-expires" v-if="issue.ack_expires_at">恢复时间: {{ formatDateTime(issue.ack_expires_at) }}</span>
-              </template>
-            </div>
           </div>
         </div>
 
         <div v-else class="issues-empty">
           <el-icon :size="32" color="#67c23a"><CircleCheck /></el-icon>
           <p>所有监测项正常运行</p>
+        </div>
+      </el-card>
+
+      <!-- AI 综合解读预留区域：有活跃异常时显示 -->
+      <el-card v-if="activeIssues.length > 0" class="ai-summary-card">
+        <template #header>
+          <div class="card-header">
+            <el-icon><MagicStick /></el-icon>
+            <span>AI 综合解读</span>
+          </div>
+        </template>
+        <div v-if="aiSummaryLoading" class="ai-summary-loading">
+          <el-icon class="is-loading"><Loading /></el-icon>
+          <span>AI 正在解读...</span>
+        </div>
+        <div v-else-if="aiSummaryError" class="ai-summary-error">
+          <el-alert type="warning" :title="aiSummaryError" show-icon />
+          <el-button type="primary" plain size="small" style="margin-top:8px" @click="fetchAISummary">重试</el-button>
+        </div>
+        <div v-else-if="aiSummaryText" class="ai-summary-content">
+          <div class="ai-summary-text">{{ aiSummaryText }}</div>
+        </div>
+        <div v-else class="ai-summary-trigger">
+          <el-button type="primary" :loading="aiSummaryLoading" @click="fetchAISummary">
+            <el-icon><MagicStick /></el-icon>
+            获取 AI 综合解读
+          </el-button>
+          <p class="ai-summary-hint">基于当前活跃异常的代表条目生成解读；点击上方单项可在侧栏查看该条 AI 解读</p>
         </div>
       </el-card>
 
@@ -320,7 +346,7 @@
 import { ref, reactive, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { Refresh, ArrowRight, CircleCheck, Check, User } from '@element-plus/icons-vue'
+import { Refresh, ArrowRight, CircleCheck, Check, User, MagicStick, Loading } from '@element-plus/icons-vue'
 import { useArrayStore } from '../stores/arrays'
 import { useAlertStore } from '../stores/alerts'
 import api from '../api'
@@ -356,6 +382,10 @@ const drawerVisible = ref(false)
 const selectedAlert = ref(null)
 const tags = ref([])
 const watchers = ref([])
+
+const aiSummaryLoading = ref(false)
+const aiSummaryError = ref('')
+const aiSummaryText = ref('')
 
 const activeIssues = computed(() => {
   return array.value?.active_issues || []
@@ -397,6 +427,31 @@ function openIssueDetail(issue) {
     timestamp: issue.latest || issue.since || '',
   }
   drawerVisible.value = true
+}
+
+async function fetchAISummary() {
+  aiSummaryLoading.value = true
+  aiSummaryError.value = ''
+  aiSummaryText.value = ''
+  try {
+    const { data: statusData } = await api.checkAIStatus()
+    if (!statusData?.available) {
+      aiSummaryError.value = 'AI 解读服务暂不可用'
+      return
+    }
+    const firstWithAlertId = activeIssues.value.find(i => i.alert_id)
+    if (!firstWithAlertId) {
+      aiSummaryError.value = '当前异常暂无关联告警 ID，请点击上方单项在侧栏查看详情'
+      return
+    }
+    const { data } = await api.getAIInterpretation(firstWithAlertId.alert_id)
+    aiSummaryText.value = data.interpretation || '暂无解读内容'
+  } catch (e) {
+    const msg = e.response?.data?.detail || e.message || 'AI 解读请求失败'
+    aiSummaryError.value = typeof msg === 'string' ? msg : JSON.stringify(msg)
+  } finally {
+    aiSummaryLoading.value = false
+  }
 }
 
 function formatRelativeTime(ts) {
@@ -810,16 +865,18 @@ onUnmounted(() => {
   gap: 8px;
 }
 
-/* Active Issues */
+/* Active Issues - compact list with scroll, space for AI below */
 .issues-list {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 6px;
+  max-height: 300px;
+  overflow-y: auto;
 }
 
 .issue-item {
-  padding: 12px 16px;
-  border-radius: 8px;
+  padding: 8px 12px;
+  border-radius: 6px;
   border-left: 4px solid #dcdfe6;
   background: #fafafa;
   cursor: pointer;
@@ -835,51 +892,49 @@ onUnmounted(() => {
 .issue-error, .issue-critical { border-left-color: #f56c6c; background: #fef0f0; }
 .issue-suppressed { opacity: 0.75; background: #f5f7fa !important; border-left-color: #909399 !important; }
 .issue-suppressed .issue-title, .issue-suppressed .issue-message { color: #909399; }
-.issue-acked, .issue-expires { font-size: 12px; color: #909399; margin-left: 8px; }
+.issue-acked, .issue-expires { font-size: 11px; color: #909399; margin-left: 6px; }
 
-.issue-header {
+.issue-row {
   display: flex;
-  justify-content: space-between;
+  flex-wrap: wrap;
   align-items: center;
-  margin-bottom: 6px;
+  gap: 6px;
+  margin-bottom: 4px;
 }
 
 .issue-title {
   font-weight: 600;
-  font-size: 14px;
+  font-size: 13px;
   color: #303133;
 }
 
 .issue-message {
-  font-size: 13px;
-  color: #606266;
-  line-height: 1.5;
-  word-break: break-all;
-  margin-bottom: 6px;
-}
-
-.issue-meta {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
   font-size: 12px;
-  color: #909399;
+  color: #606266;
+  line-height: 1.4;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .issue-observer {
   font-family: monospace;
+  font-size: 11px;
   background: #f0f2f5;
-  padding: 1px 6px;
+  padding: 1px 5px;
   border-radius: 4px;
+  color: #909399;
 }
 
 .issue-since {
+  font-size: 11px;
   font-style: italic;
+  color: #909399;
 }
 
 .issue-ack-btn {
   margin-left: auto;
-  font-size: 12px;
+  font-size: 11px;
 }
 
 .issues-empty {
@@ -895,6 +950,41 @@ onUnmounted(() => {
   margin-top: 8px;
   color: #909399;
   font-size: 14px;
+}
+
+/* AI 综合解读预留区域 */
+.ai-summary-card {
+  margin-bottom: 20px;
+}
+.ai-summary-card :deep(.el-card__body) {
+  padding: 12px 16px;
+  min-height: 80px;
+}
+.ai-summary-loading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--el-text-color-secondary);
+  font-size: 14px;
+}
+.ai-summary-error {
+  font-size: 13px;
+}
+.ai-summary-content {
+  font-size: 14px;
+  line-height: 1.7;
+}
+.ai-summary-text {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.ai-summary-trigger {
+  padding: 8px 0;
+}
+.ai-summary-hint {
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
 }
 
 /* Alert list is now in FoldedAlertList.vue component */

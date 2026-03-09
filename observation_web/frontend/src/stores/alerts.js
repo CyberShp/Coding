@@ -121,12 +121,17 @@ export const useAlertStore = defineStore('alerts', () => {
     }
   }
 
+  const RECENT_ALERTS_HOURS = 2
+  const RECENT_ALERTS_MAX = 50
+
   function handleNewAlert(data) {
     // Add to recent list
     recentAlerts.value.unshift(data)
-    if (recentAlerts.value.length > 20) {
-      recentAlerts.value.pop()
-    }
+    // Keep only alerts within last 2 hours, cap at 50
+    const cutoff = Date.now() - RECENT_ALERTS_HOURS * 60 * 60 * 1000
+    recentAlerts.value = recentAlerts.value
+      .filter(a => new Date(a.timestamp || 0).getTime() > cutoff)
+      .slice(0, RECENT_ALERTS_MAX)
 
     // Check if critical
     if (isCriticalAlert(data)) {
@@ -209,7 +214,8 @@ export const useAlertStore = defineStore('alerts', () => {
         wsConnected.value = true
         reconnectAttempts = 0  // Reset on successful connection
         console.log('WebSocket connected')
-        
+        // Refresh recent alerts so list is correct after reconnect
+        fetchRecentAlerts().catch(e => console.error('Fetch recent alerts on WS open failed:', e))
         // Start heartbeat
         heartbeatTimer = setInterval(() => {
           if (ws.value && ws.value.readyState === WebSocket.OPEN) {
