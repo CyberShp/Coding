@@ -22,6 +22,7 @@ class ConfigLoader:
             'check_interval': 30,
             'max_memory_mb': 50,
             'subprocess_timeout': 10,
+            'update_check_interval_seconds': 1800,
         },
         'reporter': {
             'output': 'file',

@@ -26,6 +26,7 @@ from ..models.user_session import (
 from ..models.array_lock import ArrayLockModel
 from ..models.user_preference import UserPreferenceModel
 from ..middleware.user_session import ip_to_color, get_all_presence
+from ..core.profanity import check_nickname
 
 logger = logging.getLogger(__name__)
 
@@ -124,6 +125,7 @@ async def get_current_user(
         await db.commit()
         await db.refresh(session)
 
+    compliant, _ = check_nickname(session.nickname or "")
     return UserSessionResponse(
         id=session.id,
         ip=session.ip,
@@ -132,6 +134,7 @@ async def get_current_user(
         last_seen=session.last_seen,
         is_active=session.is_active,
         color=ip_to_color(session.ip),
+        nickname_compliant=compliant,
     )
 
 
@@ -151,6 +154,20 @@ async def set_nickname(
             detail="Unable to determine user IP"
         )
 
+    nickname = body.nickname.strip()[:64]
+    compliant, reason = check_nickname(nickname)
+    if not compliant:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=reason)
+
+    dup = await db.execute(
+        select(UserSessionModel).where(
+            UserSessionModel.nickname == nickname,
+            UserSessionModel.ip != user_ip,
+        )
+    )
+    if dup.scalar_one_or_none():
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="昵称已被使用")
+
     result = await db.execute(
         select(UserSessionModel).where(UserSessionModel.ip == user_ip)
     )
@@ -159,12 +176,12 @@ async def set_nickname(
     if not session:
         session = UserSessionModel(
             ip=user_ip,
-            nickname=body.nickname.strip()[:64],
+            nickname=nickname,
             is_active=True,
         )
         db.add(session)
     else:
-        session.nickname = body.nickname.strip()[:64]
+        session.nickname = nickname
 
     await db.commit()
     await db.refresh(session)
@@ -179,6 +196,7 @@ async def set_nickname(
         last_seen=session.last_seen,
         is_active=session.is_active,
         color=ip_to_color(session.ip),
+        nickname_compliant=True,
     )
 
 
@@ -221,6 +239,7 @@ async def claim_nickname(
     if old_session.ip == new_ip:
         # Same IP, nothing to migrate
         await db.refresh(old_session)
+        compliant, _ = check_nickname(old_session.nickname or "")
         return UserSessionResponse(
             id=old_session.id,
             ip=old_session.ip,
@@ -229,6 +248,7 @@ async def claim_nickname(
             last_seen=old_session.last_seen,
             is_active=old_session.is_active,
             color=ip_to_color(old_session.ip),
+            nickname_compliant=compliant,
         )
 
     old_ip = old_session.ip
@@ -268,6 +288,7 @@ async def claim_nickname(
 
     logger.info(f"User claimed nickname '{nickname}': {old_ip} -> {new_ip}")
 
+    compliant, _ = check_nickname(old_session.nickname or "")
     return UserSessionResponse(
         id=old_session.id,
         ip=old_session.ip,
@@ -276,6 +297,7 @@ async def claim_nickname(
         last_seen=old_session.last_seen,
         is_active=old_session.is_active,
         color=ip_to_color(old_session.ip),
+        nickname_compliant=compliant,
     )
 
 

@@ -42,6 +42,7 @@ class UserSessionResponse(UserSessionBase):
     last_seen: datetime
     is_active: bool
     color: str = ""  # Computed from IP hash
+    nickname_compliant: bool = True
 
     model_config = ConfigDict(from_attributes=True)
 

@@ -1241,8 +1241,8 @@ def _parse_import_file(content: bytes, filename: str) -> List[Dict[str, Any]]:
     return rows
 
 
-def _normalize_import_row(row: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """Normalize row to array fields. Returns None if row is empty/invalid."""
+def _normalize_import_row(row: Dict[str, Any]) -> tuple[Optional[Dict[str, Any]], str]:
+    """Normalize row to array fields. Returns (None, reason) if row is invalid."""
     # Support common column name variants (case-insensitive)
     def get(key_variants, default=""):
         for k in key_variants:
@@ -1253,14 +1253,19 @@ def _normalize_import_row(row: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
     name = get(["name", "名称", "array_name"])
     host = get(["host", "ip", "地址", "hostname"])
-    if not name or not host:
-        return None
+    if not name and not host:
+        return None, "name_and_host_empty"
+    if not name:
+        return None, "name_empty"
+    if not host:
+        return None, "host_empty"
     port_s = get(["port", "端口"], "22")
     try:
         port = int(port_s) if port_s else 22
     except ValueError:
         port = 22
     username = get(["username", "user", "用户名"], "root")
+    password = get(["password", "密码"], "")
     tag_name = get(["tag", "标签", "tag_name"])
     tag_l1 = get(["tag_l1", "一级标签", "tag_l1_name"])
     tag_l2 = get(["tag_l2", "二级标签", "tag_l2_name"])
@@ -1273,11 +1278,12 @@ def _normalize_import_row(row: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         "host": host,
         "port": port,
         "username": username,
+        "password": password,
         "tag_name": tag_name or None,
         "tag_l1": tag_l1 or None,
         "tag_l2": tag_l2 or None,
         "color": color or None,
-    }
+    }, ""
 
 
 @router.post("/import")
@@ -1337,29 +1343,34 @@ async def import_arrays(
 
     created = 0
     skipped = 0
+    invalid = 0
     errors: List[Dict[str, Any]] = []
     existing_hosts = set()
     result = await db.execute(select(ArrayModel.host))
     existing_hosts = {r[0] for r in result.all()}
 
     for i, row in enumerate(rows):
-        norm = _normalize_import_row(row)
+        norm, reason = _normalize_import_row(row)
         if not norm:
+            invalid += 1
+            errors.append({"row": i + 2, "reason": reason or "parse_error"})
+            logger.info("Import row %s invalid: %s | raw=%s", i + 2, reason, row)
             continue
         host = norm["host"]
         if host in existing_hosts:
             skipped += 1
             errors.append({"row": i + 2, "host": host, "reason": "host_already_exists"})
             continue
-        tag_id = await get_or_create_tag_from_import(norm)
         array_id = f"arr_{uuid.uuid4().hex[:8]}"
         try:
+            tag_id = await get_or_create_tag_from_import(norm)
             db_array = ArrayModel(
                 array_id=array_id,
                 name=norm["name"],
                 host=host,
                 port=norm.get("port", 22),
                 username=norm.get("username", "root"),
+                saved_password=norm.get("password", ""),
                 key_path="",
                 folder="",
                 tag_id=tag_id,
@@ -1370,18 +1381,20 @@ async def import_arrays(
                 host=host,
                 port=norm.get("port", 22),
                 username=norm.get("username", "root"),
-                password="",
+                password=norm.get("password", ""),
                 key_path=None,
             )
             _array_status_cache[array_id] = ArrayStatus(array_id=array_id, name=norm["name"], host=host)
             existing_hosts.add(host)
             created += 1
         except Exception as e:
+            logger.exception("Import row %s failed: %s", i + 2, e)
             errors.append({"row": i + 2, "host": host, "reason": str(e)})
     await db.commit()
     return {
         "created": created,
         "skipped": skipped,
+        "invalid": invalid,
         "errors": errors,
         "total_rows": len(rows),
     }

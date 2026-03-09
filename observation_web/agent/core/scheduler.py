@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Tuple
 
 from .base import BaseObserver
 from .reporter import Reporter
+from .updater import AgentUpdater
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +36,9 @@ class Scheduler:
         self.reporter = reporter
         self._running = False
         self._observers = []  # type: List[Tuple[BaseObserver, float]]
+        self._updater = AgentUpdater(config)
+        self._next_update_check = time.time() + 60
+        self._update_interval_seconds = int((config.get('global', {}) or {}).get('update_check_interval_seconds', 1800))
         
         # 从配置加载并注册观察点
         self._load_observers()
@@ -154,6 +158,10 @@ class Scheduler:
         while self._running:
             now = time.time()
             next_wakeup = now + 60  # 默认最长等待60秒
+
+            if now >= self._next_update_check:
+                self._updater.check_and_apply_update()
+                self._next_update_check = now + max(300, self._update_interval_seconds)
             
             for i, (observer, next_run) in enumerate(self._observers):
                 if not observer.is_enabled():

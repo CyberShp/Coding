@@ -8,6 +8,7 @@ import posixpath
 import tarfile
 import tempfile
 import time
+import hashlib
 from pathlib import Path
 from typing import Any, Dict, Iterable, Tuple
 
@@ -28,6 +29,7 @@ class AgentDeployer:
     def __init__(self, conn: SSHConnection, config: AppConfig):
         self.conn = conn
         self.config = config
+        self.last_package_hash = ""
 
     def deploy(self) -> Dict[str, Any]:
         if not self.conn.is_connected():
@@ -286,6 +288,15 @@ class AgentDeployer:
         with tarfile.open(package_path, "w:gz") as tar:
             # Use arcname='observation_points' to maintain Python module compatibility
             tar.add(agent_dir, arcname="observation_points")
+
+        hasher = hashlib.sha256()
+        with package_path.open("rb") as f:
+            while True:
+                chunk = f.read(1024 * 1024)
+                if not chunk:
+                    break
+                hasher.update(chunk)
+        self.last_package_hash = hasher.hexdigest()
 
         return str(package_path)
 

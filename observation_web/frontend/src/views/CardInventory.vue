@@ -30,9 +30,74 @@
             </el-button>
           </div>
         </div>
+        <div class="filter-row">
+          <div class="filter-item">
+            <div class="filter-top">
+              <span class="filter-label">Model</span>
+              <div class="filter-mini-actions">
+                <el-button link type="primary" @click="selectAll('model')">全选</el-button>
+                <el-button link @click="clearFilter('model')">清空</el-button>
+              </div>
+            </div>
+            <div class="filter-resizable">
+              <el-select v-model="filters.model" multiple filterable collapse-tags collapse-tags-tooltip clearable style="width: 100%">
+                <el-option v-for="item in modelOptions" :key="item" :label="item" :value="item" />
+              </el-select>
+            </div>
+          </div>
+
+          <div class="filter-item">
+            <div class="filter-top">
+              <span class="filter-label">IP</span>
+              <div class="filter-mini-actions">
+                <el-button link type="primary" @click="selectAll('host')">全选</el-button>
+                <el-button link @click="clearFilter('host')">清空</el-button>
+              </div>
+            </div>
+            <div class="filter-resizable">
+              <el-select v-model="filters.host" multiple filterable collapse-tags collapse-tags-tooltip clearable style="width: 100%">
+                <el-option v-for="item in hostOptions" :key="item" :label="item" :value="item" />
+              </el-select>
+            </div>
+          </div>
+
+          <div class="filter-item">
+            <div class="filter-top">
+              <span class="filter-label">一级标签</span>
+              <div class="filter-mini-actions">
+                <el-button link type="primary" @click="selectAll('tag_l1')">全选</el-button>
+                <el-button link @click="clearFilter('tag_l1')">清空</el-button>
+              </div>
+            </div>
+            <div class="filter-resizable">
+              <el-select v-model="filters.tag_l1" multiple filterable collapse-tags collapse-tags-tooltip clearable style="width: 100%">
+                <el-option v-for="item in tagL1Options" :key="item" :label="item" :value="item" />
+              </el-select>
+            </div>
+          </div>
+
+          <div class="filter-item">
+            <div class="filter-top">
+              <span class="filter-label">二级标签</span>
+              <div class="filter-mini-actions">
+                <el-button link type="primary" @click="selectAll('tag_l2')">全选</el-button>
+                <el-button link @click="clearFilter('tag_l2')">清空</el-button>
+              </div>
+            </div>
+            <div class="filter-resizable">
+              <el-select v-model="filters.tag_l2" multiple filterable collapse-tags collapse-tags-tooltip clearable style="width: 100%">
+                <el-option v-for="item in tagL2Options" :key="item" :label="item" :value="item" />
+              </el-select>
+            </div>
+          </div>
+
+          <div class="filter-actions">
+            <el-button @click="resetAllFilters">重置筛选</el-button>
+          </div>
+        </div>
       </template>
 
-      <el-table :data="cards" v-loading="loading" stripe max-height="calc(100vh - 220px)">
+      <el-table :data="paginatedCards" v-loading="loading" stripe max-height="calc(100vh - 220px)">
         <el-table-column prop="board_id" label="BoardId" min-width="100" show-overflow-tooltip />
         <el-table-column prop="card_no" label="CardNo" width="80" />
         <el-table-column prop="health_state" label="HealthState" width="110">
@@ -71,43 +136,85 @@
       </el-table>
 
       <div class="table-footer">
-        <span class="total-count">共 {{ cards.length }} 条卡件</span>
+        <span class="total-count">共 {{ allCards.length }} 条（筛选后 {{ filteredCards.length }} 条）</span>
+        <el-pagination
+          v-model:current-page="currentPage"
+          v-model:page-size="pageSize"
+          :total="filteredCards.length"
+          :page-sizes="[20, 50, 100, 200]"
+          layout="total, sizes, prev, pager, next, jumper"
+        />
       </div>
     </el-card>
   </div>
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Search, Refresh } from '@element-plus/icons-vue'
 import api from '../api'
 
 const loading = ref(false)
 const syncing = ref(false)
-const cards = ref([])
+const allCards = ref([])
 const searchQuery = ref('')
 const lastSync = ref('')
+const FILTER_STORAGE_KEY = 'card_inventory_filters'
+const filters = ref({
+  model: [],
+  host: [],
+  tag_l1: [],
+  tag_l2: [],
+})
+const currentPage = ref(1)
+const pageSize = ref(50)
+
+const modelOptions = computed(() => [...new Set(allCards.value.map(c => (c.model || '').trim()).filter(Boolean))].sort())
+const hostOptions = computed(() => [...new Set(allCards.value.map(c => (c.array_host || '').trim()).filter(Boolean))].sort())
+const tagL1Options = computed(() => [...new Set(allCards.value.map(c => (c.tag_l1 || '').trim()).filter(Boolean))].sort())
+const tagL2Options = computed(() => [...new Set(allCards.value.map(c => (c.tag_l2 || '').trim()).filter(Boolean))].sort())
+
+const filteredCards = computed(() => {
+  const keywords = (searchQuery.value || '').trim().toLowerCase().split(/\s+/).filter(Boolean)
+  return allCards.value.filter((card) => {
+    if (keywords.length) {
+      const searchable = `${card.model || ''} ${card.board_id || ''} ${card.card_no || ''} ${card.array_name || ''} ${card.array_host || ''}`.toLowerCase()
+      if (!keywords.every(kw => searchable.includes(kw))) {
+        return false
+      }
+    }
+    if (filters.value.model.length && !filters.value.model.includes(card.model || '')) return false
+    if (filters.value.host.length && !filters.value.host.includes(card.array_host || '')) return false
+    if (filters.value.tag_l1.length && !filters.value.tag_l1.includes(card.tag_l1 || '')) return false
+    if (filters.value.tag_l2.length && !filters.value.tag_l2.includes(card.tag_l2 || '')) return false
+    return true
+  })
+})
+
+const paginatedCards = computed(() => {
+  const start = (currentPage.value - 1) * pageSize.value
+  return filteredCards.value.slice(start, start + pageSize.value)
+})
 
 async function loadData() {
   loading.value = true
   try {
-    const params = {}
-    if (searchQuery.value?.trim()) params.q = searchQuery.value.trim()
-    const res = await api.getCardInventory(params)
-    cards.value = res.data || []
+    const res = await api.getCardInventory()
+    allCards.value = res.data || []
+    currentPage.value = 1
     updateLastSync()
   } catch (e) {
     console.error('Failed to load card inventory:', e)
-    cards.value = []
+    allCards.value = []
   } finally {
     loading.value = false
   }
 }
 
 function updateLastSync() {
-  if (cards.value.length > 0) {
-    const dates = cards.value
+  if (allCards.value.length > 0) {
+    const dates = allCards.value
       .map(c => c.last_updated)
       .filter(Boolean)
       .sort()
@@ -115,6 +222,37 @@ function updateLastSync() {
     if (dates.length > 0) {
       lastSync.value = new Date(dates[0]).toLocaleString('zh-CN')
     }
+  }
+}
+
+function selectAll(field) {
+  if (field === 'model') filters.value.model = [...modelOptions.value]
+  if (field === 'host') filters.value.host = [...hostOptions.value]
+  if (field === 'tag_l1') filters.value.tag_l1 = [...tagL1Options.value]
+  if (field === 'tag_l2') filters.value.tag_l2 = [...tagL2Options.value]
+}
+
+function clearFilter(field) {
+  filters.value[field] = []
+}
+
+function resetAllFilters() {
+  filters.value = { model: [], host: [], tag_l1: [], tag_l2: [] }
+}
+
+function restoreFilters() {
+  try {
+    const raw = localStorage.getItem(FILTER_STORAGE_KEY)
+    if (!raw) return
+    const parsed = JSON.parse(raw)
+    filters.value = {
+      model: Array.isArray(parsed.model) ? parsed.model : [],
+      host: Array.isArray(parsed.host) ? parsed.host : [],
+      tag_l1: Array.isArray(parsed.tag_l1) ? parsed.tag_l1 : [],
+      tag_l2: Array.isArray(parsed.tag_l2) ? parsed.tag_l2 : [],
+    }
+  } catch {
+    // ignore invalid localStorage data
   }
 }
 
@@ -137,6 +275,23 @@ async function syncCards() {
 }
 
 onMounted(loadData)
+
+onMounted(() => {
+  restoreFilters()
+})
+
+watch(filters, (val) => {
+  localStorage.setItem(FILTER_STORAGE_KEY, JSON.stringify(val))
+  currentPage.value = 1
+}, { deep: true })
+
+watch(searchQuery, () => {
+  currentPage.value = 1
+})
+
+watch(pageSize, () => {
+  currentPage.value = 1
+})
 </script>
 
 <style scoped>
@@ -158,12 +313,51 @@ onMounted(loadData)
   gap: 10px;
   align-items: center;
 }
+.filter-row {
+  margin-top: 12px;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.filter-item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.filter-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.filter-label {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+.filter-mini-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.filter-resizable {
+  min-width: 140px;
+  max-width: 360px;
+  width: 220px;
+  resize: horizontal;
+  overflow: auto;
+}
+.filter-actions {
+  margin-left: auto;
+}
 .last-sync {
   font-size: 12px;
 }
 .table-footer {
   padding: 12px 0;
-  text-align: right;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
   color: var(--el-text-color-secondary);
   font-size: 13px;
 }

@@ -140,10 +140,24 @@
             </div>
 
             <!-- Nickname Dialog -->
-            <el-dialog v-model="showNicknameDialog" title="设置昵称" width="360px">
+            <el-dialog
+              v-model="showNicknameDialog"
+              :title="forceRename ? '请修改昵称' : '设置昵称'"
+              width="360px"
+              :close-on-click-modal="!forceRename"
+              :close-on-press-escape="!forceRename"
+              :show-close="!forceRename"
+            >
+              <p class="claim-hint">
+                {{
+                  forceRename
+                    ? '您的昵称不符合规范，请设置一个合法合规的昵称'
+                    : '昵称需要合法合规，不能包含侮辱性或低俗词汇'
+                }}
+              </p>
               <el-input v-model="nicknameInput" placeholder="输入您的昵称" maxlength="20" show-word-limit />
               <template #footer>
-                <el-button @click="showNicknameDialog = false">取消</el-button>
+                <el-button v-if="!forceRename" @click="showNicknameDialog = false">取消</el-button>
                 <el-button type="primary" @click="saveNickname">保存</el-button>
               </template>
             </el-dialog>
@@ -249,6 +263,7 @@ const onlineCount = ref(0)
 const currentUser = reactive({ ip: '', nickname: '', color: '#409eff' })
 const showNicknameDialog = ref(false)
 const nicknameInput = ref('')
+const forceRename = ref(false)
 const showClaimDialog = ref(false)
 const claimInput = ref('')
 let userCountInterval = null
@@ -315,6 +330,12 @@ async function loadCurrentUser() {
     const res = await api.getCurrentUser()
     Object.assign(currentUser, res.data)
     nicknameInput.value = currentUser.nickname || ''
+    if (currentUser.nickname_compliant === false) {
+      forceRename.value = true
+      showNicknameDialog.value = true
+      return
+    }
+    forceRename.value = false
     if (!currentUser.nickname && !sessionStorage.getItem('nicknamePromptShown')) {
       showNicknameDialog.value = true
       sessionStorage.setItem('nicknamePromptShown', '1')
@@ -328,10 +349,20 @@ async function saveNickname() {
   try {
     const res = await api.setNickname(nicknameInput.value)
     Object.assign(currentUser, res.data)
+    forceRename.value = false
     showNicknameDialog.value = false
     ElMessage.success('昵称已保存')
   } catch (e) {
-    ElMessage.error('保存失败')
+    const detail = e?.response?.data?.detail || ''
+    if (e?.response?.status === 400) {
+      ElMessage.error(detail || '昵称包含不当词汇，请修改')
+      return
+    }
+    if (e?.response?.status === 409) {
+      ElMessage.error('昵称已被使用，请换一个')
+      return
+    }
+    ElMessage.error(detail || '保存失败')
   }
 }
 
@@ -345,6 +376,12 @@ async function claimNickname() {
     Object.assign(currentUser, res.data)
     showClaimDialog.value = false
     claimInput.value = ''
+    if (currentUser.nickname_compliant === false) {
+      forceRename.value = true
+      showNicknameDialog.value = true
+      ElMessage.warning('当前昵称不符合规范，请先修改昵称')
+      return
+    }
     ElMessage.success('认领成功，身份已恢复')
   } catch (e) {
     ElMessage.error(e.response?.data?.detail || '认领失败，请确认昵称正确')

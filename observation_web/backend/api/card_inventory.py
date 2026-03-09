@@ -149,7 +149,7 @@ async def sync_cards(db: AsyncSession = Depends(get_db)):
 # Regex for agent-style output: "No001  BoardId: xxxx" (card prefix + field: value)
 _CARD_NO_PATTERN = re.compile(r"(No\d+)", re.IGNORECASE)
 _SEPARATOR_PATTERN = re.compile(r"-{3,}")
-_FIELD_PATTERN_TEMPLATE = r"{keyword}\s*[=:\s]*\s*(\S*)"
+_FIELD_PATTERN_TEMPLATE = r"\b{keyword}\b\s*[=:\s]+\s*(\S+)"
 _RE_BOARD_ID = re.compile(_FIELD_PATTERN_TEMPLATE.format(keyword="BoardId"), re.IGNORECASE)
 _RE_CARD_NO = re.compile(_FIELD_PATTERN_TEMPLATE.format(keyword="CardNo"), re.IGNORECASE)
 _RE_RUNNING = re.compile(_FIELD_PATTERN_TEMPLATE.format(keyword="RunningState"), re.IGNORECASE)

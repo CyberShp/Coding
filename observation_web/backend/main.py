@@ -34,6 +34,7 @@ from .api.observer_configs import router as observer_configs_router
 from .api.users import router as users_router
 from .api.ai import router as ai_router
 from .api.card_inventory import router as card_inventory_router
+from .api.agent_package import router as agent_package_router
 from .middleware.user_session import UserSessionMiddleware
 from .core.ssh_pool import get_ssh_pool
 from .core.scheduler import get_scheduler
@@ -333,6 +334,7 @@ def create_app() -> FastAPI:
     app.include_router(observer_configs_router, prefix="/api")
     app.include_router(ai_router, prefix="/api")
     app.include_router(card_inventory_router, prefix="/api")
+    app.include_router(agent_package_router, prefix="/api")
     app.include_router(audit_router, prefix="/api")
     app.include_router(ws_router)
     

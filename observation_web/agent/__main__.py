@@ -85,6 +85,12 @@ def main():
     except Exception as e:
         logger.error(f"加载配置失败: {e}")
         sys.exit(1)
+
+    # Runtime restart context for updater (preserve current launch arguments).
+    config['_runtime'] = {
+        'python_executable': sys.executable,
+        'argv': sys.argv[1:],
+    }
     
     logger.info(f"观察点监控系统启动，版本: 1.0.0")
     logger.info(f"配置文件: {config_path}")
