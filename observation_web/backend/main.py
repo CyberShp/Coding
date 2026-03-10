@@ -123,6 +123,7 @@ async def _health_checker():
                     if not reachable:
                         conn._mark_disconnected()
                         status_obj.state = conn.state
+                        logger.info("Health check: %s (%s) unreachable, marked disconnected", array_id, status_obj.host)
                         continue
 
                     alive = await asyncio.wait_for(

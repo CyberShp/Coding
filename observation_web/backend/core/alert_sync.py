@@ -15,7 +15,7 @@ from ..config import get_config
 from ..core.ssh_pool import get_ssh_pool
 from ..core.system_alert import sys_error, sys_warning
 from ..db import database as _db_module
-from ..api.arrays import sync_array_alerts
+from ..api.arrays import sync_array_alerts, _derive_active_issues_from_db, _array_status_cache
 
 if TYPE_CHECKING:
     pass
@@ -40,6 +40,15 @@ async def _sync_one_array(array_id: str, semaphore: asyncio.Semaphore) -> Tuple[
             async with _db_module.AsyncSessionLocal() as db:
                 count = await sync_array_alerts(array_id, db, conn, config, full_sync=False)
                 await db.commit()
+
+                # Refresh in-memory active issues so dashboard stays current
+                if count and count > 0 and array_id in _array_status_cache:
+                    try:
+                        issues = await _derive_active_issues_from_db(db, array_id)
+                        _array_status_cache[array_id].active_issues = issues
+                    except Exception as e:
+                        logger.debug("Failed to refresh active issues for %s: %s", array_id, e)
+
                 return (array_id, count)
         except Exception as e:
             err_str = str(e)

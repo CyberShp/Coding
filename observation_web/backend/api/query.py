@@ -2,6 +2,7 @@
 Custom query API endpoints.
 """
 
+import asyncio
 import logging
 from datetime import datetime
 from typing import Dict, List, Optional
@@ -56,9 +57,14 @@ async def execute_query(
                 detail=f"Array {array_id} is not connected"
             )
     
-    # Execute query
+    # execute_query performs synchronous SSH I/O; run in threadpool
+    # to avoid blocking the event loop (which breaks concurrent async DB ops).
     engine = QueryEngine(ssh_pool)
-    result = engine.execute_query(task, arrays)
+    loop = asyncio.get_running_loop()
+    result = await asyncio.wait_for(
+        loop.run_in_executor(None, engine.execute_query, task, arrays),
+        timeout=120,
+    )
     
     return result
 

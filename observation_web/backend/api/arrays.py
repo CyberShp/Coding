@@ -54,12 +54,16 @@ router = APIRouter(prefix="/arrays", tags=["arrays"])
 _array_status_cache: Dict[str, ArrayStatus] = {}
 
 
-async def _run_blocking(func, timeout: float, *args, **kwargs):
-    """Run sync I/O in threadpool to avoid blocking event loop."""
+async def _run_blocking(func, _timeout: float, *args, **kwargs):
+    """Run sync I/O in threadpool to avoid blocking event loop.
+
+    _timeout is deliberately underscore-prefixed so that **kwargs can forward
+    a ``timeout`` keyword to the wrapped *func* without colliding.
+    """
     loop = asyncio.get_running_loop()
     return await asyncio.wait_for(
         loop.run_in_executor(None, lambda: func(*args, **kwargs)),
-        timeout=timeout,
+        timeout=_timeout,
     )
 
 
@@ -522,8 +526,9 @@ def _update_active_issues(status_obj: ArrayStatus, alert: dict):
         new_keys = set()
         for ca in card_alerts:
             card = ca.get('card', '?')
-            field = ca.get('field', '?')
-            new_keys.add(f"card_info:{card}:{field}")
+            for fi in ca.get('fields', []):
+                field = fi.get('field', '?')
+                new_keys.add(f"card_info:{card}:{field}")
         recovered_keys = old_keys - new_keys
         if recovered_keys:
             _record_recovery(array_id, list(recovered_keys), timestamp)
@@ -534,23 +539,25 @@ def _update_active_issues(status_obj: ArrayStatus, alert: dict):
         ]
         for ca in card_alerts:
             card = ca.get('card', '?')
-            field = ca.get('field', '?')
-            key = f"card_info:{card}:{field}"
-            _pop_recovery(array_id, key)  # relapse → invalidate ack
             board_id = ca.get('board_id', '')
-            label = f"{card}"
+            label = card
             if board_id:
                 label = f"{card} (BoardId:{board_id})"
-            status_obj.active_issues.append({
-                'key': key,
-                'observer': 'card_info',
-                'level': ca.get('level', level),
-                'title': _OBSERVER_TITLES['card_info'],
-                'message': f"卡件 {label} {field}={ca.get('value', '?')}",
-                'details': ca,
-                'since': timestamp,
-                'latest': timestamp,
-            })
+            for fi in ca.get('fields', []):
+                field = fi.get('field', '?')
+                value = fi.get('value', '?')
+                key = f"card_info:{card}:{field}"
+                _pop_recovery(array_id, key)
+                status_obj.active_issues.append({
+                    'key': key,
+                    'observer': 'card_info',
+                    'level': fi.get('level', ca.get('level', level)),
+                    'title': _OBSERVER_TITLES['card_info'],
+                    'message': f"卡件 {label} {field}={value}",
+                    'details': ca,
+                    'since': timestamp,
+                    'latest': timestamp,
+                })
         return
 
     # ---- Observers that use generic recovery logic ----
@@ -809,25 +816,27 @@ async def _derive_active_issues_from_db_batch(
                 if level in ("warning", "error", "critical"):
                     for ca in details.get("alerts", []):
                         card = ca.get("card", "?")
-                        field = ca.get("field", "?")
                         board_id = ca.get("board_id", "")
-                        label = f"{card}"
+                        label = card
                         if board_id:
                             label = f"{card} (BoardId:{board_id})"
-                        issues.append(
-                            {
-                                "key": f"card_info:{card}:{field}",
-                                "observer": "card_info",
-                                "level": ca.get("level", level),
-                                "title": _OBSERVER_TITLES["card_info"],
-                                "message": f"卡件 {label} {field}={ca.get('value', '?')}",
-                                "details": ca,
-                                "alert_id": alert_id,
-                                "since": ts,
-                                "latest": ts,
-                                **(suppressed_info or {}),
-                            }
-                        )
+                        for fi in ca.get("fields", []):
+                            field = fi.get("field", "?")
+                            value = fi.get("value", "?")
+                            issues.append(
+                                {
+                                    "key": f"card_info:{card}:{field}",
+                                    "observer": "card_info",
+                                    "level": fi.get("level", ca.get("level", level)),
+                                    "title": _OBSERVER_TITLES["card_info"],
+                                    "message": f"卡件 {label} {field}={value}",
+                                    "details": ca,
+                                    "alert_id": alert_id,
+                                    "since": ts,
+                                    "latest": ts,
+                                    **(suppressed_info or {}),
+                                }
+                            )
             elif obs_name == "port_error_code":
                 if level in ("warning", "error", "critical"):
                     alerts_list = details.get("alerts", [])

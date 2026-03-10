@@ -156,9 +156,13 @@ ALERT_TEMPLATES = [
         "message": "卡件 No002 RunningState 异常: STOPPED (预期: RUNNING); 卡件 No002 HealthState 异常: DEGRADED (预期: NORMAL); 卡件 No003 Model 异常: (空) (预期: 非空)",
         "details": {
             "alerts": [
-                {"card": "No002", "field": "RunningState", "value": "STOPPED", "expect": "RUNNING", "level": "error"},
-                {"card": "No002", "field": "HealthState", "value": "DEGRADED", "expect": "NORMAL", "level": "error"},
-                {"card": "No003", "field": "Model", "value": "(空)", "expect": "非空", "level": "warning"},
+                {"card": "No002", "fields": [
+                    {"field": "RunningState", "value": "STOPPED", "expect": "RUNNING", "level": "error"},
+                    {"field": "HealthState", "value": "DEGRADED", "expect": "NORMAL", "level": "error"},
+                ], "level": "error"},
+                {"card": "No003", "fields": [
+                    {"field": "Model", "value": "(空)", "expect": "非空", "level": "warning"},
+                ], "level": "warning"},
             ],
             "cards": {
                 "No001": {"RunningState": "RUNNING", "HealthState": "NORMAL", "Model": "HBA-X200"},

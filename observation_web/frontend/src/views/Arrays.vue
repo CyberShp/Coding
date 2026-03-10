@@ -338,11 +338,9 @@ import {
   Plus, Search, Collection, MoreFilled, Edit, Delete, Upload, Download, ArrowRight
 } from '@element-plus/icons-vue'
 import api from '../api'
-import { usePreferencesStore } from '../stores/preferences'
 
 const router = useRouter()
 const route = useRoute()
-const preferencesStore = usePreferencesStore()
 
 const loading = ref(false)
 const tags = ref([])
@@ -707,12 +705,6 @@ async function handleAddTag() {
 
 onMounted(async () => {
   await loadData()
-  if (route.path === '/arrays') {
-    await preferencesStore.load()
-    if (preferencesStore.defaultTagId) {
-      router.replace(`/arrays/tag/${preferencesStore.defaultTagId}`)
-    }
-  }
 })
 </script>
 
