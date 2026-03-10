@@ -7,6 +7,7 @@ import json
 import logging
 import shlex
 import uuid
+from collections import defaultdict
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
@@ -20,7 +21,7 @@ from ..config import get_config
 from ..core.agent_deployer import AgentDeployer
 from ..core.ssh_pool import get_ssh_pool, SSHPool
 from ..core.system_alert import sys_error, sys_warning, sys_info
-from ..db.database import get_db
+from ..db.database import get_db, AsyncSessionLocal
 from ..models.array import (
     ArrayModel, ArrayCreate, ArrayUpdate, ArrayResponse,
     ArrayStatus, ConnectionState
@@ -51,6 +52,29 @@ router = APIRouter(prefix="/arrays", tags=["arrays"])
 
 # In-memory status cache
 _array_status_cache: Dict[str, ArrayStatus] = {}
+
+
+async def _run_blocking(func, timeout: float, *args, **kwargs):
+    """Run sync I/O in threadpool to avoid blocking event loop."""
+    loop = asyncio.get_running_loop()
+    return await asyncio.wait_for(
+        loop.run_in_executor(None, lambda: func(*args, **kwargs)),
+        timeout=timeout,
+    )
+
+
+def _parse_alert_details(raw_details: Any) -> Dict[str, Any]:
+    """Parse alert details payload to dict safely."""
+    if not raw_details:
+        return {}
+    if isinstance(raw_details, dict):
+        return raw_details
+    if isinstance(raw_details, str):
+        try:
+            return json.loads(raw_details)
+        except (json.JSONDecodeError, TypeError):
+            return {}
+    return {}
 
 
 async def _get_sync_position(db: AsyncSession, array_id: str) -> int:
@@ -319,7 +343,7 @@ async def _apply_observer_overrides(conn, config, db: AsyncSession):
             return
         agent_path = config.remote.agent_deploy_path
         config_path = f"/etc/observation-points/config.json"
-        content = conn.read_file(config_path)
+        content = await _run_blocking(conn.read_file, 10, config_path)
         if not content:
             return
         config_data = json.loads(content)
@@ -330,7 +354,7 @@ async def _apply_observer_overrides(conn, config, db: AsyncSession):
         import base64
         config_json = json.dumps(config_data, indent=2, ensure_ascii=False)
         encoded = base64.b64encode(config_json.encode("utf-8")).decode("ascii")
-        conn.execute(f"echo '{encoded}' | base64 -d > {config_path}")
+        await _run_blocking(conn.execute, 10, f"echo '{encoded}' | base64 -d > {config_path}")
     except Exception as e:
         logging.getLogger(__name__).warning(f"Failed to apply observer overrides: {e}")
 
@@ -593,227 +617,284 @@ def _upsert_issue(
     })
 
 
-async def _derive_active_issues_from_db(db: AsyncSession, array_id: str) -> List[Dict[str, Any]]:
+async def _derive_active_issues_from_db_batch(
+    db: AsyncSession, array_ids: List[str]
+) -> Dict[str, List[Dict[str, Any]]]:
     """
-    Derive active issues from the DB when the in-memory cache is empty.
-    Looks at the LATEST alert per relevant observer and checks its details.
-    Filters out alerts that have been acknowledged — **unless** there is an
-    intermediate recovery event between the ack and the latest alert (the
-    "recovery invalidates ack" rule).
-    Includes ``alert_id`` in each issue for frontend ack operations.
+    Batch derive active issues from DB for multiple arrays.
+    Uses one query to fetch latest alerts per observer and one query to fetch
+    acknowledgement rows for all latest alert IDs.
     """
     from ..models.alert import AlertModel, AlertAckModel
+    from sqlalchemy import delete as sa_delete
 
-    issues: List[Dict[str, Any]] = []
+    if not array_ids:
+        return {}
 
-    for obs_name in _ACTIVE_ISSUE_OBSERVERS:
-        # Get the 2 most recent alerts to detect intermediate recovery
-        stmt = (
-            select(AlertModel)
-            .where(AlertModel.array_id == array_id)
-            .where(AlertModel.observer_name == obs_name)
-            .order_by(AlertModel.timestamp.desc())
-            .limit(2)
+    issues_by_array: Dict[str, List[Dict[str, Any]]] = {aid: [] for aid in array_ids}
+
+    ranked_alerts = (
+        select(
+            AlertModel.id.label("id"),
+            AlertModel.array_id.label("array_id"),
+            AlertModel.observer_name.label("observer_name"),
+            AlertModel.level.label("level"),
+            AlertModel.message.label("message"),
+            AlertModel.details.label("details"),
+            AlertModel.timestamp.label("timestamp"),
+            func.row_number()
+            .over(
+                partition_by=(AlertModel.array_id, AlertModel.observer_name),
+                order_by=AlertModel.timestamp.desc(),
+            )
+            .label("rn"),
         )
-        row_result = await db.execute(stmt)
-        recent_rows = row_result.scalars().all()
-        if not recent_rows:
-            continue
+        .where(AlertModel.array_id.in_(array_ids))
+        .where(AlertModel.observer_name.in_(_ACTIVE_ISSUE_OBSERVERS))
+        .subquery()
+    )
 
-        alert_row = recent_rows[0]  # latest
-        alert_id = alert_row.id
-        suppressed_info = None
+    rows_result = await db.execute(
+        select(
+            ranked_alerts.c.id,
+            ranked_alerts.c.array_id,
+            ranked_alerts.c.observer_name,
+            ranked_alerts.c.level,
+            ranked_alerts.c.message,
+            ranked_alerts.c.details,
+            ranked_alerts.c.timestamp,
+            ranked_alerts.c.rn,
+        ).where(ranked_alerts.c.rn <= 2)
+    )
 
-        # Parse details
-        details = {}
-        if alert_row.details:
-            try:
-                details = json.loads(alert_row.details) if isinstance(alert_row.details, str) else alert_row.details
-            except (json.JSONDecodeError, TypeError):
-                pass
+    grouped_rows: Dict[str, Dict[str, List[Dict[str, Any]]]] = defaultdict(lambda: defaultdict(list))
+    for row in rows_result.all():
+        grouped_rows[row.array_id][row.observer_name].append(
+            {
+                "id": row.id,
+                "level": row.level,
+                "message": row.message or "",
+                "details": _parse_alert_details(row.details),
+                "timestamp": row.timestamp,
+                "rn": row.rn,
+            }
+        )
 
-        # Skip if recovered
-        if details.get('recovered'):
-            continue
+    latest_alert_ids = []
+    for aid in grouped_rows:
+        for obs_name in grouped_rows[aid]:
+            rows = sorted(grouped_rows[aid][obs_name], key=lambda r: r["rn"])
+            if rows:
+                latest_alert_ids.append(rows[0]["id"])
 
-        # Check ack on the latest alert
+    ack_map: Dict[int, AlertAckModel] = {}
+    if latest_alert_ids:
         ack_result = await db.execute(
-            select(AlertAckModel).where(AlertAckModel.alert_id == alert_id).limit(1)
+            select(AlertAckModel).where(AlertAckModel.alert_id.in_(latest_alert_ids))
         )
-        ack_row = ack_result.scalar_one_or_none()
-        suppressed_info = None
-        if ack_row is not None:
-            # Ack exists — but check if there was an intermediate recovery
-            # If the second-most-recent alert shows recovery, the ack is stale
-            ack_is_stale = False
-            if len(recent_rows) >= 2:
-                prev_row = recent_rows[1]
-                prev_details = {}
-                if prev_row.details:
-                    try:
-                        prev_details = json.loads(prev_row.details) if isinstance(prev_row.details, str) else prev_row.details
-                    except (json.JSONDecodeError, TypeError):
-                        pass
-                if prev_details.get('recovered'):
-                    ack_is_stale = True
-                # For card_info: if previous alert had fewer/different cards → recovery happened
-                if obs_name == 'card_info' and prev_row.level == 'info':
-                    ack_is_stale = True
+        ack_map = {ack.alert_id: ack for ack in ack_result.scalars().all()}
 
-            # Also check in-memory recovery cache
-            recovery_ts = _recovery_timestamps.get(array_id, {}).get(obs_name)
-            if recovery_ts and ack_row.acked_at:
-                try:
-                    rec_dt = datetime.fromisoformat(recovery_ts)
-                    if rec_dt > ack_row.acked_at:
+    stale_ack_ids: List[int] = []
+
+    for array_id in array_ids:
+        issues: List[Dict[str, Any]] = []
+        observers = grouped_rows.get(array_id, {})
+
+        for obs_name in _ACTIVE_ISSUE_OBSERVERS:
+            recent_rows = sorted(observers.get(obs_name, []), key=lambda r: r["rn"])
+            if not recent_rows:
+                continue
+
+            latest = recent_rows[0]
+            alert_id = latest["id"]
+            details = latest["details"]
+
+            if details.get("recovered"):
+                continue
+
+            suppressed_info = None
+            ack_row = ack_map.get(alert_id)
+            if ack_row is not None:
+                ack_is_stale = False
+                if len(recent_rows) >= 2:
+                    prev_row = recent_rows[1]
+                    prev_details = prev_row["details"]
+                    if prev_details.get("recovered"):
                         ack_is_stale = True
-                except (ValueError, TypeError):
-                    pass
+                    if obs_name == "card_info" and prev_row["level"] == "info":
+                        ack_is_stale = True
 
-            if not ack_is_stale:
-                # Ack is valid — include issue but mark as suppressed (仍显示，灰色样式)
-                suppressed_info = {
-                    'suppressed': True,
-                    'acked_by_ip': ack_row.acked_by_ip,
-                    'ack_expires_at': ack_row.ack_expires_at.isoformat() if ack_row.ack_expires_at else None,
-                }
-            else:
-                # Ack is stale — auto-delete it so the alert resurfaces
-                try:
-                    await db.delete(ack_row)
-                    await db.flush()
-                    logger.info(f"Auto-invalidated stale ack for alert {alert_id} (recovery detected)")
-                except Exception:
-                    logger.debug(f"Failed to auto-delete stale ack for alert {alert_id}")
+                recovery_ts = _recovery_timestamps.get(array_id, {}).get(obs_name)
+                if recovery_ts and ack_row.acked_at:
+                    try:
+                        rec_dt = datetime.fromisoformat(recovery_ts)
+                        if rec_dt > ack_row.acked_at:
+                            ack_is_stale = True
+                    except (ValueError, TypeError):
+                        pass
 
-        level = alert_row.level or 'info'
-        message = alert_row.message or ''
-        ts = alert_row.timestamp.isoformat() if alert_row.timestamp else ''
+                if not ack_is_stale:
+                    suppressed_info = {
+                        "suppressed": True,
+                        "acked_by_ip": ack_row.acked_by_ip,
+                        "ack_expires_at": ack_row.ack_expires_at.isoformat() if ack_row.ack_expires_at else None,
+                    }
+                else:
+                    stale_ack_ids.append(ack_row.id)
 
-        if obs_name == 'alarm_type':
-            for al in details.get('active_alarms', []):
-                aid = al.get('alarm_id', '?')
-                otype = al.get('obj_type', '')
-                issues.append({
-                    'key': f"alarm_type:{aid}",
-                    'observer': 'alarm_type',
-                    'level': 'warning',
-                    'title': _OBSERVER_TITLES['alarm_type'],
-                    'message': f"AlarmId:{aid} objType:{otype}",
-                    'details': al,
-                    'alert_id': alert_id,
-                    'since': al.get('timestamp', ts),
-                    'latest': ts,
-                    **(suppressed_info or {}),
-                })
-        elif obs_name in ('cpu_usage', 'memory_leak'):
-            if level in ('warning', 'error', 'critical'):
-                # Preserve 'since' from oldest alert in problem chain (match _upsert_issue behavior)
-                since_ts = ts
-                for prev_row in reversed(recent_rows[1:]):
-                    prev_details = {}
-                    if prev_row.details:
-                        try:
-                            prev_details = json.loads(prev_row.details) if isinstance(prev_row.details, str) else prev_row.details
-                        except (json.JSONDecodeError, TypeError):
-                            pass
-                    if prev_details.get('recovered'):
-                        break
-                    if prev_row.level in ('warning', 'error', 'critical'):
-                        since_ts = prev_row.timestamp.isoformat() if prev_row.timestamp else ts
-                issues.append({
-                    'key': obs_name,
-                    'observer': obs_name,
-                    'level': level,
-                    'title': _OBSERVER_TITLES[obs_name],
-                    'message': message[:200],
-                    'details': details,
-                    'alert_id': alert_id,
-                    'since': since_ts,
-                    'latest': ts,
-                    **(suppressed_info or {}),
-                })
-        elif obs_name == 'pcie_bandwidth':
-            if level in ('warning', 'error', 'critical'):
-                for dg in details.get('downgrades', []):
-                    dev = dg.split(' ')[0] if isinstance(dg, str) else '?'
-                    issues.append({
-                        'key': f"pcie_bandwidth:{dev}",
-                        'observer': 'pcie_bandwidth',
-                        'level': level,
-                        'title': _OBSERVER_TITLES['pcie_bandwidth'],
-                        'message': dg if isinstance(dg, str) else str(dg),
-                        'details': details,
-                        'alert_id': alert_id,
-                        'since': ts,
-                        'latest': ts,
-                        **(suppressed_info or {}),
-                    })
-        elif obs_name == 'card_info':
-            if level in ('warning', 'error', 'critical'):
-                for ca in details.get('alerts', []):
-                    card = ca.get('card', '?')
-                    field = ca.get('field', '?')
-                    board_id = ca.get('board_id', '')
-                    label = f"{card}"
-                    if board_id:
-                        label = f"{card} (BoardId:{board_id})"
-                    issues.append({
-                        'key': f"card_info:{card}:{field}",
-                        'observer': 'card_info',
-                        'level': ca.get('level', level),
-                        'title': _OBSERVER_TITLES['card_info'],
-                        'message': f"卡件 {label} {field}={ca.get('value', '?')}",
-                        'details': ca,
-                        'alert_id': alert_id,
-                        'since': ts,
-                        'latest': ts,
-                        **(suppressed_info or {}),
-                    })
-        elif obs_name == 'port_error_code':
-            if level in ('warning', 'error', 'critical'):
-                alerts_list = details.get('alerts', [])
-                msg = '; '.join(alerts_list[:3]) if alerts_list else message[:200]
-                issues.append({
-                    'key': 'port_error_code',
-                    'observer': 'port_error_code',
-                    'level': level,
-                    'title': _OBSERVER_TITLES['port_error_code'],
-                    'message': msg[:200],
-                    'details': details,
-                    'alert_id': alert_id,
-                    'since': ts,
-                    'latest': ts,
-                    **(suppressed_info or {}),
-                })
-        elif obs_name == 'error_code':
-            # 仅误码/PCIe 类别，不含丢包
-            by_cat = details.get('by_category', {})
-            if level in ('warning', 'error', 'critical') and (
-                by_cat.get('error_code', 0) > 0 or by_cat.get('pcie', 0) > 0
-            ):
-                issues.append({
-                    'key': 'error_code',
-                    'observer': 'error_code',
-                    'level': level,
-                    'title': _OBSERVER_TITLES['error_code'],
-                    'message': message[:200],
-                    'details': details,
-                    'alert_id': alert_id,
-                    'since': ts,
-                    'latest': ts,
-                    **(suppressed_info or {}),
-                })
+            level = latest["level"] or "info"
+            message = latest["message"] or ""
+            ts = latest["timestamp"].isoformat() if latest["timestamp"] else ""
 
-    # Resolve acked_by_ip to nicknames for suppressed issues
-    ack_ips = list({i.get('acked_by_ip') for i in issues if i.get('suppressed') and i.get('acked_by_ip')})
+            if obs_name == "alarm_type":
+                for al in details.get("active_alarms", []):
+                    aid = al.get("alarm_id", "?")
+                    otype = al.get("obj_type", "")
+                    issues.append(
+                        {
+                            "key": f"alarm_type:{aid}",
+                            "observer": "alarm_type",
+                            "level": "warning",
+                            "title": _OBSERVER_TITLES["alarm_type"],
+                            "message": f"AlarmId:{aid} objType:{otype}",
+                            "details": al,
+                            "alert_id": alert_id,
+                            "since": al.get("timestamp", ts),
+                            "latest": ts,
+                            **(suppressed_info or {}),
+                        }
+                    )
+            elif obs_name in ("cpu_usage", "memory_leak"):
+                if level in ("warning", "error", "critical"):
+                    since_ts = ts
+                    for prev_row in reversed(recent_rows[1:]):
+                        prev_details = prev_row["details"]
+                        if prev_details.get("recovered"):
+                            break
+                        if prev_row["level"] in ("warning", "error", "critical"):
+                            since_ts = prev_row["timestamp"].isoformat() if prev_row["timestamp"] else ts
+                    issues.append(
+                        {
+                            "key": obs_name,
+                            "observer": obs_name,
+                            "level": level,
+                            "title": _OBSERVER_TITLES[obs_name],
+                            "message": message[:200],
+                            "details": details,
+                            "alert_id": alert_id,
+                            "since": since_ts,
+                            "latest": ts,
+                            **(suppressed_info or {}),
+                        }
+                    )
+            elif obs_name == "pcie_bandwidth":
+                if level in ("warning", "error", "critical"):
+                    for dg in details.get("downgrades", []):
+                        dev = dg.split(" ")[0] if isinstance(dg, str) else "?"
+                        issues.append(
+                            {
+                                "key": f"pcie_bandwidth:{dev}",
+                                "observer": "pcie_bandwidth",
+                                "level": level,
+                                "title": _OBSERVER_TITLES["pcie_bandwidth"],
+                                "message": dg if isinstance(dg, str) else str(dg),
+                                "details": details,
+                                "alert_id": alert_id,
+                                "since": ts,
+                                "latest": ts,
+                                **(suppressed_info or {}),
+                            }
+                        )
+            elif obs_name == "card_info":
+                if level in ("warning", "error", "critical"):
+                    for ca in details.get("alerts", []):
+                        card = ca.get("card", "?")
+                        field = ca.get("field", "?")
+                        board_id = ca.get("board_id", "")
+                        label = f"{card}"
+                        if board_id:
+                            label = f"{card} (BoardId:{board_id})"
+                        issues.append(
+                            {
+                                "key": f"card_info:{card}:{field}",
+                                "observer": "card_info",
+                                "level": ca.get("level", level),
+                                "title": _OBSERVER_TITLES["card_info"],
+                                "message": f"卡件 {label} {field}={ca.get('value', '?')}",
+                                "details": ca,
+                                "alert_id": alert_id,
+                                "since": ts,
+                                "latest": ts,
+                                **(suppressed_info or {}),
+                            }
+                        )
+            elif obs_name == "port_error_code":
+                if level in ("warning", "error", "critical"):
+                    alerts_list = details.get("alerts", [])
+                    msg = "; ".join(alerts_list[:3]) if alerts_list else message[:200]
+                    issues.append(
+                        {
+                            "key": "port_error_code",
+                            "observer": "port_error_code",
+                            "level": level,
+                            "title": _OBSERVER_TITLES["port_error_code"],
+                            "message": msg[:200],
+                            "details": details,
+                            "alert_id": alert_id,
+                            "since": ts,
+                            "latest": ts,
+                            **(suppressed_info or {}),
+                        }
+                    )
+            elif obs_name == "error_code":
+                by_cat = details.get("by_category", {})
+                if level in ("warning", "error", "critical") and (
+                    by_cat.get("error_code", 0) > 0 or by_cat.get("pcie", 0) > 0
+                ):
+                    issues.append(
+                        {
+                            "key": "error_code",
+                            "observer": "error_code",
+                            "level": level,
+                            "title": _OBSERVER_TITLES["error_code"],
+                            "message": message[:200],
+                            "details": details,
+                            "alert_id": alert_id,
+                            "since": ts,
+                            "latest": ts,
+                            **(suppressed_info or {}),
+                        }
+                    )
+
+        issues_by_array[array_id] = issues
+
+    if stale_ack_ids:
+        await db.execute(sa_delete(AlertAckModel).where(AlertAckModel.id.in_(set(stale_ack_ids))))
+        await db.flush()
+        logger.info("Auto-invalidated %s stale ack rows", len(set(stale_ack_ids)))
+
+    ack_ips = list(
+        {
+            issue.get("acked_by_ip")
+            for issues in issues_by_array.values()
+            for issue in issues
+            if issue.get("suppressed") and issue.get("acked_by_ip")
+        }
+    )
     if ack_ips:
         nick_map = await _resolve_ips_to_nicknames(db, ack_ips)
-        for i in issues:
-            if i.get('suppressed') and i.get('acked_by_ip'):
-                i['acked_by_nickname'] = nick_map.get(i['acked_by_ip']) or i['acked_by_ip']
+        for issues in issues_by_array.values():
+            for issue in issues:
+                if issue.get("suppressed") and issue.get("acked_by_ip"):
+                    issue["acked_by_nickname"] = nick_map.get(issue["acked_by_ip"]) or issue["acked_by_ip"]
 
-    return issues
+    return issues_by_array
+
+
+async def _derive_active_issues_from_db(db: AsyncSession, array_id: str) -> List[Dict[str, Any]]:
+    """Compatibility wrapper around batch active-issues query."""
+    result = await _derive_active_issues_from_db_batch(db, [array_id])
+    return result.get(array_id, [])
 
 
 @router.get("", response_model=List[ArrayResponse])
@@ -1025,11 +1106,9 @@ async def list_array_statuses(
             if prev is None or rank > prev[0]:
                 aid_obs[row.observer_name] = (rank, row.level, row.message or '')
 
-    # Active issues still need per-array logic due to complex ack/recovery checks
-    # but only for arrays that actually need it
     active_issues_map: Dict[str, list] = {}
-    for aid in need_active_issues:
-        active_issues_map[aid] = await _derive_active_issues_from_db(db, aid)
+    if need_active_issues:
+        active_issues_map = await _derive_active_issues_from_db_batch(db, need_active_issues)
 
     statuses = []
     for array in arrays:
@@ -1109,15 +1188,31 @@ async def batch_action(
             detail="No arrays specified"
         )
     
+    array_result = await db.execute(
+        select(ArrayModel).where(ArrayModel.array_id.in_(request.array_ids))
+    )
+    array_map: Dict[str, ArrayModel] = {arr.array_id: arr for arr in array_result.scalars().all()}
+
+    async def _update_saved_password(array_id: str, effective_password: str) -> None:
+        """Persist saved password using an isolated DB session for parallel safety."""
+        if not AsyncSessionLocal or not effective_password:
+            return
+        try:
+            async with AsyncSessionLocal() as session:
+                row = await session.execute(
+                    select(ArrayModel).where(ArrayModel.array_id == array_id)
+                )
+                array = row.scalar_one_or_none()
+                if array and array.saved_password != effective_password:
+                    array.saved_password = effective_password
+                    await session.commit()
+        except Exception:
+            logger.debug("Failed to persist saved password for %s", array_id)
+
     async def execute_single(array_id: str) -> Dict[str, Any]:
         """Execute action on a single array"""
         try:
-            # Get array info
-            result = await db.execute(
-                select(ArrayModel).where(ArrayModel.array_id == array_id)
-            )
-            array = result.scalar()
-            
+            array = array_map.get(array_id)
             if not array:
                 return {"array_id": array_id, "success": False, "error": "Array not found"}
             
@@ -1138,13 +1233,15 @@ async def batch_action(
                 else:
                     conn.password = effective_password
                 
-                success = conn.connect()
+                success = await _run_blocking(
+                    conn.connect,
+                    max(15, get_config().ssh.timeout + 5),
+                )
                 if success:
                     status_obj = _get_array_status(array_id)
                     status_obj.state = conn.state
                     if effective_password and (not array.saved_password or array.saved_password != effective_password):
-                        array.saved_password = effective_password
-                        await db.commit()
+                        await _update_saved_password(array_id, effective_password)
                     return {"array_id": array_id, "success": True, "message": "Connected"}
                 else:
                     return {"array_id": array_id, "success": False, "error": conn.last_error}
@@ -1161,8 +1258,8 @@ async def batch_action(
                 
                 deployer = AgentDeployer(conn, config)
                 status_obj = _get_array_status(array_id)
-                status_obj.agent_deployed = deployer.check_deployed()
-                status_obj.agent_running = deployer.check_running()
+                status_obj.agent_deployed = await _run_blocking(deployer.check_deployed, 10)
+                status_obj.agent_running = await _run_blocking(deployer.check_running, 10)
                 status_obj.last_refresh = datetime.now()
                 
                 return {"array_id": array_id, "success": True, "message": "Refreshed"}
@@ -1172,8 +1269,7 @@ async def batch_action(
                     return {"array_id": array_id, "success": False, "error": "Array not connected"}
                 
                 deployer = AgentDeployer(conn, config)
-                loop = asyncio.get_event_loop()
-                result = await asyncio.wait_for(loop.run_in_executor(None, deployer.deploy), timeout=120)
+                result = await _run_blocking(deployer.deploy, 120)
                 if result.get("ok"):
                     status_obj = _get_array_status(array_id)
                     status_obj.agent_deployed = True
@@ -1191,8 +1287,7 @@ async def batch_action(
                     return {"array_id": array_id, "success": False, "error": "Array not connected"}
                 
                 deployer = AgentDeployer(conn, config)
-                loop = asyncio.get_event_loop()
-                result = await asyncio.wait_for(loop.run_in_executor(None, deployer.start_agent), timeout=60)
+                result = await _run_blocking(deployer.start_agent, 60)
                 if result.get("ok"):
                     status_obj = _get_array_status(array_id)
                     status_obj.agent_running = True
@@ -1205,8 +1300,7 @@ async def batch_action(
                     return {"array_id": array_id, "success": False, "error": "Array not connected"}
                 
                 deployer = AgentDeployer(conn, config)
-                loop = asyncio.get_event_loop()
-                result = await asyncio.wait_for(loop.run_in_executor(None, deployer.stop_agent), timeout=30)
+                result = await _run_blocking(deployer.stop_agent, 30)
                 if result.get("ok"):
                     status_obj = _get_array_status(array_id)
                     status_obj.agent_running = False
@@ -1219,8 +1313,7 @@ async def batch_action(
                     return {"array_id": array_id, "success": False, "error": "Array not connected"}
                 
                 deployer = AgentDeployer(conn, config)
-                loop = asyncio.get_event_loop()
-                result = await asyncio.wait_for(loop.run_in_executor(None, deployer.restart_agent), timeout=60)
+                result = await _run_blocking(deployer.restart_agent, 60)
                 if result.get("ok"):
                     status_obj = _get_array_status(array_id)
                     status_obj.agent_running = True
@@ -1235,9 +1328,15 @@ async def batch_action(
             return {"array_id": array_id, "success": False, "error": str(e)}
 
     async def _run_batch() -> Dict[str, Any]:
-        results = []
-        for array_id in request.array_ids:
-            results.append(await execute_single(array_id))
+        max_concurrency = 5
+        semaphore = asyncio.Semaphore(max_concurrency)
+
+        async def _with_limit(array_id: str) -> Dict[str, Any]:
+            async with semaphore:
+                return await execute_single(array_id)
+
+        tasks = [_with_limit(array_id) for array_id in request.array_ids]
+        results = await asyncio.gather(*tasks)
         success_count = sum(1 for r in results if r.get("success"))
         sys_info("batch", f"Batch {action} completed", {
             "total": len(request.array_ids),
@@ -1259,10 +1358,18 @@ async def batch_action(
         completed = 0
         success_count = 0
         results = []
+        max_concurrency = 5
+        semaphore = asyncio.Semaphore(max_concurrency)
+
+        async def _with_limit(array_id: str) -> Dict[str, Any]:
+            async with semaphore:
+                return await execute_single(array_id)
+
         # Kick off event
         yield f"data: {json.dumps({'type': 'start', 'action': action, 'total': total}, ensure_ascii=False)}\n\n"
-        for array_id in request.array_ids:
-            res = await execute_single(array_id)
+        tasks = {asyncio.create_task(_with_limit(array_id)): array_id for array_id in request.array_ids}
+        for task in asyncio.as_completed(tasks):
+            res = await task
             results.append(res)
             completed += 1
             if res.get("success"):
@@ -1828,8 +1935,11 @@ async def connect_array(
         # Update password if we have one
         conn.password = effective_password
     
-    # Connect
-    success = conn.connect()
+    # Connect in executor to avoid blocking event loop
+    success = await _run_blocking(
+        conn.connect,
+        max(15, get_config().ssh.timeout + 5),
+    )
     
     # Update status
     status_obj = _get_array_status(array_id)
@@ -1853,8 +1963,8 @@ async def connect_array(
     # Check agent status
     config = get_config()
     deployer = AgentDeployer(conn, config)
-    status_obj.agent_deployed = deployer.check_deployed()
-    status_obj.agent_running = deployer.check_running()
+    status_obj.agent_deployed = await _run_blocking(deployer.check_deployed, 10)
+    status_obj.agent_running = await _run_blocking(deployer.check_running, 10)
 
     if not status_obj.agent_deployed:
         return {
@@ -1920,7 +2030,8 @@ async def refresh_array(
         )
 
     # Fast-fail: TCP probe before attempting any SSH operation
-    if not tcp_probe(conn.host, conn.port, timeout=2.0):
+    reachable = await _run_blocking(tcp_probe, 3, conn.host, conn.port, 2.0)
+    if not reachable:
         conn._mark_disconnected()
         status_obj = _get_array_status(array_id)
         status_obj.state = conn.state
@@ -2168,8 +2279,11 @@ async def get_array_metrics(
     metrics = []
     
     # Try to read from remote metrics.jsonl
-    exit_code, content, _ = conn.execute(
-        f"tail -n {lines_needed} {metrics_path} 2>/dev/null", timeout=10
+    exit_code, content, _ = await _run_blocking(
+        conn.execute,
+        12,
+        f"tail -n {lines_needed} {metrics_path} 2>/dev/null",
+        timeout=10,
     )
     
     if exit_code == 0 and content and content.strip():
@@ -2243,8 +2357,8 @@ async def deploy_agent(
     await _apply_observer_overrides(conn, config, db)
 
     status_obj = _get_array_status(array_id)
-    status_obj.agent_deployed = deployer.check_deployed()
-    status_obj.agent_running = deployer.check_running()
+    status_obj.agent_deployed = await _run_blocking(deployer.check_deployed, 10)
+    status_obj.agent_running = await _run_blocking(deployer.check_running, 10)
     sys_info("arrays", f"Agent deployed for array {array_id}", {"array_id": array_id})
 
     return result
@@ -2284,8 +2398,8 @@ async def start_agent(
         )
 
     status_obj = _get_array_status(array_id)
-    status_obj.agent_running = deployer.check_running()
-    status_obj.agent_deployed = deployer.check_deployed()
+    status_obj.agent_running = await _run_blocking(deployer.check_running, 10)
+    status_obj.agent_deployed = await _run_blocking(deployer.check_deployed, 10)
     sys_info("arrays", f"Agent started for array {array_id}", {"array_id": array_id})
 
     return result
@@ -2325,8 +2439,8 @@ async def stop_agent(
         )
 
     status_obj = _get_array_status(array_id)
-    status_obj.agent_running = deployer.check_running()
-    status_obj.agent_deployed = deployer.check_deployed()
+    status_obj.agent_running = await _run_blocking(deployer.check_running, 10)
+    status_obj.agent_deployed = await _run_blocking(deployer.check_deployed, 10)
     sys_info("arrays", f"Agent stopped for array {array_id}", {"array_id": array_id})
 
     return result
@@ -2366,8 +2480,8 @@ async def restart_agent(
         )
 
     status_obj = _get_array_status(array_id)
-    status_obj.agent_running = deployer.check_running()
-    status_obj.agent_deployed = deployer.check_deployed()
+    status_obj.agent_running = await _run_blocking(deployer.check_running, 10)
+    status_obj.agent_deployed = await _run_blocking(deployer.check_deployed, 10)
     sys_info("arrays", f"Agent restarted for array {array_id}", {"array_id": array_id})
 
     return result
@@ -2431,7 +2545,7 @@ async def get_logs(
         cmd = f"sudo tail -n {lines} {safe_path} 2>/dev/null"
     
     try:
-        exit_code, output, error = conn.execute(cmd, timeout=10)
+        exit_code, output, error = await _run_blocking(conn.execute, 12, cmd, timeout=10)
         
         if error and "permission denied" in error.lower():
             # Try without sudo
@@ -2439,11 +2553,11 @@ async def get_logs(
                 cmd = f"tail -n {lines * 3} {safe_path} 2>/dev/null | grep -i -e {safe_keyword} | tail -n {lines}"
             else:
                 cmd = f"tail -n {lines} {safe_path} 2>/dev/null"
-            exit_code, output, error = conn.execute(cmd, timeout=10)
+            exit_code, output, error = await _run_blocking(conn.execute, 12, cmd, timeout=10)
         
         # Get file info
         stat_cmd = f"stat --format='%s %Y' {safe_path} 2>/dev/null || stat -f '%z %m' {safe_path} 2>/dev/null"
-        _, stat_output, _ = conn.execute(stat_cmd, timeout=5)
+        _, stat_output, _ = await _run_blocking(conn.execute, 7, stat_cmd, timeout=5)
         
         file_size = 0
         modified_at = None
@@ -2498,7 +2612,7 @@ async def list_log_files(
     
     # List files with details
     cmd = f"find {directory} -maxdepth 2 -type f \\( -name '*.log' -o -name 'messages*' -o -name 'syslog*' \\) 2>/dev/null | head -50"
-    _, output, _ = conn.execute(cmd, timeout=10)
+    _, output, _ = await _run_blocking(conn.execute, 12, cmd, timeout=10)
     
     files = []
     if output:
@@ -2509,7 +2623,7 @@ async def list_log_files(
             
             # Get file info
             stat_cmd = f"stat --format='%s %Y' {path} 2>/dev/null || stat -f '%z %m' {path} 2>/dev/null"
-            _, stat_output, _ = conn.execute(stat_cmd, timeout=5)
+            _, stat_output, _ = await _run_blocking(conn.execute, 7, stat_cmd, timeout=5)
             
             size = 0
             modified = None
@@ -2578,7 +2692,7 @@ async def get_agent_config(
     config_path = f"{agent_path}/config.json"
     
     try:
-        content = conn.read_file(config_path)
+        content = await _run_blocking(conn.read_file, 10, config_path)
         if not content:
             return {
                 "exists": False,
@@ -2655,7 +2769,7 @@ async def update_agent_config(
     try:
         # Optimistic lock: verify remote file hasn't changed since the client read it
         if config_hash:
-            current_content = conn.read_file(config_path)
+            current_content = await _run_blocking(conn.read_file, 10, config_path)
             if current_content:
                 current_hash = _compute_config_hash(current_content)
                 if current_hash != config_hash:
@@ -2669,19 +2783,19 @@ async def update_agent_config(
         
         # Backup existing config
         backup_cmd = f"cp {config_path} {config_path}.bak 2>/dev/null || true"
-        conn.execute(backup_cmd)
+        await _run_blocking(conn.execute, 10, backup_cmd)
         
         # Write new config using base64 to avoid shell escaping issues
         import base64
         encoded = base64.b64encode(config_json.encode('utf-8')).decode('ascii')
         write_cmd = f"echo '{encoded}' | base64 -d > {config_path}"
         
-        exit_code, output, error = conn.execute(write_cmd)
+        exit_code, output, error = await _run_blocking(conn.execute, 15, write_cmd)
         if exit_code != 0:
             raise Exception(f"Write failed: {error}")
         
         # Verify the write and return new hash
-        verify_content = conn.read_file(config_path)
+        verify_content = await _run_blocking(conn.read_file, 10, config_path)
         if not verify_content:
             raise Exception("Failed to verify config write")
         
@@ -2747,7 +2861,7 @@ async def restore_agent_config(
     try:
         # Check if backup exists
         check_cmd = f"test -f {backup_path} && echo 'exists'"
-        _, output, _ = conn.execute(check_cmd)
+        _, output, _ = await _run_blocking(conn.execute, 10, check_cmd)
         
         if "exists" not in (output or ""):
             raise HTTPException(
@@ -2757,7 +2871,7 @@ async def restore_agent_config(
         
         # Restore from backup
         restore_cmd = f"cp {backup_path} {config_path}"
-        exit_code, output, error = conn.execute(restore_cmd)
+        exit_code, output, error = await _run_blocking(conn.execute, 10, restore_cmd)
         
         if exit_code != 0:
             raise Exception(f"Restore failed: {error}")

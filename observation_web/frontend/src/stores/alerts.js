@@ -62,11 +62,12 @@ export const useAlertStore = defineStore('alerts', () => {
     }
   }
 
-  async function fetchRecentAlerts() {
+  async function fetchRecentAlerts(options = {}) {
     try {
-      const response = await api.getRecentAlerts()
+      const response = await api.getRecentAlerts(20, options)
       recentAlerts.value = response.data
     } catch (error) {
+      if (error?.name === 'CanceledError' || error?.code === 'ERR_CANCELED') return
       console.error('Failed to fetch recent alerts:', error)
     }
   }

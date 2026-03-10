@@ -20,9 +20,9 @@ export const usePreferencesStore = defineStore('preferences', () => {
       watchedObservers.value.length > 0
   })
 
-  async function load() {
+  async function load(options = {}) {
     try {
-      const res = await api.getPreferences()
+      const res = await api.getPreferences(options)
       const d = res.data || {}
       defaultTagId.value = d.default_tag_id ?? null
       watchedTagIds.value = d.watched_tag_ids || []
@@ -32,7 +32,10 @@ export const usePreferencesStore = defineStore('preferences', () => {
       alertSound.value = d.alert_sound !== false
       dashboardL1TagId.value = d.dashboard_l1_tag_id ?? null
       return d
-    } catch {
+    } catch (error) {
+      if (error?.name === 'CanceledError' || error?.code === 'ERR_CANCELED') {
+        return {}
+      }
       defaultTagId.value = null
       return {}
     }

@@ -7,6 +7,18 @@ export const useArrayStore = defineStore('arrays', () => {
   const arrays = ref([])
   const currentArray = ref(null)
   const loading = ref(false)
+  const inFlightFetchArrays = new Map()
+  let pendingRequests = 0
+
+  function beginLoading() {
+    pendingRequests += 1
+    loading.value = true
+  }
+
+  function endLoading() {
+    pendingRequests = Math.max(0, pendingRequests - 1)
+    loading.value = pendingRequests > 0
+  }
 
   // Getters
   const connectedCount = computed(() => 
@@ -20,25 +32,39 @@ export const useArrayStore = defineStore('arrays', () => {
   const totalCount = computed(() => arrays.value.length)
 
   // Actions
-  async function fetchArrays(tagId = null) {
-    loading.value = true
-    try {
-      const response = await api.getArrayStatuses(tagId)
-      arrays.value = response.data
-      return response.data
-    } finally {
-      loading.value = false
+  async function fetchArrays(tagId = null, options = {}) {
+    const hasSignal = Boolean(options && options.signal)
+    const key = String(tagId ?? 'all')
+    if (!hasSignal && inFlightFetchArrays.has(key)) {
+      return inFlightFetchArrays.get(key)
     }
+
+    const promise = (async () => {
+      beginLoading()
+      try {
+        const response = await api.getArrayStatuses(tagId, options)
+        arrays.value = response.data
+        return response.data
+      } finally {
+        inFlightFetchArrays.delete(key)
+        endLoading()
+      }
+    })()
+
+    if (!hasSignal) {
+      inFlightFetchArrays.set(key, promise)
+    }
+    return promise
   }
 
   async function fetchArray(arrayId) {
-    loading.value = true
+    beginLoading()
     try {
       const response = await api.getArray(arrayId)
       currentArray.value = response.data
       return response.data
     } finally {
-      loading.value = false
+      endLoading()
     }
   }
 

@@ -223,6 +223,7 @@ const loading = ref(false)
 const l1Tags = ref([])
 const dashboardL1Filter = ref(null)
 let refreshTimer = null
+let pageAbortController = null
 
 const trendChartOption = computed(() => ({
   tooltip: {
@@ -412,9 +413,13 @@ function formatTime(timestamp) {
 
 async function loadL1Tags() {
   try {
-    const res = await api.getTags()
+    const signal = pageAbortController?.signal
+    const res = await api.getTags({ signal })
     l1Tags.value = (res.data || []).filter(t => t.level === 1)
-  } catch { l1Tags.value = [] }
+  } catch (error) {
+    if (error?.name === 'CanceledError' || error?.code === 'ERR_CANCELED') return
+    l1Tags.value = []
+  }
 }
 
 function onL1FilterChange() {
@@ -424,15 +429,18 @@ function onL1FilterChange() {
 async function loadArrays() {
   try {
     // Load all arrays so we can filter client-side by L1 tag
-    await arrayStore.fetchArrays()
+    const signal = pageAbortController?.signal
+    await arrayStore.fetchArrays(null, { signal })
   } catch (error) {
+    if (error?.name === 'CanceledError' || error?.code === 'ERR_CANCELED') return
     console.error('Failed to load arrays:', error)
   }
 }
 
 async function loadActiveTask() {
   try {
-    const res = await api.getTestTasks({ status: 'running', limit: 1 })
+    const signal = pageAbortController?.signal
+    const res = await api.getTestTasks({ status: 'running', limit: 1 }, { signal })
     const running = (res.data || [])[0]
     activeTask.value = running || null
     if (running && running.started_at) {
@@ -441,11 +449,17 @@ async function loadActiveTask() {
       else if (sec < 3600) taskDuration.value = `${Math.floor(sec / 60)}m`
       else taskDuration.value = `${Math.floor(sec / 3600)}h ${Math.floor((sec % 3600) / 60)}m`
     }
-  } catch (_) {}
+  } catch (error) {
+    if (error?.name === 'CanceledError' || error?.code === 'ERR_CANCELED') return
+  }
 }
 
 async function loadData() {
-  await preferencesStore.load()
+  if (pageAbortController) pageAbortController.abort()
+  pageAbortController = new AbortController()
+  const { signal } = pageAbortController
+
+  await preferencesStore.load({ signal })
   // Initialize L1 filter from preference if not set manually
   if (dashboardL1Filter.value === null && preferencesStore.dashboardL1TagId) {
     dashboardL1Filter.value = preferencesStore.dashboardL1TagId
@@ -453,9 +467,9 @@ async function loadData() {
   const tasks = [
     loadArrays().catch(e => console.error('Load arrays failed:', e)),
     loadL1Tags().catch(e => console.error('Load tags failed:', e)),
-    alertStore.fetchRecentAlerts().catch(e => console.error('Load alerts failed:', e)),
-    api.getAlertSummary(2).then(res => summary.value = res.data).catch(e => console.error('Load summary failed:', e)),
-    api.getAlertStats(2).then(res => stats.value = res.data).catch(e => console.error('Load stats failed:', e)),
+    alertStore.fetchRecentAlerts({ signal }).catch(e => console.error('Load alerts failed:', e)),
+    api.getAlertSummary(2, { signal }).then(res => summary.value = res.data).catch(e => console.error('Load summary failed:', e)),
+    api.getAlertStats(2, { signal }).then(res => stats.value = res.data).catch(e => console.error('Load stats failed:', e)),
     loadActiveTask(),
   ]
 
@@ -490,6 +504,10 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  if (pageAbortController) {
+    pageAbortController.abort()
+    pageAbortController = null
+  }
   if (refreshTimer) {
     clearInterval(refreshTimer)
     refreshTimer = null

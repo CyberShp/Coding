@@ -4,18 +4,19 @@ User session middleware for IP-based user tracking.
 Extracts user IP from requests and maintains session records.
 """
 
+import asyncio
 import hashlib
 import logging
 from datetime import datetime, timedelta
 
 from fastapi import Request
-from starlette.middleware.base import BaseHTTPMiddleware
 
 logger = logging.getLogger(__name__)
 
 # In-memory cache for user sessions to reduce DB writes
 _session_cache: dict = {}
 _CACHE_UPDATE_INTERVAL = 15  # seconds
+_session_update_tasks: dict = {}
 
 
 def get_client_ip(request: Request) -> str:
@@ -72,7 +73,7 @@ def ip_to_color(ip: str) -> str:
     return f"#{r:02x}{g:02x}{b:02x}"
 
 
-class UserSessionMiddleware(BaseHTTPMiddleware):
+class UserSessionMiddleware:
     """
     Middleware to track user sessions by IP.
 
@@ -80,7 +81,15 @@ class UserSessionMiddleware(BaseHTTPMiddleware):
     Injects user_ip into request.state for use by endpoints.
     """
 
-    async def dispatch(self, request: Request, call_next):
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") != "http":
+            await self.app(scope, receive, send)
+            return
+
+        request = Request(scope, receive=receive)
         user_ip = get_client_ip(request)
 
         # Inject IP into request state
@@ -92,11 +101,22 @@ class UserSessionMiddleware(BaseHTTPMiddleware):
         page = _api_path_to_page(str(request.url.path))
         update_user_presence(user_ip, page)
 
-        # Update session in background (non-blocking)
-        await self._update_session(user_ip, page)
+        # Update session in background (non-blocking), coalesced per IP
+        existing_task = _session_update_tasks.get(user_ip)
+        if existing_task is None or existing_task.done():
+            task = asyncio.create_task(self._update_session(user_ip, page))
+            _session_update_tasks[user_ip] = task
+            task.add_done_callback(lambda t, ip=user_ip: self._on_session_task_done(ip, t))
 
-        response = await call_next(request)
-        return response
+        await self.app(scope, receive, send)
+
+    @staticmethod
+    def _on_session_task_done(ip: str, task: asyncio.Task) -> None:
+        _session_update_tasks.pop(ip, None)
+        try:
+            task.result()
+        except Exception as e:
+            logger.debug(f"Failed to update user session: {e}")
 
     async def _update_session(self, ip: str, current_page: str):
         """
@@ -117,9 +137,6 @@ class UserSessionMiddleware(BaseHTTPMiddleware):
             'last_update': now,
             'current_page': current_page,
         }
-
-        # Update presence (for watchers - every request updates, cheap dict op)
-        update_user_presence(ip, current_page)
 
         # Update database (async, non-blocking)
         try:

@@ -382,6 +382,7 @@ const drawerVisible = ref(false)
 const selectedAlert = ref(null)
 const tags = ref([])
 const watchers = ref([])
+let pageAbortController = null
 
 const aiSummaryLoading = ref(false)
 const aiSummaryError = ref('')
@@ -518,21 +519,24 @@ function onAckChanged({ alertId, acked }) {
   }
 }
 
-async function loadRecentAlerts() {
+async function loadRecentAlerts(signal = undefined) {
   if (!array.value?.array_id) return
   try {
-    const res = await api.getAlerts({ array_id: array.value.array_id, limit: 20 })
+    const res = await api.getAlerts({ array_id: array.value.array_id, limit: 20 }, { signal })
     recentAlerts.value = res.data.items || res.data || []
   } catch (error) {
+    if (error?.name === 'CanceledError' || error?.code === 'ERR_CANCELED') return
     console.error('Failed to load alerts:', error)
   }
 }
 
 async function loadTags() {
   try {
-    const res = await api.getTags()
+    const signal = pageAbortController?.signal
+    const res = await api.getTags({ signal })
     tags.value = res.data || []
   } catch (error) {
+    if (error?.name === 'CanceledError' || error?.code === 'ERR_CANCELED') return
     console.error('Failed to load tags:', error)
   }
 }
@@ -607,23 +611,27 @@ function formatDateTime(timestamp) {
 async function loadWatchers() {
   if (!array.value?.array_id) return
   try {
-    const res = await api.getArrayWatchers(array.value.array_id)
+    const signal = pageAbortController?.signal
+    const res = await api.getArrayWatchers(array.value.array_id, { signal })
     watchers.value = res.data || []
-  } catch {
+  } catch (error) {
+    if (error?.name === 'CanceledError' || error?.code === 'ERR_CANCELED') return
     watchers.value = []
   }
 }
 
 async function loadArray() {
+  if (pageAbortController) pageAbortController.abort()
+  pageAbortController = new AbortController()
+  const { signal } = pageAbortController
   loading.value = true
   try {
     const arrayId = route.params.id
-    const response = await api.getArrayStatus(arrayId)
+    const response = await api.getArrayStatus(arrayId, { signal })
     array.value = response.data
-    // Load alerts from database instead of embedded in status
-    await loadRecentAlerts()
-    await loadWatchers()
+    await Promise.all([loadRecentAlerts(signal), loadWatchers()])
   } catch (error) {
+    if (error?.name === 'CanceledError' || error?.code === 'ERR_CANCELED') return
     ElMessage.error('加载失败')
   } finally {
     loading.value = false
@@ -632,7 +640,7 @@ async function loadArray() {
 
 async function handleConnect() {
   // 如果有保存的密码，先尝试自动连接
-  const statusData = arrayStore.statuses.find(s => s.array_id === array.value?.array_id)
+  const statusData = arrayStore.arrays.find(s => s.array_id === array.value?.array_id)
   if (statusData?.has_saved_password) {
     connecting.value = true
     try {
@@ -767,11 +775,13 @@ async function silentRefresh() {
   refreshInFlight = true
   try {
     const arrayId = route.params.id
-    const response = await api.getArrayStatus(arrayId)
+    const signal = pageAbortController?.signal
+    const response = await api.getArrayStatus(arrayId, { signal })
     array.value = response.data
-    await loadRecentAlerts()
+    await loadRecentAlerts(signal)
     silentRefreshFails = 0 // reset on success
   } catch (err) {
+    if (err?.name === 'CanceledError' || err?.code === 'ERR_CANCELED') return
     silentRefreshFails++
     console.warn(`Silent refresh failed (${silentRefreshFails}/${MAX_SILENT_FAILS}):`, err.message)
     if (silentRefreshFails >= MAX_SILENT_FAILS) {
@@ -808,6 +818,10 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  if (pageAbortController) {
+    pageAbortController.abort()
+    pageAbortController = null
+  }
   if (refreshTimer) {
     clearInterval(refreshTimer)
     refreshTimer = null

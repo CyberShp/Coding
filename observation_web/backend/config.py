@@ -32,6 +32,7 @@ class ServerConfig:
     host: str = "0.0.0.0"
     port: int = 8000
     debug: bool = False
+    workers: int = 1
     cors_origins: List[str] = field(default_factory=lambda: ["*"])
 
 
@@ -139,6 +140,7 @@ class AppConfig:
                 'host': self.server.host,
                 'port': self.server.port,
                 'debug': self.server.debug,
+                'workers': self.server.workers,
                 'cors_origins': self.server.cors_origins,
             },
             'ssh': {

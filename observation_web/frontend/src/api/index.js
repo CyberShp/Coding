@@ -27,6 +27,10 @@ http.interceptors.request.use(
 
 httpLong.interceptors.request.use(
   config => {
+    const token = localStorage.getItem('admin_token')
+    if (token) {
+      config.headers.Authorization = `Bearer ${token}`
+    }
     return config
   },
   error => {
@@ -54,13 +58,13 @@ httpLong.interceptors.response.use(response => response, handleError)
 export default {
   // Arrays
   getArrays: (tagId = null) => http.get('/arrays', { params: tagId ? { tag_id: tagId } : {} }),
-  getArrayStatuses: (tagId = null) => http.get('/arrays/statuses', { params: tagId ? { tag_id: tagId } : {} }),
+  getArrayStatuses: (tagId = null, options = {}) => http.get('/arrays/statuses', { params: tagId ? { tag_id: tagId } : {}, ...options }),
   getArray: (id) => http.get(`/arrays/${id}`),
   createArray: (data) => http.post('/arrays', data),
   updateArray: (id, data) => http.put(`/arrays/${id}`, data),
   deleteArray: (id) => http.delete(`/arrays/${id}`),
-  getArrayStatus: (id) => http.get(`/arrays/${id}/status`),
-  getArrayWatchers: (id) => http.get(`/arrays/${id}/watchers`),
+  getArrayStatus: (id, options = {}) => http.get(`/arrays/${id}/status`, options),
+  getArrayWatchers: (id, options = {}) => http.get(`/arrays/${id}/watchers`, options),
   searchArrays: (ip) => http.get('/arrays/search', { params: { ip } }),
   importArrays: (formData) => httpLong.post('/arrays/import', formData, {
     headers: { 'Content-Type': 'multipart/form-data' },
@@ -72,7 +76,7 @@ export default {
   getCardLastSync: () => http.get('/card-inventory/last-sync'),
 
   // Tags
-  getTags: () => http.get('/tags'),
+  getTags: (options = {}) => http.get('/tags', options),
   createTag: (data) => http.post('/tags', data),
   getTag: (id) => http.get(`/tags/${id}`),
   updateTag: (id, data) => http.put(`/tags/${id}`, data),
@@ -115,7 +119,7 @@ export default {
   setNickname: (nickname) => http.post('/users/me/nickname', { nickname }),
   claimNickname: (nickname) => http.post('/users/claim', { nickname }),
   getUserCount: () => http.get('/users/count'),
-  getPreferences: () => http.get('/users/me/preferences'),
+  getPreferences: (options = {}) => http.get('/users/me/preferences', options),
   updatePreferences: (data) => http.put('/users/me/preferences', data),
   // Long operations use httpLong with 60s timeout
   connectArray: (id, password) => httpLong.post(`/arrays/${id}/connect`, null, { params: { password } }),
@@ -150,10 +154,10 @@ export default {
   getTrafficModeInfo: (arrayId) => http.get(`/traffic/${arrayId}/mode-info`),
 
   // Alerts
-  getAlerts: (params) => http.get('/alerts', { params }),
-  getRecentAlerts: (limit = 20) => http.get('/alerts/recent', { params: { limit } }),
-  getAlertStats: (hours = 24) => http.get('/alerts/stats', { params: { hours } }),
-  getAlertSummary: (hours = 2) => http.get('/alerts/summary', { params: { hours } }),
+  getAlerts: (params, options = {}) => http.get('/alerts', { params, ...options }),
+  getRecentAlerts: (limit = 20, options = {}) => http.get('/alerts/recent', { params: { limit }, ...options }),
+  getAlertStats: (hours = 24, options = {}) => http.get('/alerts/stats', { params: { hours }, ...options }),
+  getAlertSummary: (hours = 2, options = {}) => http.get('/alerts/summary', { params: { hours }, ...options }),
   getAggregatedAlerts: (params) => http.get('/alerts/aggregated', { params }),
   exportAlerts: (params) => http.get('/alerts/export', { params, responseType: 'blob' }),
 
@@ -177,7 +181,7 @@ export default {
   getAlertAckDetails: (alertId) => http.get(`/alerts/${alertId}/ack`),
 
   // Test Tasks
-  getTestTasks: (params) => http.get('/test-tasks', { params }),
+  getTestTasks: (params, options = {}) => http.get('/test-tasks', { params, ...options }),
   createTestTask: (data) => http.post('/test-tasks', data),
   getTestTask: (id) => http.get(`/test-tasks/${id}`),
   startTestTask: (id) => http.post(`/test-tasks/${id}/start`),
