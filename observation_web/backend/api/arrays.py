@@ -282,6 +282,23 @@ async def _get_array_or_404(array_id: str, db: AsyncSession) -> ArrayModel:
     return arr
 
 
+async def _expand_l1_tag_filter(query, tag_id: int, db: AsyncSession):
+    """If tag_id is an L1 tag, expand filter to include all child L2 tag arrays."""
+    from ..models.tag import TagModel
+    tag_check = await db.execute(
+        select(TagModel.level).where(TagModel.id == tag_id)
+    )
+    tag_level = tag_check.scalar_one_or_none()
+    if tag_level == 1:
+        child_result = await db.execute(
+            select(TagModel.id).where(TagModel.parent_id == tag_id)
+        )
+        child_ids = [r[0] for r in child_result.all()]
+        all_ids = [tag_id] + child_ids
+        return query.where(ArrayModel.tag_id.in_(all_ids))
+    return query.where(ArrayModel.tag_id == tag_id)
+
+
 def _get_array_status(array_id: str) -> ArrayStatus:
     """Get or create array status"""
     if array_id not in _array_status_cache:
@@ -809,7 +826,7 @@ async def list_arrays(
 
     query = select(ArrayModel)
     if tag_id is not None:
-        query = query.where(ArrayModel.tag_id == tag_id)
+        query = await _expand_l1_tag_filter(query, tag_id, db)
 
     result = await db.execute(query)
     arrays = result.scalars().all()
@@ -937,7 +954,7 @@ async def list_array_statuses(
 
     query = select(ArrayModel)
     if tag_id is not None:
-        query = query.where(ArrayModel.tag_id == tag_id)
+        query = await _expand_l1_tag_filter(query, tag_id, db)
 
     result = await db.execute(query)
     arrays = result.scalars().all()
@@ -967,6 +984,53 @@ async def list_array_statuses(
             return tag.name, None
         return None, tag.name
 
+    # --- Batch preload to avoid N+1 queries ---
+    array_ids = [a.array_id for a in arrays]
+    need_observer_status = []
+    need_active_issues = []
+
+    for array in arrays:
+        status_obj = _get_array_status(array.array_id)
+        if not status_obj.observer_status:
+            need_observer_status.append(array.array_id)
+        if not status_obj.active_issues:
+            need_active_issues.append(array.array_id)
+
+    # Batch: recent alert summary for ALL arrays (single query)
+    from datetime import timedelta
+    cutoff_2h = datetime.now() - timedelta(hours=2)
+    summary_result = await db.execute(
+        select(AlertModel.array_id, AlertModel.level, func.count())
+        .where(AlertModel.array_id.in_(array_ids))
+        .where(AlertModel.timestamp >= cutoff_2h)
+        .group_by(AlertModel.array_id, AlertModel.level)
+    )
+    summary_map: Dict[str, Dict[str, int]] = {}
+    for aid, level, count in summary_result.all():
+        summary_map.setdefault(aid, {})[level] = count
+
+    # Batch: observer status for arrays missing cache (single query)
+    obs_status_map: Dict[str, Dict] = {}
+    if need_observer_status:
+        obs_result = await db.execute(
+            select(AlertModel.array_id, AlertModel.observer_name, AlertModel.level, AlertModel.message)
+            .where(AlertModel.array_id.in_(need_observer_status))
+            .order_by(AlertModel.timestamp.desc())
+        )
+        _level_rank = {'critical': 4, 'error': 3, 'warning': 2, 'info': 1}
+        for row in obs_result.all():
+            aid_obs = obs_status_map.setdefault(row.array_id, {})
+            rank = _level_rank.get(row.level, 0)
+            prev = aid_obs.get(row.observer_name)
+            if prev is None or rank > prev[0]:
+                aid_obs[row.observer_name] = (rank, row.level, row.message or '')
+
+    # Active issues still need per-array logic due to complex ack/recovery checks
+    # but only for arrays that actually need it
+    active_issues_map: Dict[str, list] = {}
+    for aid in need_active_issues:
+        active_issues_map[aid] = await _derive_active_issues_from_db(db, aid)
+
     statuses = []
     for array in arrays:
         status_obj = _get_array_status(array.array_id)
@@ -974,7 +1038,6 @@ async def list_array_statuses(
         status_obj.host = array.host
         status_obj.has_saved_password = bool(getattr(array, 'saved_password', ''))
 
-        # Add tag info
         tag = tags_map.get(array.tag_id) if array.tag_id else None
         status_obj.tag_id = array.tag_id
         status_obj.tag_name = tag.name if tag else None
@@ -982,29 +1045,15 @@ async def list_array_statuses(
         l1, l2 = _l1_l2(tag)
         status_obj.tag_l1_name = l1
         status_obj.tag_l2_name = l2
-        
+
         conn = ssh_pool.get_connection(array.array_id)
         if conn:
             status_obj.state = conn.state
             status_obj.last_error = conn.last_error
-        
-        # Derive observer_status from DB alerts if cache is empty
-        if not status_obj.observer_status:
-            stmt = (
-                select(AlertModel.observer_name, AlertModel.level, AlertModel.message)
-                .where(AlertModel.array_id == array.array_id)
-                .order_by(AlertModel.timestamp.desc())
-            )
-            alert_rows = await db.execute(stmt)
-            _level_rank = {'critical': 4, 'error': 3, 'warning': 2, 'info': 1}
-            _obs_best = {}
-            for row in alert_rows.all():
-                obs_name = row.observer_name
-                rank = _level_rank.get(row.level, 0)
-                prev = _obs_best.get(obs_name)
-                if prev is None or rank > prev[0]:
-                    _obs_best[obs_name] = (rank, row.level, row.message or '')
-            for obs_name, (rank, level, msg) in _obs_best.items():
+
+        # Apply batch-loaded observer status
+        if not status_obj.observer_status and array.array_id in obs_status_map:
+            for obs_name, (rank, level, msg) in obs_status_map[array.array_id].items():
                 obs_status = 'ok'
                 if level in ('error', 'critical'):
                     obs_status = 'error'
@@ -1015,15 +1064,15 @@ async def list_array_statuses(
                     'message': msg[:100],
                 }
 
-        # Derive active_issues from DB if cache is empty
-        if not status_obj.active_issues:
-            status_obj.active_issues = await _derive_active_issues_from_db(db, array.array_id)
+        # Apply batch-loaded active issues
+        if not status_obj.active_issues and array.array_id in active_issues_map:
+            status_obj.active_issues = active_issues_map[array.array_id]
 
-        # Populate recent alert summary for dashboard health classification
-        status_obj.recent_alert_summary = await _compute_recent_alert_summary(db, array.array_id)
-        
+        # Apply batch-loaded recent alert summary
+        status_obj.recent_alert_summary = summary_map.get(array.array_id, {})
+
         statuses.append(status_obj)
-    
+
     return statuses
 
 

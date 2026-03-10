@@ -9,6 +9,7 @@ export const usePreferencesStore = defineStore('preferences', () => {
   const watchedObservers = ref([])
   const mutedObservers = ref([])
   const alertSound = ref(true)
+  const dashboardL1TagId = ref(null)
   let savedPV = false
   try { savedPV = localStorage.getItem('personalViewActive') === 'true' } catch { /* storage unavailable */ }
   const personalViewActive = ref(savedPV)
@@ -29,6 +30,7 @@ export const usePreferencesStore = defineStore('preferences', () => {
       watchedObservers.value = d.watched_observers || []
       mutedObservers.value = d.muted_observers || []
       alertSound.value = d.alert_sound !== false
+      dashboardL1TagId.value = d.dashboard_l1_tag_id ?? null
       return d
     } catch {
       defaultTagId.value = null
@@ -45,6 +47,7 @@ export const usePreferencesStore = defineStore('preferences', () => {
     watchedObservers.value = d.watched_observers || []
     mutedObservers.value = d.muted_observers || []
     alertSound.value = d.alert_sound !== false
+    dashboardL1TagId.value = d.dashboard_l1_tag_id ?? null
     return d
   }
 
@@ -60,6 +63,7 @@ export const usePreferencesStore = defineStore('preferences', () => {
     watchedObservers,
     mutedObservers,
     alertSound,
+    dashboardL1TagId,
     personalViewActive,
     hasPersonalView,
     load,

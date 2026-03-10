@@ -3,10 +3,27 @@
     <!-- Page Header with Refresh -->
     <div class="dashboard-header">
       <h2>仪表盘</h2>
-      <el-button size="small" @click="manualRefresh" :loading="loading">
-        <el-icon><Refresh /></el-icon>
-        刷新
-      </el-button>
+      <div class="header-actions">
+        <el-select
+          v-model="dashboardL1Filter"
+          placeholder="全部一级标签"
+          clearable
+          size="small"
+          style="width: 180px"
+          @change="onL1FilterChange"
+        >
+          <el-option
+            v-for="t in l1Tags"
+            :key="t.id"
+            :label="t.name"
+            :value="t.id"
+          />
+        </el-select>
+        <el-button size="small" @click="manualRefresh" :loading="loading">
+          <el-icon><Refresh /></el-icon>
+          刷新
+        </el-button>
+      </div>
     </div>
 
     <!-- Stats Cards -->
@@ -203,6 +220,8 @@ const taskDuration = ref('')
 const drawerVisible = ref(false)
 const selectedAlert = ref(null)
 const loading = ref(false)
+const l1Tags = ref([])
+const dashboardL1Filter = ref(null)
 let refreshTimer = null
 
 const trendChartOption = computed(() => ({
@@ -246,10 +265,33 @@ const allowedArrayIds = computed(() => {
 })
 
 const filteredArrays = computed(() => {
+  let result = arrayStore.arrays
+
+  // L1 tag filter (independent of personal view)
+  if (dashboardL1Filter.value) {
+    const l1Id = dashboardL1Filter.value
+    const childTagIds = new Set()
+    l1Tags.value.forEach(t => { if (t.id === l1Id) childTagIds.add(t.id) })
+    // Also include L2 tags that are children of this L1
+    arrayStore.arrays.forEach(a => {
+      if (a.tag_l1_name) {
+        const matchingL1 = l1Tags.value.find(t => t.id === l1Id)
+        if (matchingL1 && a.tag_l1_name === matchingL1.name && a.tag_id) {
+          childTagIds.add(a.tag_id)
+        }
+      }
+    })
+    result = result.filter(arr => arr.tag_id && childTagIds.has(arr.tag_id))
+  }
+
+  // Personal view filter
   const allowed = allowedArrayIds.value
-  if (!allowed) return arrayStore.arrays
-  if (allowed.size === 0) return []
-  return arrayStore.arrays.filter(arr => allowed.has(arr.array_id))
+  if (allowed) {
+    if (allowed.size === 0) return []
+    result = result.filter(arr => allowed.has(arr.array_id))
+  }
+
+  return result
 })
 
 const filteredTotalCount = computed(() => filteredArrays.value.length)
@@ -368,11 +410,21 @@ function formatTime(timestamp) {
   return date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
 }
 
+async function loadL1Tags() {
+  try {
+    const res = await api.getTags()
+    l1Tags.value = (res.data || []).filter(t => t.level === 1)
+  } catch { l1Tags.value = [] }
+}
+
+function onL1FilterChange() {
+  loadData()
+}
+
 async function loadArrays() {
   try {
-    // When personal view is on, load all arrays and filter client-side
-    const tagId = preferencesStore.personalViewActive ? undefined : (preferencesStore.defaultTagId ?? undefined)
-    await arrayStore.fetchArrays(tagId)
+    // Load all arrays so we can filter client-side by L1 tag
+    await arrayStore.fetchArrays()
   } catch (error) {
     console.error('Failed to load arrays:', error)
   }
@@ -394,15 +446,19 @@ async function loadActiveTask() {
 
 async function loadData() {
   await preferencesStore.load()
-  // Load data in parallel with individual error handling
+  // Initialize L1 filter from preference if not set manually
+  if (dashboardL1Filter.value === null && preferencesStore.dashboardL1TagId) {
+    dashboardL1Filter.value = preferencesStore.dashboardL1TagId
+  }
   const tasks = [
     loadArrays().catch(e => console.error('Load arrays failed:', e)),
+    loadL1Tags().catch(e => console.error('Load tags failed:', e)),
     alertStore.fetchRecentAlerts().catch(e => console.error('Load alerts failed:', e)),
     api.getAlertSummary(2).then(res => summary.value = res.data).catch(e => console.error('Load summary failed:', e)),
     api.getAlertStats(2).then(res => stats.value = res.data).catch(e => console.error('Load stats failed:', e)),
     loadActiveTask(),
   ]
-  
+
   await Promise.all(tasks)
 }
 
@@ -457,6 +513,12 @@ onUnmounted(() => {
   margin: 0;
   font-size: 20px;
   font-weight: 600;
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
 
 /* Active test task banner */

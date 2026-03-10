@@ -21,6 +21,7 @@ class UserPreferenceModel(Base):
     watched_observers = Column(Text, default="[]")
     muted_observers = Column(Text, default="[]")
     alert_sound = Column(Boolean, default=True)
+    dashboard_l1_tag_id = Column(Integer, ForeignKey("tags.id", ondelete="SET NULL"), nullable=True)
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
 

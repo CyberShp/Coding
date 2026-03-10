@@ -44,6 +44,16 @@ LEVEL_NAMES = {
 }
 
 
+def _get_httpx_client_kwargs() -> dict:
+    """Build httpx AsyncClient kwargs based on AI proxy mode."""
+    config = get_config()
+    proxy_mode = (getattr(config.ai, "proxy_mode", "system") or "system").lower()
+    if proxy_mode == "none":
+        # Disable environment proxy usage for direct connection.
+        return {"proxy": None, "trust_env": False}
+    return {}
+
+
 def _build_prompt(observer_name: str, level: str, message: str, details: dict) -> str:
     """Build the prompt for alert interpretation."""
     obs_cn = OBSERVER_NAMES.get(observer_name, observer_name)
@@ -105,7 +115,7 @@ async def interpret_alert(
     }
 
     try:
-        async with httpx.AsyncClient(timeout=timeout) as client:
+        async with httpx.AsyncClient(timeout=timeout, **_get_httpx_client_kwargs()) as client:
             resp = await client.post(api_url, json=body, headers=headers)
             resp.raise_for_status()
             data = resp.json()

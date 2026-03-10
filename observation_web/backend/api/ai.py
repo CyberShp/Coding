@@ -13,7 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import get_config
-from ..core.ai_service import interpret_alert, is_ai_available
+from ..core.ai_service import interpret_alert, is_ai_available, _get_httpx_client_kwargs
 from ..api.auth import require_admin
 from ..db.database import get_db
 from ..models.alert import AlertModel
@@ -49,6 +49,7 @@ class AIConfigResponse(BaseModel):
     model: str
     timeout: int
     max_tokens: int
+    proxy_mode: str
 
 
 class AIConfigUpdateRequest(BaseModel):
@@ -59,6 +60,7 @@ class AIConfigUpdateRequest(BaseModel):
     model: Optional[str] = None
     timeout: Optional[int] = None
     max_tokens: Optional[int] = None
+    proxy_mode: Optional[str] = None
 
 
 class AIModelInfo(BaseModel):
@@ -91,6 +93,7 @@ async def get_ai_config(admin: dict = Depends(require_admin)):
         model=config.ai.model,
         timeout=config.ai.timeout,
         max_tokens=config.ai.max_tokens,
+        proxy_mode=getattr(config.ai, "proxy_mode", "system"),
     )
 
 
@@ -118,6 +121,9 @@ async def update_ai_config(
         config.ai.timeout = max(5, min(body.timeout, 120))
     if body.max_tokens is not None:
         config.ai.max_tokens = max(100, min(body.max_tokens, 4096))
+    if body.proxy_mode is not None:
+        mode = body.proxy_mode.lower()
+        config.ai.proxy_mode = mode if mode in ("system", "none") else "system"
 
     try:
         config.save()
@@ -132,6 +138,7 @@ async def update_ai_config(
         model=config.ai.model,
         timeout=config.ai.timeout,
         max_tokens=config.ai.max_tokens,
+        proxy_mode=getattr(config.ai, "proxy_mode", "system"),
     )
 
 
@@ -157,7 +164,7 @@ async def list_ai_models(admin: dict = Depends(require_admin)):
         headers["Authorization"] = f"Bearer {api_key}"
 
     try:
-        async with httpx.AsyncClient(timeout=10) as client:
+        async with httpx.AsyncClient(timeout=10, **_get_httpx_client_kwargs()) as client:
             resp = await client.get(models_url, headers=headers)
             resp.raise_for_status()
             data = resp.json()

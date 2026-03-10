@@ -81,6 +81,20 @@
               <el-switch v-model="preferences.alert_sound" />
               <div class="form-help">关闭后所有告警都不会发出提示音</div>
             </el-form-item>
+            <el-divider />
+            <el-form-item label="仪表盘默认标签">
+              <el-select
+                v-model="preferences.dashboard_l1_tag_id"
+                placeholder="不筛选（显示全部）"
+                clearable
+                style="width: 280px"
+              >
+                <el-option v-for="tag in l1Tags" :key="tag.id"
+                  :label="tag.name"
+                  :value="tag.id" />
+              </el-select>
+              <div class="form-help">仪表盘默认按此一级标签筛选阵列，不受全局/个人视图影响</div>
+            </el-form-item>
             <el-form-item>
               <el-button type="primary" :loading="savingPrefs" @click="savePreferences">保存偏好</el-button>
             </el-form-item>
@@ -187,6 +201,13 @@
                 clearable
               />
             </el-form-item>
+            <el-form-item label="代理设置">
+              <el-radio-group v-model="aiConfig.proxy_mode">
+                <el-radio value="system">跟随系统代理</el-radio>
+                <el-radio value="none">不使用代理（直连）</el-radio>
+              </el-radio-group>
+              <span class="form-help">设置 AI API 请求的代理方式</span>
+            </el-form-item>
             <el-form-item label="模型">
               <el-select
                 v-model="aiConfig.model"
@@ -253,6 +274,7 @@
 
 <script setup>
 import { ref, reactive, computed, onMounted } from 'vue'
+
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useAlertStore } from '../stores/alerts'
 import { useAuthStore } from '../stores/auth'
@@ -270,6 +292,7 @@ const observerOptions = ref([
   'alarm_type', 'card_info', 'card_recovery', 'disk_error', 'eth_link',
   'fc_link', 'log_watcher', 'port_error', 'process_monitor',
 ])
+const l1Tags = computed(() => tags.value.filter(t => t.level === 1))
 const preferences = reactive({
   default_tag_id: null,
   watched_tag_ids: [],
@@ -277,6 +300,7 @@ const preferences = reactive({
   watched_observers: [],
   muted_observers: [],
   alert_sound: true,
+  dashboard_l1_tag_id: null,
 })
 const savingPrefs = ref(false)
 
@@ -290,6 +314,7 @@ async function loadPreferences() {
     preferences.watched_observers = d.watched_observers || []
     preferences.muted_observers = d.muted_observers || []
     preferences.alert_sound = d.alert_sound !== false
+    preferences.dashboard_l1_tag_id = d.dashboard_l1_tag_id ?? null
   } catch {
     preferences.default_tag_id = null
   }
@@ -323,6 +348,7 @@ async function savePreferences() {
       watched_observers: preferences.watched_observers,
       muted_observers: preferences.muted_observers,
       alert_sound: preferences.alert_sound,
+      dashboard_l1_tag_id: preferences.dashboard_l1_tag_id,
     })
     ElMessage.success('偏好已保存')
   } catch (e) {
@@ -371,6 +397,7 @@ const aiConfig = reactive({
   enabled: false,
   api_url: '',
   api_key: '',
+  proxy_mode: 'system',
   model: '',
   timeout: 15,
   max_tokens: 800,
@@ -398,7 +425,11 @@ async function fetchModels() {
   fetchingModels.value = true
   try {
     // Save current url/key first so backend uses latest values
-    await api.updateAIConfig({ api_url: aiConfig.api_url, api_key: aiConfig.api_key })
+    await api.updateAIConfig({
+      api_url: aiConfig.api_url,
+      api_key: aiConfig.api_key,
+      proxy_mode: aiConfig.proxy_mode,
+    })
     const { data } = await api.getAIModels()
     availableModels.value = data || []
     if (data.length > 0) {
@@ -422,6 +453,7 @@ async function saveAIConfig() {
       enabled: aiConfig.enabled,
       api_url: aiConfig.api_url,
       api_key: aiConfig.api_key,
+      proxy_mode: aiConfig.proxy_mode,
       model: aiConfig.model,
       timeout: aiConfig.timeout,
       max_tokens: aiConfig.max_tokens,
@@ -443,7 +475,11 @@ async function testAIConnection() {
   testingAI.value = true
   try {
     // Save first, then try fetching models as a connectivity test
-    await api.updateAIConfig({ api_url: aiConfig.api_url, api_key: aiConfig.api_key })
+    await api.updateAIConfig({
+      api_url: aiConfig.api_url,
+      api_key: aiConfig.api_key,
+      proxy_mode: aiConfig.proxy_mode,
+    })
     const { data } = await api.getAIModels()
     if (data && data.length >= 0) {
       ElMessage.success(`连接成功！发现 ${data.length} 个可用模型`)

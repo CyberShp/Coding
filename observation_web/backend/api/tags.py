@@ -169,9 +169,17 @@ async def get_tag_arrays(
     """
     Get arrays belonging to a tag, optionally filtered by IP.
     """
-    await _get_tag_or_404(tag_id, db)
+    tag = await _get_tag_or_404(tag_id, db)
 
-    query = select(ArrayModel).where(ArrayModel.tag_id == tag_id)
+    if tag.level == 1:
+        child_result = await db.execute(
+            select(TagModel.id).where(TagModel.parent_id == tag_id)
+        )
+        child_ids = [r[0] for r in child_result.all()]
+        all_ids = [tag_id] + child_ids
+        query = select(ArrayModel).where(ArrayModel.tag_id.in_(all_ids))
+    else:
+        query = select(ArrayModel).where(ArrayModel.tag_id == tag_id)
 
     if search_ip:
         query = query.where(ArrayModel.host.contains(search_ip))

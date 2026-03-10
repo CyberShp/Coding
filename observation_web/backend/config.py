@@ -62,6 +62,7 @@ class AIConfig:
     model: str = "llama3"
     timeout: int = 15
     max_tokens: int = 800
+    proxy_mode: str = "system"
 
 
 @dataclass
@@ -117,6 +118,7 @@ class AppConfig:
                         model=ai_data.get('model', 'llama3'),
                         timeout=ai_data.get('timeout', 15),
                         max_tokens=ai_data.get('max_tokens', 800),
+                        proxy_mode=ai_data.get('proxy_mode', 'system'),
                     )
             except Exception as e:
                 print(f"Warning: Failed to load config: {e}")
@@ -163,6 +165,7 @@ class AppConfig:
                 'model': self.ai.model,
                 'timeout': self.ai.timeout,
                 'max_tokens': self.ai.max_tokens,
+                'proxy_mode': self.ai.proxy_mode,
             },
         }
         

@@ -53,6 +53,7 @@ const progressPercent = computed(() => {
 
 function rowStatusType(status) {
   if (status === '成功') return 'success'
+  if (status === '成功(有警告)') return 'warning'
   if (status === '失败') return 'danger'
   if (status === '进行中') return 'warning'
   return 'info'

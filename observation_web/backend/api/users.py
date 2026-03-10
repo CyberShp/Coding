@@ -38,6 +38,7 @@ class UserPreferencesResponse(BaseModel):
     watched_observers: list[str] = []
     muted_observers: list[str] = []
     alert_sound: bool = True
+    dashboard_l1_tag_id: Optional[int] = None
 
 
 class UserPreferencesUpdate(BaseModel):
@@ -47,6 +48,7 @@ class UserPreferencesUpdate(BaseModel):
     watched_observers: Optional[list[str]] = None
     muted_observers: Optional[list[str]] = None
     alert_sound: Optional[bool] = None
+    dashboard_l1_tag_id: Optional[int] = None
 
 
 router = APIRouter(prefix="/users", tags=["users"])
@@ -323,6 +325,7 @@ async def get_my_preferences(
         watched_observers=json.loads(pref.watched_observers or "[]"),
         muted_observers=json.loads(pref.muted_observers or "[]"),
         alert_sound=pref.alert_sound if pref.alert_sound is not None else True,
+        dashboard_l1_tag_id=getattr(pref, 'dashboard_l1_tag_id', None),
     )
 
 
@@ -357,6 +360,10 @@ async def update_my_preferences(
         pref.muted_observers = json.dumps(body.muted_observers)
     if body.alert_sound is not None:
         pref.alert_sound = body.alert_sound
+    if body.dashboard_l1_tag_id is not None:
+        pref.dashboard_l1_tag_id = body.dashboard_l1_tag_id
+    elif 'dashboard_l1_tag_id' in body.model_fields_set:
+        pref.dashboard_l1_tag_id = None
     pref.updated_at = datetime.now()
     await db.commit()
     await db.refresh(pref)
@@ -367,6 +374,7 @@ async def update_my_preferences(
         watched_observers=json.loads(pref.watched_observers or "[]"),
         muted_observers=json.loads(pref.muted_observers or "[]"),
         alert_sound=pref.alert_sound if pref.alert_sound is not None else True,
+        dashboard_l1_tag_id=getattr(pref, 'dashboard_l1_tag_id', None),
     )
 
 

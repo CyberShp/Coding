@@ -140,7 +140,7 @@ class AgentDeployer:
 
         # Step 1: Stop any existing agent first
         self.stop_agent()
-        time.sleep(1)
+        time.sleep(0.5)
 
         # Step 2: Start agent — 关键：cd 到 deploy_path 的父目录，
         # 这样 python3 -m observation_points 才能找到 observation_points 包。
@@ -171,8 +171,8 @@ class AgentDeployer:
         if not pid or not pid.isdigit():
             return {"ok": False, "error": f"未能获取进程 PID (got: {pid_str.strip()})"}
 
-        # Step 3: Wait and verify process is alive (3s for reliability)
-        time.sleep(3)
+        # Step 3: Wait and verify process is alive
+        time.sleep(1.5)
         exit_code, out, _ = self.conn.execute(f"kill -0 {pid} 2>/dev/null && echo 'alive'")
 
         if "alive" not in (out or ""):
@@ -183,9 +183,8 @@ class AgentDeployer:
                       {"pid": pid, "start_log": error_detail[:500]})
             return {"ok": False, "error": f"Agent 进程启动后退出 (PID {pid}): {error_detail[:300]}"}
 
-        # Step 4: Wait a bit more, then read startup log for warnings
-        # (non-critical errors like missing observers should not block success)
-        time.sleep(1)
+        # Step 4: Read startup log for non-critical warnings
+        time.sleep(0.5)
         _, start_log, _ = self.conn.execute(f"cat {AGENT_START_LOG} 2>/dev/null")
         startup_warnings = []
         if start_log and start_log.strip():

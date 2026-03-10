@@ -88,7 +88,6 @@ async def sync_cards(db: AsyncSession = Depends(get_db)):
     """Sync card inventory from all connected arrays using SSH."""
     from ..core.ssh_pool import get_ssh_pool
     from ..models.array import ArrayModel
-    from .arrays import _get_array_status
 
     ssh_pool = get_ssh_pool()
     synced = 0
@@ -112,9 +111,6 @@ async def sync_cards(db: AsyncSession = Depends(get_db)):
         conn = ssh_pool.get_connection(array.array_id)
         if not conn or not conn.is_connected():
             continue
-        status_obj = _get_array_status(array.array_id)
-        if not getattr(status_obj, "agent_deployed", False):
-            continue
         if start_work_enabled:
             started = await _check_start_work(conn)
             if not started:
@@ -129,31 +125,57 @@ async def sync_cards(db: AsyncSession = Depends(get_db)):
                 continue
             cards_data = _parse_card_output(output)
 
+            seen_board_ids = set()
             for card_data in cards_data:
-                existing = await db.execute(
-                    select(CardInventoryModel).where(
-                        CardInventoryModel.array_id == array.array_id,
-                        CardInventoryModel.card_no == card_data.get("card_no", ""),
+                board_id = card_data.get("board_id", "")
+                card_no = card_data.get("card_no", "")
+
+                # Deduplicate by board_id within this sync batch
+                if board_id:
+                    if board_id in seen_board_ids:
+                        continue
+                    seen_board_ids.add(board_id)
+
+                # Primary lookup by (array_id, board_id) when board_id present
+                existing_card = None
+                if board_id:
+                    result_q = await db.execute(
+                        select(CardInventoryModel).where(
+                            CardInventoryModel.array_id == array.array_id,
+                            CardInventoryModel.board_id == board_id,
+                        )
                     )
-                )
-                existing_card = existing.scalar_one_or_none()
+                    existing_card = result_q.scalar_one_or_none()
+
+                # Fallback to (array_id, card_no)
+                if not existing_card and card_no:
+                    result_q = await db.execute(
+                        select(CardInventoryModel).where(
+                            CardInventoryModel.array_id == array.array_id,
+                            CardInventoryModel.card_no == card_no,
+                        )
+                    )
+                    existing_card = result_q.scalar_one_or_none()
+
+                now = datetime.now()
                 if existing_card:
-                    existing_card.board_id = card_data.get("board_id", "")
+                    existing_card.card_no = card_no
+                    existing_card.board_id = board_id
                     existing_card.health_state = card_data.get("health_state", "")
                     existing_card.running_state = card_data.get("running_state", "")
                     existing_card.model = card_data.get("model", "")
                     existing_card.raw_fields = json.dumps(card_data.get("raw_fields", {}))
-                    existing_card.last_updated = datetime.now()
+                    existing_card.last_updated = now
                 else:
                     db.add(CardInventoryModel(
                         array_id=array.array_id,
-                        card_no=card_data.get("card_no", ""),
-                        board_id=card_data.get("board_id", ""),
+                        card_no=card_no,
+                        board_id=board_id,
                         health_state=card_data.get("health_state", ""),
                         running_state=card_data.get("running_state", ""),
                         model=card_data.get("model", ""),
                         raw_fields=json.dumps(card_data.get("raw_fields", {})),
-                        last_updated=datetime.now(),
+                        last_updated=now,
                     ))
                 synced += 1
 

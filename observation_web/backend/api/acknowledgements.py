@@ -19,6 +19,7 @@ from sqlalchemy import select, delete, exists, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..db.database import get_db
+from ..middleware.user_session import get_client_ip
 from ..models.alert import (
     AlertModel, AlertAckModel, AlertAckCreate, AlertAckResponse, AckType,
 )
@@ -43,7 +44,7 @@ async def ack_alerts(
     Skips alerts that are already acknowledged (idempotent).
     Uses ``request.client.host`` as the acknowledger identity.
     """
-    client_ip = request.client.host if request.client else "unknown"
+    client_ip = get_client_ip(request)
 
     if not body.alert_ids:
         raise HTTPException(
@@ -130,7 +131,7 @@ async def ack_all_visible(
     """
     from datetime import datetime
 
-    client_ip = request.client.host if request and request.client else "unknown"
+    client_ip = get_client_ip(request)
     valid_types = {t.value for t in AckType}
     ack_type_val = ack_type if ack_type in valid_types else AckType.DISMISS.value
 

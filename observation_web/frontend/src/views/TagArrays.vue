@@ -490,9 +490,11 @@ async function executeBatchAction(action, password = null) {
           const r = payload.result
           const row = progressRows.value.find(item => item.array_id === r.array_id)
           if (row) {
-            row.status = r.success ? '成功' : '失败'
-            const warnings = r.warnings?.length ? `（${r.warnings.length} 条警告）` : ''
-            row.detail = r.success ? `${r.message || '完成'}${warnings}` : (r.error || '失败')
+            const hasWarnings = r.warnings?.length > 0
+            row.status = r.success ? (hasWarnings ? '成功(有警告)' : '成功') : '失败'
+            row.detail = r.success
+              ? (r.message || '完成')
+              : (r.error || '失败')
           }
           progressCompleted.value = payload.completed || progressCompleted.value
           progressSuccessCount.value = payload.success_count || progressSuccessCount.value

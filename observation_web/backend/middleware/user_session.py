@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 # In-memory cache for user sessions to reduce DB writes
 _session_cache: dict = {}
-_CACHE_UPDATE_INTERVAL = 60  # seconds
+_CACHE_UPDATE_INTERVAL = 15  # seconds
 
 
 def get_client_ip(request: Request) -> str:
