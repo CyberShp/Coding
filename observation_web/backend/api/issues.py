@@ -20,9 +20,9 @@ from .auth import require_admin
 router = APIRouter(prefix="/issues", tags=["issues"])
 
 
-def _is_admin(request: Request) -> bool:
-    """内部网络模式下始终返回 True."""
-    return True
+def _is_admin(request: Request, admin: dict = Depends(require_admin)) -> bool:
+    """检查是否为管理员."""
+    return admin.get("is_admin", False)
 
 
 def _can_change_status(request: Request, issue: IssueModel, is_admin: bool) -> bool:

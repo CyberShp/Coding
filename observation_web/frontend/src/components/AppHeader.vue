@@ -75,8 +75,8 @@
       </p>
       <el-input v-model="localNicknameInput" placeholder="输入您的昵称" maxlength="20" show-word-limit />
       <template #footer>
-        <el-button v-if="!forceRename" @click="nicknameDialogVisible = false">取消</el-button>
-        <el-button type="primary" @click="$emit('save-nickname', nicknameInput)">保存</el-button>
+        <el-button v-if="!forceRename" @click="closeNicknameDialog">取消</el-button>
+        <el-button type="primary" @click="$emit('save-nickname', localNicknameInput)">保存</el-button>
       </template>
     </el-dialog>
     
@@ -85,8 +85,8 @@
       <p class="claim-hint">换过电脑或 IP 后，输入之前的昵称可恢复身份（锁定、历史等）</p>
       <el-input v-model="localClaimInput" placeholder="输入您之前的昵称" maxlength="20" show-word-limit />
       <template #footer>
-        <el-button @click="claimDialogVisible = false">取消</el-button>
-        <el-button type="primary" @click="$emit('claim-nickname', claimInput)">认领</el-button>
+        <el-button @click="closeClaimDialog">取消</el-button>
+        <el-button type="primary" @click="$emit('claim-nickname', localClaimInput)">认领</el-button>
       </template>
     </el-dialog>
   </el-header>
@@ -146,6 +146,8 @@ const emit = defineEmits([
   'toggle-sound',
   'show-nickname-dialog',
   'show-claim-dialog',
+  'close-nickname-dialog',
+  'close-claim-dialog',
   'save-nickname',
   'claim-nickname'
 ])
@@ -176,22 +178,27 @@ const currentRoute = computed(() => {
   return routes[route.path] || ''
 })
 
-// Dialog visibility sync
-const nicknameDialogVisible = computed({
-  get: () => props.showNicknameDialog,
-  set: (val) => {
-    if (!val && !props.forceRename) {
-      emit('show-nickname-dialog')
-    }
-  }
+// Dialog visibility - use local refs, sync with props on open only
+const nicknameDialogVisible = ref(false)
+const claimDialogVisible = ref(false)
+
+// Watch props to open dialogs (not close)
+watch(() => props.showNicknameDialog, (val) => {
+  if (val) nicknameDialogVisible.value = true
+})
+watch(() => props.showClaimDialog, (val) => {
+  if (val) claimDialogVisible.value = true
 })
 
-const claimDialogVisible = computed({
-  get: () => props.showClaimDialog,
-  set: (val) => {
-    if (!val) emit('show-claim-dialog')
-  }
-})
+const closeNicknameDialog = () => {
+  nicknameDialogVisible.value = false
+  emit('close-nickname-dialog')
+}
+
+const closeClaimDialog = () => {
+  claimDialogVisible.value = false
+  emit('close-claim-dialog')
+}
 </script>
 
 <style scoped>
