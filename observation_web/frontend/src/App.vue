@@ -1,12 +1,12 @@
 <template>
   <el-config-provider :locale="zhCn">
-    <div class="app-container">
-      <el-container>
-        <!-- Sidebar -->
-        <AppSidebar />
+    <el-container class="app-container">
+      <!-- Sidebar -->
+      <el-aside width="200"><AppSidebar /></el-aside>
 
-        <!-- Main Content -->
-        <el-container>
+      <!-- Main Content -->
+      <el-container>
+        <el-header>
           <AppHeader
             :online-users="onlineUsers"
             :online-count="onlineCount"
@@ -24,7 +24,9 @@
             @save-nickname="saveNickname"
             @claim-nickname="claimNickname"
           />
+        </el-header>
 
+        <div class="content-wrapper">
           <!-- Critical event banner -->
           <CriticalBanner
             :critical-events="alertStore.criticalEvents"
@@ -43,9 +45,9 @@
               </transition>
             </router-view>
           </el-main>
-        </el-container>
+        </div>
       </el-container>
-    </div>
+    </el-container>
   </el-config-provider>
 </template>
 
@@ -208,11 +210,30 @@ html, body, #app {
 }
 
 .app-container {
-  height: 100%;
+  height: 100vh;
+  width: 100%;
 }
 
-.el-container {
-  height: 100%;
+.el-aside {
+  background-color: #304156;
+}
+
+.content-wrapper {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.el-header {
+  padding: 0;
+  height: auto !important;
+}
+
+.el-main {
+  flex: 1;
+  padding: 20px;
+  overflow-y: auto;
 }
 
 .main-content {
