@@ -15,16 +15,14 @@ from ..models.issue import (
     IssueUpdateStatus,
     IssueResponse,
 )
-from .auth import require_admin, _verify_token
+from .auth import require_admin
 
 router = APIRouter(prefix="/issues", tags=["issues"])
 
 
 def _is_admin(request: Request) -> bool:
-    """Check if request has valid admin token."""
-    auth = request.headers.get("Authorization", "")
-    token = auth[7:] if auth.startswith("Bearer ") else ""
-    return bool(token and _verify_token(token))
+    """内部网络模式下始终返回 True."""
+    return True
 
 
 def _can_change_status(request: Request, issue: IssueModel, is_admin: bool) -> bool:

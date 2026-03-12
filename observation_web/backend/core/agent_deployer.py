@@ -140,20 +140,22 @@ class AgentDeployer:
 
         # Step 1: Stop any existing agent first
         self.stop_agent()
-        time.sleep(0.5)
+        # 增加等待时间，确保旧 agent 完全停止后再启动新的
+        # 在有活跃告警的情况下，旧 agent 可能需要更长时间才能完全终止
+        time.sleep(1.5)
 
-        # Step 2: Start agent — 关键：cd 到 deploy_path 的父目录，
-        # 这样 python3 -m observation_points 才能找到 observation_points 包。
-        # 例如 deploy_path=/home/permitdir/observation_points
-        # 则 cd /home/permitdir && python3 -m observation_points
+        # Step 2: Start agent — 使用 nohup + setsid 确保进程在 SSH 会话结束后继续运行
+        # 使用 setsid 创建新的会话，避免受到 SSH 会话退出的影响
+        # 使用 nohup 进一步确保进程不会被 SIGHUP 信号终止
         start_script = (
             f"mkdir -p {log_parent} && "
             f"cd {deploy_parent} && "
-            f"{python_cmd} -m observation_points "
+            f"nohup setsid {python_cmd} -m observation_points "
             f"-c /etc/observation-points/config.json "
             f"--log-file {log_path} "
             f"> {AGENT_START_LOG} 2>&1 & "
-            f"AGENT_PID=$! && "
+            f"sleep 0.5 && "
+            f"AGENT_PID=$(pgrep -f 'python.*observation_points' | head -1) && "
             f"echo $AGENT_PID > {AGENT_PID_FILE} && "
             f"echo $AGENT_PID"
         )
@@ -172,7 +174,9 @@ class AgentDeployer:
             return {"ok": False, "error": f"未能获取进程 PID (got: {pid_str.strip()})"}
 
         # Step 3: Wait and verify process is alive
-        time.sleep(1.5)
+        # 增加等待时间到 3 秒，确保 agent 有足够时间完成初始化
+        # 在新环境或首次启动时，agent 可能需要更长时间来加载模块和初始化
+        time.sleep(3.0)
         exit_code, out, _ = self.conn.execute(f"kill -0 {pid} 2>/dev/null && echo 'alive'")
 
         if "alive" not in (out or ""):
@@ -216,21 +220,25 @@ class AgentDeployer:
         if exit_code == 0 and pid_str.strip().isdigit():
             pid = pid_str.strip()
             self.conn.execute(f"kill {pid} 2>/dev/null")
-            time.sleep(0.5)
+            # 增加等待时间，确保进程有时间正常退出
+            time.sleep(1.0)
             # Force kill if still alive
             self.conn.execute(f"kill -9 {pid} 2>/dev/null")
+            time.sleep(0.5)
             self.conn.execute(f"rm -f {AGENT_PID_FILE}")
         
         # Also pkill as fallback to catch orphaned processes
         self.conn.execute("pkill -f 'python.*observation_points' 2>/dev/null")
-        time.sleep(0.5)
+        time.sleep(1.0)
         self.conn.execute("pkill -9 -f 'python.*observation_points' 2>/dev/null")
+        time.sleep(0.5)
 
         return {"ok": True, "message": "Agent stopped"}
 
     def restart_agent(self) -> Dict[str, Any]:
         self.stop_agent()
-        time.sleep(1)
+        # 增加等待时间，确保 agent 完全停止后再启动
+        time.sleep(2)
         return self.start_agent()
 
     def check_deployed(self) -> bool:
