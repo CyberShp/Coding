@@ -34,7 +34,7 @@
           inactive-text=""
           size="small"
           style="margin-right: 8px"
-          @change="$emit('toggle-sound', $event)"
+          @change="(val) => { $emit('toggle-sound', val); preferencesStore.alertSound = val }"
         />
       </el-tooltip>
       <el-badge :value="alertCount" :hidden="alertCount === 0" class="alert-badge">
@@ -152,7 +152,7 @@ const emit = defineEmits([
   'claim-nickname'
 ])
 
-const soundOn = ref(false)
+const soundOn = ref(preferencesStore.alertSound)
 
 // Local state for inputs (sync with props)
 const localNicknameInput = ref(props.nicknameInput)

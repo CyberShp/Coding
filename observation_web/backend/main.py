@@ -346,7 +346,7 @@ def create_app() -> FastAPI:
     app = FastAPI(
         title="Observation Web API",
         description="Storage Array Monitoring Platform API",
-        version="1.0.0",
+        version=__version__,
         lifespan=lifespan,
     )
     
@@ -416,7 +416,7 @@ def create_app() -> FastAPI:
     async def api_info():
         return {
             "name": "Observation Web API",
-            "version": "2.2.0",
+            "version": __version__,
             "endpoints": {
                 "arrays": "/api/arrays",
                 "arrays_search": "/api/arrays/search",
