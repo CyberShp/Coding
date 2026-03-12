@@ -5,7 +5,7 @@
       <el-aside width="200"><AppSidebar /></el-aside>
 
       <!-- Main Content -->
-      <el-container>
+      <el-container direction="column">
         <el-header>
           <AppHeader
             :online-users="onlineUsers"

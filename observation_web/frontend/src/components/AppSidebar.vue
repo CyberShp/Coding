@@ -1,5 +1,5 @@
 <template>
-  <el-aside width="200px" class="sidebar">
+  <div class="sidebar">
     <div class="logo">
       <el-icon><Monitor /></el-icon>
       <span>观察点监控</span>
@@ -54,7 +54,7 @@
         <span>告警管理</span>
       </el-menu-item>
     </el-menu>
-  </el-aside>
+  </div>
 </template>
 
 <script setup>
@@ -73,6 +73,7 @@ const activeMenu = computed(() => route.path)
 .sidebar {
   background-color: var(--sidebar-bg);
   overflow-y: auto;
+  height: 100%;
 }
 
 .logo {
