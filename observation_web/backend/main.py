@@ -15,7 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from .config import get_config
+from .config import get_config, __version__
 from .core.system_alert import sys_error, sys_warning, sys_info
 from .db.database import init_db, create_tables, Base, get_async_engine
 from .api import arrays_router, alerts_router, query_router, ws_router, tags_router, alert_rules_router, audit_router
@@ -153,10 +153,17 @@ async def _health_checker():
                                     asyncio.get_event_loop().run_in_executor(None, deployer.check_deployed),
                                     timeout=10,
                                 ):
-                                    result = await asyncio.wait_for(
-                                        asyncio.get_event_loop().run_in_executor(None, deployer.start_agent),
-                                        timeout=60,
+                                    ready = await asyncio.wait_for(
+                                        deployer.wait_for_ready(),
+                                        timeout=1210,
                                     )
+                                    if ready:
+                                        result = {"ok": True, "message": "Agent became ready after SSH recovery"}
+                                    else:
+                                        result = await asyncio.wait_for(
+                                            asyncio.get_event_loop().run_in_executor(None, deployer.start_agent),
+                                            timeout=60,
+                                        )
                                 else:
                                     result = await asyncio.wait_for(
                                         asyncio.get_event_loop().run_in_executor(None, deployer.deploy),
@@ -346,7 +353,7 @@ def create_app() -> FastAPI:
     app = FastAPI(
         title="Observation Web API",
         description="Storage Array Monitoring Platform API",
-        version="1.0.0",
+        version=__version__,
         lifespan=lifespan,
     )
     
@@ -408,7 +415,6 @@ def create_app() -> FastAPI:
     # Health check endpoint
     @app.get("/health")
     async def health_check():
-        from .config import __version__
         return {"status": "healthy", "version": __version__}
     
     # API info endpoint
@@ -416,7 +422,7 @@ def create_app() -> FastAPI:
     async def api_info():
         return {
             "name": "Observation Web API",
-            "version": "2.2.0",
+            "version": __version__,
             "endpoints": {
                 "arrays": "/api/arrays",
                 "arrays_search": "/api/arrays/search",

@@ -52,3 +52,5 @@ class CardSyncResult(BaseModel):
     """Result of a card sync operation."""
     synced: int = 0
     errors: list[str] = []
+    skipped_arrays: list[str] = []
+    synced_arrays: list[str] = []

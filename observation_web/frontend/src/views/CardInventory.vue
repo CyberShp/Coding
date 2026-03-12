@@ -298,7 +298,13 @@ async function syncCards() {
   try {
     const res = await api.syncCardInventory()
     const d = res.data || {}
-    if (d.errors && d.errors.length > 0) {
+    const skipped = Array.isArray(d.skipped_arrays) ? d.skipped_arrays : []
+    const syncedArrays = Array.isArray(d.synced_arrays) ? d.synced_arrays : []
+    if (skipped.length > 0) {
+      const skippedText = skipped.join('、')
+      const syncedText = syncedArrays.length > 0 ? `，成功阵列: ${syncedArrays.join('、')}` : ''
+      ElMessage.warning(`同步完成: ${d.synced} 条，跳过阵列: ${skippedText}${syncedText}`)
+    } else if (d.errors && d.errors.length > 0) {
       ElMessage.warning(`同步完成: ${d.synced} 条, ${d.errors.length} 个阵列出错`)
     } else {
       ElMessage.success(`同步完成: ${d.synced} 条卡件已更新`)

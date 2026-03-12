@@ -92,6 +92,8 @@ async def sync_cards(db: AsyncSession = Depends(get_db)):
     ssh_pool = get_ssh_pool()
     synced = 0
     errors = []
+    skipped_arrays = []
+    synced_arrays = []
     start_work_enabled = False
 
     try:
@@ -110,11 +112,14 @@ async def sync_cards(db: AsyncSession = Depends(get_db)):
     for array in arrays:
         conn = ssh_pool.get_connection(array.array_id)
         if not conn or not conn.is_connected():
+            errors.append(f"{array.name} ({array.host}): SSH 未连接，跳过卡件同步")
+            skipped_arrays.append(array.name)
             continue
         if start_work_enabled:
             started = await _check_start_work(conn)
             if not started:
                 errors.append(f"{array.name} ({array.host}): 阵列未开工，跳过卡件同步")
+                skipped_arrays.append(array.name)
                 continue
 
         try:
@@ -122,10 +127,12 @@ async def sync_cards(db: AsyncSession = Depends(get_db)):
             exit_code, output, err_output = await conn.execute_async(cmd, 15)
             if exit_code != 0:
                 errors.append(f"{array.name} ({array.host}): exit={exit_code}, {err_output[:200]}")
+                skipped_arrays.append(array.name)
                 continue
             cards_data = _parse_card_output(output)
 
             seen_board_ids = set()
+            batch_count = 0
             for card_data in cards_data:
                 board_id = card_data.get("board_id", "")
                 card_no = card_data.get("card_no", "")
@@ -177,15 +184,23 @@ async def sync_cards(db: AsyncSession = Depends(get_db)):
                         raw_fields=json.dumps(card_data.get("raw_fields", {})),
                         last_updated=now,
                     ))
-                synced += 1
+                batch_count += 1
 
             await db.commit()
+            synced += batch_count
+            synced_arrays.append(array.name)
         except Exception as e:
             await db.rollback()
             errors.append(f"{array.name} ({array.host}): {str(e)}")
+            skipped_arrays.append(array.name)
             logger.warning("Card sync failed for %s: %s", array.name, e)
 
-    return CardSyncResult(synced=synced, errors=errors)
+    return CardSyncResult(
+        synced=synced,
+        errors=errors,
+        skipped_arrays=skipped_arrays,
+        synced_arrays=synced_arrays,
+    )
 
 
 # Regex for agent-style output: "No001  BoardId: xxxx" (card prefix + field: value)
