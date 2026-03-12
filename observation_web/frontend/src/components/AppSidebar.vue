@@ -99,6 +99,7 @@ const activeMenu = computed(() => route.path)
 
 .sidebar-menu .el-menu-item {
   color: var(--sidebar-text);
+  padding-left: 20px !important;
 }
 
 .sidebar-menu .el-menu-item:hover {

@@ -208,6 +208,8 @@ const closeClaimDialog = () => {
   justify-content: space-between;
   border-bottom: 1px solid #e6e6e6;
   background-color: #fff;
+  padding: 0 16px;
+  height: 60px;
 }
 
 .header-right {
