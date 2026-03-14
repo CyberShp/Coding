@@ -5,7 +5,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=/OSM/coffer_data/observation_points
+WorkingDirectory=/OSM/coffer_data
 ExecStartPre=/bin/bash -c 'until ping -c1 -W2 {BACKEND_HOST} >/dev/null 2>&1; do sleep 5; done'
 ExecStart=/usr/bin/python3 -m observation_points -c /etc/observation-points/config.json --log-file /var/log/observation-points/alerts.log
 Restart=on-failure

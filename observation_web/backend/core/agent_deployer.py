@@ -76,12 +76,15 @@ class AgentDeployer:
             extract_commands = [
                 f"cd {staging_dir} && tar -xzf {pkg_name}",
                 f"mv {staging_dir}/observation_points {deploy_path}",
-                f"chmod +x {deploy_path}/run.sh",
             ]
             for cmd in extract_commands:
                 exit_code, _, err = self.conn.execute(cmd)
                 if exit_code != 0:
                     return {"ok": False, "error": f"Extract failed: {err}"}
+
+            layout_result = self._validate_deploy_layout(deploy_path)
+            if not layout_result.get("ok"):
+                return layout_result
 
             service_result = self._install_systemd_service()
             if not service_result.get("ok"):
@@ -132,6 +135,22 @@ class AgentDeployer:
             "command -v systemctl >/dev/null 2>&1 && test -d /run/systemd/system"
         )
         return exit_code == 0
+
+    def _validate_deploy_layout(self, deploy_path: str) -> Dict[str, Any]:
+        expected_main = posixpath.join(deploy_path, "__main__.py")
+        expected_init = posixpath.join(deploy_path, "__init__.py")
+        exit_code, _, err = self.conn.execute(
+            f"test -f {shlex.quote(expected_main)} && test -f {shlex.quote(expected_init)}"
+        )
+        if exit_code != 0:
+            return {
+                "ok": False,
+                "error": (
+                    f"Deploy validation failed: missing package entrypoints under {deploy_path}"
+                    + (f" ({err})" if err else "")
+                ),
+            }
+        return {"ok": True}
 
     def _load_service_template(self) -> str:
         return SERVICE_TEMPLATE_PATH.read_text(encoding="utf-8")
@@ -205,12 +224,13 @@ class AgentDeployer:
 
     def _start_agent_legacy(self) -> Dict[str, Any]:
         deploy_path = self.config.remote.agent_deploy_path
+        deploy_parent = posixpath.dirname(deploy_path)
         log_path = self.config.remote.agent_log_path
         python_cmd = self.config.remote.python_cmd
         log_parent = posixpath.dirname(log_path)
         start_script = (
             f"mkdir -p {log_parent} && "
-            f"cd {deploy_path} && "
+            f"cd {deploy_parent} && "
             f"nohup {python_cmd} -m observation_points "
             f"-c /etc/observation-points/config.json "
             f"--log-file {log_path} "

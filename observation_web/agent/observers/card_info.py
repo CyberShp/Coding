@@ -50,6 +50,7 @@ class CardInfoObserver(BaseObserver):
 
     # 卡号匹配：No001, No002, ...
     CARD_NO_PATTERN = re.compile(r'(No\d+)', re.IGNORECASE)
+    CARD_BLOCK_START_PATTERN = re.compile(r'^\s*(No0\d+)\b', re.IGNORECASE)
     # 分隔符：多个连续横杠
     SEPARATOR_PATTERN = re.compile(r'-{3,}')
 
@@ -105,9 +106,8 @@ class CardInfoObserver(BaseObserver):
         cards = self._parse_cards(stdout)
         if not cards:
             return self.create_result(
-                has_alert=True,
-                alert_level=AlertLevel.WARNING,
-                message="卡件信息查询无数据或解析失败",
+                has_alert=False,
+                message="卡件信息本轮无有效卡件数据，已忽略",
             )
 
         alerts = []  # type: List[Dict[str, Any]]
@@ -236,43 +236,55 @@ class CardInfoObserver(BaseObserver):
         Returns:
             {card_no: {BoardId: ..., RunningState: ..., HealthState: ..., Model: ...}}
         """
-        # 按分隔符切分
-        blocks = self.SEPARATOR_PATTERN.split(stdout)
         cards = {}  # type: Dict[str, Dict[str, str]]
+        current_card_no = None  # type: Optional[str]
+        current_fields = {}  # type: Dict[str, str]
 
-        for block in blocks:
-            block = block.strip()
-            if not block:
+        def flush_current():
+            nonlocal current_card_no, current_fields
+            if current_card_no:
+                cards[current_card_no] = dict(current_fields)
+            current_card_no = None
+            current_fields = {}
+
+        for raw_line in (stdout or '').splitlines():
+            line = raw_line.strip()
+            if not line:
                 continue
 
-            # 提取卡号
-            card_match = self.CARD_NO_PATTERN.search(block)
-            card_no = card_match.group(1) if card_match else f"Unknown_{len(cards)}"
+            if self.SEPARATOR_PATTERN.fullmatch(line):
+                flush_current()
+                continue
 
-            fields = {}
+            card_start = self.CARD_BLOCK_START_PATTERN.match(line)
+            if card_start:
+                card_no = card_start.group(1)
+                if current_card_no and card_no != current_card_no:
+                    flush_current()
+                current_card_no = card_no
+                self._parse_card_line(line, current_fields)
+                continue
 
-            # 逐行匹配关键字段
-            for line in block.split('\n'):
-                line = line.strip()
-                if not line:
-                    continue
+            if current_card_no:
+                self._parse_card_line(line, current_fields)
 
-                m = self._re_board_id.search(line)
-                if m:
-                    fields['BoardId'] = m.group(1).strip()
-
-                m = self._re_running.search(line)
-                if m:
-                    fields['RunningState'] = m.group(1).strip()
-
-                m = self._re_health.search(line)
-                if m:
-                    fields['HealthState'] = m.group(1).strip()
-
-                m = self._re_model.search(line)
-                if m:
-                    fields['Model'] = m.group(1).strip()
-
-            cards[card_no] = fields
-
+        flush_current()
         return cards
+
+    def _parse_card_line(self, line: str, fields: Dict[str, str]) -> None:
+        """Parse one line inside a valid card block."""
+        m = self._re_board_id.search(line)
+        if m:
+            fields['BoardId'] = m.group(1).strip()
+
+        m = self._re_running.search(line)
+        if m:
+            fields['RunningState'] = m.group(1).strip()
+
+        m = self._re_health.search(line)
+        if m:
+            fields['HealthState'] = m.group(1).strip()
+
+        m = self._re_model.search(line)
+        if m:
+            fields['Model'] = m.group(1).strip()

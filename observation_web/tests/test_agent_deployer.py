@@ -103,6 +103,46 @@ class TestAgentDeployer:
         commands = [call.args[0] for call in conn.execute.call_args_list]
         assert "systemctl stop observation-points" in commands
 
+    @patch.object(AgentDeployer, "_build_package", return_value="/tmp/test.tar.gz")
+    @patch("builtins.open")
+    @patch("pathlib.Path.exists", return_value=False)
+    def test_deploy_does_not_require_run_sh(self, _exists, mock_open, _build):
+        deployer, conn = self._make_deployer(True)
+        mock_open.return_value.__enter__.return_value.read.return_value = b"pkg"
+        conn.upload_content.return_value = True
+
+        result = deployer.deploy()
+
+        assert result["ok"] is True
+        commands = [call.args[0] for call in conn.execute.call_args_list]
+        assert not any("run.sh" in cmd for cmd in commands)
+
+    def test_validate_deploy_layout_requires_package_entrypoints(self):
+        deployer, conn = self._make_deployer(True)
+        conn.execute.return_value = (1, "", "missing")
+
+        result = deployer._validate_deploy_layout("/OSM/coffer_data/observation_points")
+
+        assert result["ok"] is False
+        assert "package entrypoints" in result["error"]
+
+    def test_start_agent_legacy_runs_module_from_parent_directory(self):
+        deployer, conn = self._make_deployer(True)
+        conn.execute.side_effect = [
+            (0, "1234\n", ""),  # start script
+            (0, "alive\n", ""),  # wait_for_process
+            (0, "", ""),  # write pid file
+            (0, "", ""),  # read start log
+        ]
+
+        result = deployer._start_agent_legacy()
+
+        assert result["ok"] is True
+        commands = [call.args[0] for call in conn.execute.call_args_list]
+        start_cmd = next(cmd for cmd in commands if "nohup" in cmd)
+        assert "cd /OSM/coffer_data &&" in start_cmd
+        assert "-m observation_points" in start_cmd
+
     @pytest.mark.asyncio
     async def test_wait_for_ready_polls_until_service_active(self):
         deployer, conn = self._make_deployer(True)

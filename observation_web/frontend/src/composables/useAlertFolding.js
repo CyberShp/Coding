@@ -42,7 +42,7 @@ function getAlertIdentity(alert) {
     const items = d.alerts || []
     if (items.length > 0) {
       const a = items[0]
-      return `${a.card || '?'}|${a.board_id || '?'}|${a.field || '?'}`
+      return `${a.card || '?'}|${a.board_id || '?'}|${getCardInfoFieldIdentity(a)}`
     }
   }
 
@@ -80,6 +80,21 @@ function getAlertIdentity(alert) {
 
   // Fallback: use message skeleton (strip numbers/timestamps)
   return null
+}
+
+function getCardInfoFieldIdentity(item) {
+  const nestedFields = Array.isArray(item?.fields) ? item.fields : []
+  if (nestedFields.length > 0) {
+    return nestedFields
+      .map(field => `${field?.field || '?'}=${field?.expect || field?.value || ''}`)
+      .join('&')
+  }
+
+  if (item?.field) {
+    return `${item.field}=${item.expect || item.value || ''}`
+  }
+
+  return '?'
 }
 
 /**

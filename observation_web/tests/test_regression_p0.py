@@ -339,3 +339,83 @@ async def test_card_sync_reports_disconnected_arrays_and_per_array_results(app_c
     assert data["skipped_arrays"] == ["arr-card-offline"]
     assert data["synced_arrays"] == ["arr-card-online"]
     assert any("SSH 未连接" in msg for msg in data["errors"])
+
+
+@pytest.mark.asyncio
+async def test_card_sync_preserves_original_error_after_rollback(app_client_with_db, monkeypatch):
+    """Regression: rollback path must not mask parser errors with MissingGreenlet."""
+    from backend.api import card_inventory as card_api
+    from backend.core import ssh_pool as ssh_pool_mod
+
+    client, db = app_client_with_db
+    db.add(
+        ArrayModel(
+            array_id="arr-card-error",
+            name="arr-card-error",
+            host="10.30.3.1",
+            port=22,
+            username="root",
+            key_path="",
+            folder="",
+            saved_password="pw",
+        )
+    )
+    await db.commit()
+
+    class OnlineConn:
+        def is_connected(self):
+            return True
+
+        async def execute_async(self, cmd, timeout):
+            if cmd == "anytest intfboardallinfo":
+                return 0, "anytest intfboardallinfo ------- ok\nNo001  BoardId: B100\n", ""
+            return 1, "", "unknown command"
+
+    class FakePool:
+        def get_connection(self, array_id):
+            if array_id == "arr-card-error":
+                return OnlineConn()
+            return None
+
+    monkeypatch.setattr(ssh_pool_mod, "get_ssh_pool", lambda: FakePool())
+    monkeypatch.setattr(card_api, "_parse_card_output", lambda _output: (_ for _ in ()).throw(RuntimeError("parse boom")))
+
+    resp = await client.post("/api/card-inventory/sync")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert any("parse boom" in msg for msg in data["errors"])
+    assert all("greenlet_spawn" not in msg for msg in data["errors"])
+
+
+def test_parse_card_output_ignores_banner_and_unknown_blocks():
+    from backend.api.card_inventory import _parse_card_output
+
+    output = "\n".join(
+        [
+            "anytest intfboardallinfo ------- ok",
+            "No001  BoardId: B001",
+            "No001  Model: X1",
+            "No001  HealthState: NORMAL",
+            "No001  RunningState: RUNNING",
+            "--------------------",
+            "No002  BoardId: B002",
+            "No002  Model: X2",
+            "No002  HealthState: NORMAL",
+            "No002  RunningState: RUNNING",
+        ]
+    )
+
+    cards = _parse_card_output(output)
+
+    assert [card["card_no"] for card in cards] == ["No001", "No002"]
+    assert all(not card["card_no"].startswith("Unknown_") for card in cards)
+    assert cards[0]["board_id"] == "B001"
+    assert cards[1]["board_id"] == "B002"
+
+
+def test_parse_card_output_returns_empty_when_no_card_prefix_exists():
+    from backend.api.card_inventory import _parse_card_output
+
+    output = "anytest intfboardallinfo ------- ok\nonly header\n-------------\nstill no cards"
+
+    assert _parse_card_output(output) == []

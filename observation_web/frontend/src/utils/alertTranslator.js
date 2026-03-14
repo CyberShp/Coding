@@ -480,7 +480,8 @@ function translateCardInfo(alert) {
   if (alerts.length > 0) {
     const msgs = alerts.slice(0, 3).map(a => {
       const bid = a.board_id ? ` [BoardId:${a.board_id}]` : ''
-      return `${a.card} ${a.field}=${a.value}${bid}`
+      const fieldSummary = formatCardInfoFields(a)
+      return `${a.card || '?'} ${fieldSummary}${bid}`.trim()
     })
     return makeResult({
       event: `${total} 张卡检查，${alerts.length} 项异常：${msgs.join('；')}`,
@@ -491,6 +492,21 @@ function translateCardInfo(alert) {
     })
   }
   return makeResult({ event: alert.message || `卡件信息正常 (${total} 张卡)`, impact: '', suggestion: '', original: alert.message || '' })
+}
+
+function formatCardInfoFields(alertItem) {
+  const nestedFields = Array.isArray(alertItem?.fields) ? alertItem.fields : []
+  if (nestedFields.length > 0) {
+    return nestedFields
+      .map(field => `${field?.field || '?'}=${field?.value ?? ''}`)
+      .join(', ')
+  }
+
+  if (alertItem?.field) {
+    return `${alertItem.field}=${alertItem.value ?? ''}`
+  }
+
+  return '字段异常'
 }
 
 // ============ cmd_response ============
