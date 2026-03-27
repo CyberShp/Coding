@@ -3,13 +3,25 @@ Tag model for array grouping/classification.
 """
 
 from datetime import datetime
+from enum import Enum
 from typing import List, Optional
 
 from pydantic import BaseModel, ConfigDict, field_validator
-from sqlalchemy import Column, Integer, String, DateTime, Text, ForeignKey
+from sqlalchemy import Column, Integer, String, DateTime, Text, ForeignKey, UniqueConstraint
 from sqlalchemy.sql import func
 
 from ..db.database import Base
+
+
+class TagType(str, Enum):
+    """Tag type enum"""
+    TEAM = "team"
+    BUSINESS = "business"
+    ENV = "env"
+    TEST_TYPE = "test_type"
+    HARDWARE_FAMILY = "hardware_family"
+    RISK = "risk"
+    GENERAL = "general"
 
 
 # SQLAlchemy Model
@@ -23,8 +35,22 @@ class TagModel(Base):
     description = Column(Text, default="")
     parent_id = Column(Integer, ForeignKey("tags.id", ondelete="SET NULL"), nullable=True, index=True)
     level = Column(Integer, default=1)  # 1=一级(小组), 2=二级(类型)
+    tag_type = Column(String(64), default="general")
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+
+class ArrayTagModel(Base):
+    """Many-to-many junction table for arrays and tags"""
+    __tablename__ = "array_tags"
+
+    id = Column(Integer, primary_key=True, index=True)
+    array_id = Column(String(64), index=True, nullable=False)
+    tag_id = Column(Integer, ForeignKey("tags.id", ondelete="CASCADE"), index=True, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint('array_id', 'tag_id', name='uq_array_tag'),
+    )
 
 
 # Pydantic Models for API
@@ -35,6 +61,7 @@ class TagBase(BaseModel):
     description: str = ""
     parent_id: Optional[int] = None
     level: int = 2  # 1=一级(小组), 2=二级(类型)
+    tag_type: str = "general"
 
 
 class TagCreate(TagBase):
@@ -71,6 +98,7 @@ class TagResponse(TagBase):
     id: int
     parent_id: Optional[int] = None
     level: int = 2
+    tag_type: str = "general"
     parent_name: Optional[str] = None
     created_at: datetime
     updated_at: datetime
