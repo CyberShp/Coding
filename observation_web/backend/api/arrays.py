@@ -2363,6 +2363,14 @@ async def deploy_agent(
             detail=result.get("error", "Deploy failed")
         )
 
+    # Log warnings (e.g. systemd service install failure) without failing the deploy
+    if result.get("warnings"):
+        sys_warning(
+            "arrays",
+            f"Agent deployed for array {array_id} with warnings",
+            {"array_id": array_id, "warnings": result["warnings"]}
+        )
+
     await _apply_observer_overrides(conn, config, db)
 
     status_obj = _get_array_status(array_id)

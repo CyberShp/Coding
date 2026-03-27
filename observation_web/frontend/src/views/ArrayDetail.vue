@@ -925,8 +925,13 @@ async function handleRefresh() {
 async function handleDeployAgent() {
   deploying.value = true
   try {
-    await api.deployAgent(array.value.array_id)
-    ElMessage.success('部署成功')
+    const res = await api.deployAgent(array.value.array_id)
+    const data = res?.data ?? res
+    if (data?.warnings && data.warnings.length > 0) {
+      ElMessage.warning('部署成功（有警告）：' + data.warnings.join('; '))
+    } else {
+      ElMessage.success('部署成功')
+    }
     await loadArray()
   } catch (error) {
     ElMessage.error(errMsg(error, '部署失败'))

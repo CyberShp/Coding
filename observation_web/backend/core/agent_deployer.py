@@ -66,11 +66,11 @@ class AgentDeployer:
             for cmd in cleanup_commands:
                 exit_code, _, _ = self.conn.execute(cmd)
                 if exit_code != 0:
-                    return {"ok": False, "error": f"Cleanup failed: {cmd}"}
+                    return {"ok": False, "deployed": False, "error": f"Cleanup failed: {cmd}"}
 
             # Step 2: Upload package
             if not self._upload_package(local_package, staging_package):
-                return {"ok": False, "error": "Upload failed"}
+                return {"ok": False, "deployed": False, "error": "Upload failed"}
 
             # Step 3: Extract and configure
             extract_commands = [
@@ -80,15 +80,30 @@ class AgentDeployer:
             for cmd in extract_commands:
                 exit_code, _, err = self.conn.execute(cmd)
                 if exit_code != 0:
-                    return {"ok": False, "error": f"Extract failed: {err}"}
+                    return {"ok": False, "deployed": False, "error": f"Extract failed: {err}"}
 
             layout_result = self._validate_deploy_layout(deploy_path)
             if not layout_result.get("ok"):
+                layout_result["deployed"] = False
                 return layout_result
 
+            # --- Deploy is now considered successful ---
+            # systemd service installation is a post-deploy step;
+            # its failure should NOT override the deploy success verdict.
+            warnings = []  # type: list
+            service_installed = False
+
             service_result = self._install_systemd_service()
-            if not service_result.get("ok"):
-                return service_result
+            if service_result.get("ok"):
+                service_installed = True
+            else:
+                svc_err = service_result.get("error") or service_result.get("message", "")
+                if svc_err:
+                    warnings.append(f"systemd service install: {svc_err}")
+                logger.warning(
+                    "systemd service install failed on %s but deploy itself succeeded: %s",
+                    self.conn.host, svc_err,
+                )
 
             # Step 4: Configuration merge
             try:
@@ -97,11 +112,20 @@ class AgentDeployer:
             except Exception:
                 pass
 
-            return {"ok": True, "message": "Deployed successfully"}
+            result = {
+                "ok": True,
+                "deployed": True,
+                "service_installed": service_installed,
+                "message": "Deployed successfully" if service_installed
+                           else "Deployed successfully, but systemd service install failed",
+            }
+            if warnings:
+                result["warnings"] = warnings
+            return result
 
         except Exception as e:
             logger.exception("Deployment failed")
-            return {"ok": False, "error": str(e)}
+            return {"ok": False, "deployed": False, "error": str(e)}
 
         finally:
             if local_package and Path(local_package).exists():
@@ -342,43 +366,97 @@ class AgentDeployer:
         exit_code, out, _ = self.conn.execute(f"test -d {deploy_path} && echo 'deployed'")
         return exit_code == 0 and "deployed" in out
 
-    def check_running(self) -> bool:
-        """Check if agent is running."""
+    def _resolve_running_state(self) -> Dict[str, Any]:
+        """Unified running-state detection used by both check_running() and get_agent_status().
+
+        Priority:
+        1. systemd is-active == active  → running via 'systemd'
+        2. PID file exists & process alive → running via 'pidfile'
+        3. pgrep hits observation_points  → running via 'pgrep'
+        4. Otherwise                      → not running
+        """
+        info = {
+            "running": False,
+            "running_source": "none",
+            "pid": None,
+            "service_active": False,
+            "pidfile_present": False,
+        }
+        warnings = []  # type: list
+
+        # Layer 1 – systemd
         if self._is_systemd_available():
             exit_code, out, _ = self.conn.execute(
                 f"systemctl is-active {SYSTEMD_SERVICE_NAME} 2>/dev/null"
             )
             if exit_code == 0 and out.strip() == "active":
-                return True
+                info["service_active"] = True
+                info["running"] = True
+                info["running_source"] = "systemd"
+                # Try to obtain PID from systemd
+                ec2, pid_out, _ = self.conn.execute(
+                    f"systemctl show -p MainPID --value {SYSTEMD_SERVICE_NAME} 2>/dev/null"
+                )
+                if ec2 == 0 and pid_out.strip().isdigit() and pid_out.strip() != "0":
+                    info["pid"] = int(pid_out.strip())
 
-        # Try PID file first
+        # Layer 2 – PID file
         exit_code, pid_str, _ = self.conn.execute(f"cat {AGENT_PID_FILE} 2>/dev/null")
         if exit_code == 0 and pid_str.strip().isdigit():
+            info["pidfile_present"] = True
             pid = pid_str.strip()
             if self._is_process_alive(pid):
-                return True
-        
-        # Fallback to pgrep only if PID file doesn't work
-        exit_code, out, _ = self.conn.execute(
-            "pgrep -f 'python.*observation_points' 2>/dev/null | head -1"
-        )
-        return exit_code == 0 and out.strip().isdigit()
+                if not info["running"]:
+                    info["running"] = True
+                    info["running_source"] = "pidfile"
+                if info["pid"] is None:
+                    info["pid"] = int(pid)
+
+        # Layer 3 – pgrep fallback
+        if not info["running"]:
+            exit_code, out, _ = self.conn.execute(
+                "pgrep -f 'python.*observation_points' 2>/dev/null | head -1"
+            )
+            if exit_code == 0 and out.strip().isdigit():
+                info["running"] = True
+                info["running_source"] = "pgrep"
+                info["pid"] = int(out.strip())
+                if not info["pidfile_present"]:
+                    warnings.append("Agent running but PID file missing – consider restarting to fix PID tracking")
+
+        # Cross-check warnings
+        if info["service_active"] and not info["pidfile_present"]:
+            warnings.append("systemd reports active but PID file is missing")
+
+        if warnings:
+            info["warnings"] = warnings
+
+        return info
+
+    def check_running(self) -> bool:
+        """Check if agent is running (unified 3-layer detection)."""
+        return self._resolve_running_state()["running"]
 
     def get_agent_status(self) -> Dict[str, Any]:
-        """Get detailed agent status."""
-        info = {"deployed": self.check_deployed(), "running": False, "pid": None}
-        
-        exit_code, pid_str, _ = self.conn.execute(f"cat {AGENT_PID_FILE} 2>/dev/null")
-        if exit_code == 0 and pid_str.strip().isdigit():
-            pid = pid_str.strip()
-            if self._is_process_alive(pid):
-                info["running"] = True
-                info["pid"] = int(pid)
-                # Get uptime
-                exit_code, out, _ = self.conn.execute(f"ps -o etime= -p {pid} 2>/dev/null")
-                if exit_code == 0:
-                    info["uptime"] = out.strip()
-        
+        """Get detailed agent status (unified 3-layer detection)."""
+        state = self._resolve_running_state()
+        info = {
+            "deployed": self.check_deployed(),
+            "running": state["running"],
+            "running_source": state["running_source"],
+            "pid": state["pid"],
+            "service_active": state["service_active"],
+            "pidfile_present": state["pidfile_present"],
+        }
+        if state.get("warnings"):
+            info["warnings"] = state["warnings"]
+
+        # Get uptime if we have a PID
+        if info["pid"]:
+            exit_code, out, _ = self.conn.execute(f"ps -o etime= -p {info['pid']} 2>/dev/null")
+            if exit_code == 0:
+                info["uptime"] = out.strip()
+
         return info
 
     async def wait_for_ready(

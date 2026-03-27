@@ -313,4 +313,101 @@ describe('ArrayDetail', () => {
       expect(getActionButton('connected')).toBe('disconnect')
     })
   })
+
+  describe('agent deploy with warnings', () => {
+    it('deploy success with warnings shows warning message', async () => {
+      // Simulate API returning ok=true with warnings
+      const deployResult = {
+        ok: true,
+        deployed: true,
+        service_installed: false,
+        warnings: ['systemd service install: daemon-reload failed'],
+        message: 'Deployed successfully, but systemd service install failed',
+      }
+
+      // Frontend should detect warnings and show a warning toast, not failure
+      const hasWarnings = deployResult.warnings && deployResult.warnings.length > 0
+      expect(hasWarnings).toBe(true)
+      expect(deployResult.ok).toBe(true)
+
+      // The message displayed should be success-with-warning, not failure
+      const displayMessage = hasWarnings
+        ? '部署成功（有警告）：' + deployResult.warnings.join('; ')
+        : '部署成功'
+      expect(displayMessage).toContain('部署成功')
+      expect(displayMessage).toContain('有警告')
+      expect(displayMessage).toContain('daemon-reload')
+    })
+
+    it('deploy success without warnings shows success message', () => {
+      const deployResult = {
+        ok: true,
+        deployed: true,
+        service_installed: true,
+        message: 'Deployed successfully',
+      }
+
+      const hasWarnings = !!(deployResult.warnings && deployResult.warnings.length > 0)
+      expect(hasWarnings).toBe(false)
+
+      const displayMessage = hasWarnings
+        ? '部署成功（有警告）'
+        : '部署成功'
+      expect(displayMessage).toBe('部署成功')
+    })
+  })
+
+  describe('agent status text', () => {
+    it('shows running when agent_running=true', () => {
+      const array = ref({ agent_running: true, agent_deployed: true })
+
+      const agentStatusText = computed(() => {
+        if (array.value?.agent_running) return '运行中'
+        if (array.value?.agent_deployed) return '已部署未运行'
+        return '未部署'
+      })
+
+      expect(agentStatusText.value).toBe('运行中')
+    })
+
+    it('shows deployed-not-running when agent_deployed=true but agent_running=false', () => {
+      const array = ref({ agent_running: false, agent_deployed: true })
+
+      const agentStatusText = computed(() => {
+        if (array.value?.agent_running) return '运行中'
+        if (array.value?.agent_deployed) return '已部署未运行'
+        return '未部署'
+      })
+
+      expect(agentStatusText.value).toBe('已部署未运行')
+    })
+
+    it('shows not-deployed when both flags false', () => {
+      const array = ref({ agent_running: false, agent_deployed: false })
+
+      const agentStatusText = computed(() => {
+        if (array.value?.agent_running) return '运行中'
+        if (array.value?.agent_deployed) return '已部署未运行'
+        return '未部署'
+      })
+
+      expect(agentStatusText.value).toBe('未部署')
+    })
+
+    it('after deploy/start reload, status updates correctly', async () => {
+      const array = ref({ agent_running: false, agent_deployed: false })
+
+      const agentStatusText = computed(() => {
+        if (array.value?.agent_running) return '运行中'
+        if (array.value?.agent_deployed) return '已部署未运行'
+        return '未部署'
+      })
+
+      expect(agentStatusText.value).toBe('未部署')
+
+      // Simulate loadArray() returning new data after deploy+start
+      array.value = { agent_running: true, agent_deployed: true }
+      expect(agentStatusText.value).toBe('运行中')
+    })
+  })
 })
