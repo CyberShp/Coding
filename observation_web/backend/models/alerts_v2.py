@@ -67,7 +67,7 @@ class AlertV2Model(Base):
     ingested_at = Column(DateTime, server_default=func.now())
     first_seen_at = Column(DateTime, nullable=True)
     last_seen_at = Column(DateTime, nullable=True)
-    fingerprint = Column(String(128), index=True)
+    fingerprint = Column(String(128))
     state = Column(String(32), index=True, default="active")
     review_status = Column(String(32), default="pending")
     is_expected = Column(Integer, default=0)
