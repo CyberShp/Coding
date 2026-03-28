@@ -10,7 +10,6 @@ Upgrades from endpoint registration tests to behavior tests covering:
 
 import asyncio
 import json
-import time
 import pytest
 from unittest.mock import MagicMock, AsyncMock, patch, PropertyMock
 from datetime import datetime
@@ -134,8 +133,8 @@ class TestStatusDeduplication:
         status1 = {"state": "connected", "agent_running": True}
         status2 = {"state": "connected", "agent_running": False}
         manager.should_send_status("arr-1", status1)
-        # Wait for throttle
-        time.sleep(0.6)
+        # Clear throttle cache to allow immediate send
+        manager._last_status_time["arr-1"] = 0
         assert manager.should_send_status("arr-1", status2) is True
 
     def test_different_arrays_independent(self):

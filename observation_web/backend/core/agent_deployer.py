@@ -367,7 +367,8 @@ class AgentDeployer:
                 pid_code, pid_out, _ = self.conn.execute(
                     f"systemctl show -p MainPID --value {SYSTEMD_SERVICE_NAME} 2>/dev/null"
                 )
-                pid = pid_out.strip() if pid_code == 0 and pid_out.strip().isdigit() and pid_out.strip() != "0" else ""
+                pid_val = pid_out.strip() if pid_code == 0 else ""
+                pid = pid_val if pid_val.isdigit() and pid_val != "0" else ""
                 return True, pid
 
         # Layer 2: PID file
