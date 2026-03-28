@@ -13,7 +13,7 @@ from backend.models.task_session import TaskSessionModel
 
 
 class TestDeployWarningTolerance:
-    """P1: deploy succeeds even with non-critical observer warnings."""
+    """P1: deploy succeeds even with non-critical post-deploy warnings."""
 
     def _make_deployer(self, connected=True):
         mock_conn = MagicMock()
@@ -25,18 +25,19 @@ class TestDeployWarningTolerance:
         return AgentDeployer(mock_conn, config)
 
     @patch.object(AgentDeployer, "_build_package", return_value="/tmp/test.tar.gz")
+    @patch.object(AgentDeployer, "_upload_package", return_value=True)
     @patch.object(
         AgentDeployer,
-        "start_agent",
-        return_value={"ok": True, "message": "started", "pid": 1234, "warnings": ["observer x failed"]},
+        "_install_systemd_service",
+        return_value={"ok": False, "error": "observer x failed"},
     )
     @patch("pathlib.Path.exists", return_value=False)
-    def test_deploy_propagates_warnings_but_keeps_success(self, _exists, _start, _build):
+    def test_deploy_propagates_warnings_but_keeps_success(self, _exists, _svc, _upload, _build):
         deployer = self._make_deployer(connected=True)
         result = deployer.deploy()
         assert result["ok"] is True
         assert "warnings" in result
-        assert result["warnings"] == ["observer x failed"]
+        assert any("observer x failed" in w for w in result["warnings"])
 
 
 @pytest.mark.asyncio
