@@ -1,5 +1,6 @@
 """观察点模块"""
 
+from .port_counters import PortCountersObserver
 from .error_code import ErrorCodeObserver
 from .link_status import LinkStatusObserver
 from .card_recovery import CardRecoveryObserver
@@ -14,7 +15,6 @@ from .port_fec import PortFecObserver
 from .port_speed import PortSpeedObserver
 from .pcie_bandwidth import PcieBandwidthObserver
 from .card_info import CardInfoObserver
-from .port_traffic import PortTrafficObserver
 from .controller_state import ControllerStateObserver
 from .disk_state import DiskStateObserver
 from .process_crash import ProcessCrashObserver
@@ -34,9 +34,14 @@ from .port_error_code import PortErrorCodeObserver
 from .process_restart import ProcessRestartObserver
 from .sfp_monitor import SfpMonitorObserver
 from .abnormal_reset import AbnormalResetObserver
+from .start_work import StartWorkObserver
 
 __all__ = [
+    'PortCountersObserver',
+    # Backward-compatible aliases → all point to PortCountersObserver
     'ErrorCodeObserver',
+    'PortErrorCodeObserver',
+    'NetworkErrorsObserver',
     'LinkStatusObserver',
     'CardRecoveryObserver',
     'SensitiveInfoObserver',
@@ -50,7 +55,6 @@ __all__ = [
     'PortSpeedObserver',
     'PcieBandwidthObserver',
     'CardInfoObserver',
-    'PortTrafficObserver',
     'ControllerStateObserver',
     'DiskStateObserver',
     'ProcessCrashObserver',
@@ -58,7 +62,6 @@ __all__ = [
     'DiskIoObserver',
     'DiskSpaceObserver',
     'LoadAverageObserver',
-    'NetworkErrorsObserver',
     'SwapUsageObserver',
     'TcpConnectionsObserver',
     'ZombieProcessesObserver',
@@ -66,8 +69,8 @@ __all__ = [
     'ThermalObserver',
     'DmesgErrorsObserver',
     'SystemUptimeObserver',
-    'PortErrorCodeObserver',
     'ProcessRestartObserver',
     'SfpMonitorObserver',
     'AbnormalResetObserver',
+    'StartWorkObserver',
 ]

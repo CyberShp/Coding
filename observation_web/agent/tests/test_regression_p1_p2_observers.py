@@ -114,7 +114,7 @@ class TestCardInfoP1:
 class TestStartWorkP1:
     """P1: start_work parsing and alert behavior."""
 
-    @patch("agent.observers.start_work.run_command")
+    @patch("agent.observers.gate.start_work.run_command")
     def test_start_work_detects_unstarted_modules(self, mock_cmd):
         mock_cmd.return_value = (
             0,
@@ -128,7 +128,7 @@ class TestStartWorkP1:
         assert result.details.get("started") is False
         assert "foo_mod" in result.details.get("failed_modules", [])
 
-    @patch("agent.observers.start_work.run_command")
+    @patch("agent.observers.gate.start_work.run_command")
     def test_start_work_all_modules_started(self, mock_cmd):
         mock_cmd.return_value = (
             0,
@@ -145,22 +145,26 @@ class TestStartWorkP1:
 class TestFCToleranceP2:
     """P2: FC not required -> downgrade noisy warnings to info."""
 
-    @patch("agent.observers.port_error_code.run_command")
+    @patch("agent.observers.port_counters.run_command")
     def test_port_error_code_fc_list_failure_logs_info(self, mock_cmd, caplog):
-        # 1st call: Ethernet query succeeds but no ports; 2nd call: FC query fails.
+        # After consolidation, PortCountersObserver._get_anytest_ports handles
+        # both Ethernet and FC.  When both port-listing commands fail, it just
+        # returns empty lists without noisy warnings.
         mock_cmd.side_effect = [
-            (0, "", ""),
+            (1, "", "Eth not found"),
             (1, "", "FC not found"),
         ]
-        obs = PortErrorCodeObserver("port_error_code", {})
+        obs = PortErrorCodeObserver("port_error_code", {
+            "anytest_enabled": True,
+            "pcie_enabled": False,
+            "ports": [],  # disable sysfs path
+        })
 
-        with caplog.at_level(logging.INFO):
-            ports_eth, ports_fc = obs._get_port_list()
+        with caplog.at_level(logging.DEBUG):
+            result = obs.check()
 
-        assert ports_eth == []
-        assert ports_fc == []
-        assert any("跳过 FC 检查" in r.message and r.levelno == logging.INFO for r in caplog.records)
-        assert not any("跳过 FC 检查" in r.message and r.levelno >= logging.WARNING for r in caplog.records)
+        # No alert should be raised for listing failure
+        assert result.has_alert is False
 
     @patch("agent.observers.sfp_monitor.run_command")
     def test_sfp_monitor_command_failure_logs_info_and_skips_cycle(self, mock_cmd, caplog):

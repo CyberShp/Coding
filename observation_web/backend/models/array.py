@@ -18,7 +18,25 @@ class ConnectionState(str, Enum):
     DISCONNECTED = "disconnected"
     CONNECTING = "connecting"
     CONNECTED = "connected"
+    DEGRADED = "degraded"
     ERROR = "error"
+
+
+class EnrollmentStatus(str, Enum):
+    """Array enrollment status enum"""
+    DRAFT = "draft"
+    IMPORTED = "imported"
+    DEPLOYING_AGENT = "deploying_agent"
+    REGISTERED = "registered"
+    ERROR = "error"
+    RETIRED = "retired"
+
+
+class ConnectionMode(str, Enum):
+    """Array connection mode enum"""
+    SSH_ONLY = "ssh_only"
+    AGENT_PREFERRED = "agent_preferred"
+    AGENT_ONLY = "agent_only"
 
 
 # SQLAlchemy Model
@@ -37,6 +55,20 @@ class ArrayModel(Base):
     tag_id = Column(Integer, ForeignKey("tags.id", ondelete="SET NULL"), nullable=True, index=True)
     saved_password = Column(String(512), default="")
     version = Column(Integer, default=1, nullable=False)  # Optimistic locking
+    display_name = Column(String(128), default="")
+    mgmt_ip = Column(String(256), default="")
+    site = Column(String(128), default="")
+    env_type = Column(String(64), default="")
+    owner_team = Column(String(128), default="")
+    serial = Column(String(128), default="")
+    cluster_id = Column(String(64), default="")
+    enrollment_status = Column(String(32), default="draft")
+    connection_mode = Column(String(32), default="ssh_only")
+    agent_registered_at = Column(DateTime, nullable=True)
+    last_heartbeat_at = Column(DateTime, nullable=True)
+    enrolled_by = Column(String(128), default="")
+    enrolled_at = Column(DateTime, nullable=True)
+    last_error = Column(Text, default="")
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
@@ -51,6 +83,15 @@ class ArrayBase(BaseModel):
     key_path: str = ""
     folder: str = ""  # Kept for backward compatibility
     tag_id: Optional[int] = None
+    display_name: str = ""
+    mgmt_ip: str = ""
+    site: str = ""
+    env_type: str = ""
+    owner_team: str = ""
+    serial: str = ""
+    cluster_id: str = ""
+    enrollment_status: str = "draft"
+    connection_mode: str = "ssh_only"
 
 
 class ArrayCreate(ArrayBase):
@@ -82,6 +123,16 @@ class ArrayUpdate(BaseModel):
     folder: Optional[str] = None
     tag_id: Optional[int] = None
     expected_version: Optional[int] = None  # For optimistic locking
+    display_name: Optional[str] = None
+    mgmt_ip: Optional[str] = None
+    site: Optional[str] = None
+    env_type: Optional[str] = None
+    owner_team: Optional[str] = None
+    serial: Optional[str] = None
+    cluster_id: Optional[str] = None
+    enrollment_status: Optional[str] = None
+    connection_mode: Optional[str] = None
+    enrolled_by: Optional[str] = None
 
 
 class ArrayResponse(ArrayBase):
@@ -94,6 +145,11 @@ class ArrayResponse(ArrayBase):
     tag_l1_name: Optional[str] = None  # L1 group name when tag is L2
     tag_l2_name: Optional[str] = None  # L2 type name (array's tag)
     version: int = 1
+    agent_registered_at: Optional[datetime] = None
+    last_heartbeat_at: Optional[datetime] = None
+    enrolled_by: str = ""
+    enrolled_at: Optional[datetime] = None
+    last_error: str = ""
     created_at: datetime
     updated_at: datetime
 
@@ -106,9 +162,15 @@ class ArrayStatus(BaseModel):
     name: str
     host: str
     state: ConnectionState = ConnectionState.DISCONNECTED
+    transport_connected: bool = False
     last_error: str = ""
     agent_deployed: bool = False
     agent_running: bool = False
+    agent_healthy: bool = False
+    collect_status: str = ""
+    running_source: str = "none"
+    running_confidence: str = "low"
+    health_source: str = "none"
     has_saved_password: bool = False
     last_refresh: Optional[datetime] = None
     tag_id: Optional[int] = None
@@ -120,6 +182,20 @@ class ArrayStatus(BaseModel):
     active_issues: List[Dict[str, Any]] = []
     recent_alerts: List[Dict[str, Any]] = []
     recent_alert_summary: Dict[str, int] = {}
+    display_name: str = ""
+    enrollment_status: str = "draft"
+    connection_mode: str = "ssh_only"
+    last_heartbeat_at: Optional[datetime] = None
+    # Agent detection diagnostics
+    service_active: bool = False
+    service_substate: str = ""
+    main_pid: Optional[int] = None
+    pidfile_present: bool = False
+    pidfile_pid: Optional[int] = None
+    pidfile_stale: bool = False
+    matched_process_cmdline: str = ""
+    status_version: Optional[int] = None
+    updated_at: Optional[datetime] = None
 
 
 class Array(ArrayBase):

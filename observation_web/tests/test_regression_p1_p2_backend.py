@@ -25,18 +25,23 @@ class TestDeployWarningTolerance:
         return AgentDeployer(mock_conn, config)
 
     @patch.object(AgentDeployer, "_build_package", return_value="/tmp/test.tar.gz")
-    @patch.object(
-        AgentDeployer,
-        "start_agent",
-        return_value={"ok": True, "message": "started", "pid": 1234, "warnings": ["observer x failed"]},
-    )
+    @patch("builtins.open")
     @patch("pathlib.Path.exists", return_value=False)
-    def test_deploy_propagates_warnings_but_keeps_success(self, _exists, _start, _build):
+    def test_deploy_propagates_warnings_but_keeps_success(self, _exists, mock_open, _build):
         deployer = self._make_deployer(connected=True)
-        result = deployer.deploy()
+        mock_open.return_value.__enter__.return_value.read.return_value = b"pkg"
+
+        # Simulate _install_systemd_service failing
+        with patch.object(
+            deployer, "_install_systemd_service",
+            return_value={"ok": False, "error": "systemd service install failed"},
+        ):
+            result = deployer.deploy()
+
         assert result["ok"] is True
+        assert result.get("deployed") is True
+        assert result.get("service_installed") is False
         assert "warnings" in result
-        assert result["warnings"] == ["observer x failed"]
 
 
 @pytest.mark.asyncio
