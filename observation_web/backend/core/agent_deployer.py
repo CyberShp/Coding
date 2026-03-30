@@ -86,13 +86,9 @@ class AgentDeployer:
             if not layout_result.get("ok"):
                 return layout_result
 
-            # Post-deploy: systemd service install is non-blocking
-            warnings: list[str] = []
             service_result = self._install_systemd_service()
             if not service_result.get("ok"):
-                # Service install failure is a warning, not a deployment failure
-                warnings.append(service_result.get("error", "Service install failed"))
-                logger.warning("Service install warning on %s: %s", self.conn.host, service_result.get("error"))
+                return service_result
 
             # Step 4: Configuration merge
             try:
@@ -101,11 +97,7 @@ class AgentDeployer:
             except Exception:
                 pass
 
-            result: Dict[str, Any] = {"ok": True, "message": "Deployed successfully"}
-            if warnings:
-                result["warnings"] = warnings
-                result["message"] += f" (with {len(warnings)} warning(s))"
-            return result
+            return {"ok": True, "message": "Deployed successfully"}
 
         except Exception as e:
             logger.exception("Deployment failed")
@@ -350,61 +342,43 @@ class AgentDeployer:
         exit_code, out, _ = self.conn.execute(f"test -d {deploy_path} && echo 'deployed'")
         return exit_code == 0 and "deployed" in out
 
-    def _resolve_running_state(self) -> Tuple[bool, str]:
-        """Unified 3-layer running detection: systemd → PID file → pgrep.
-
-        Returns ``(is_running, pid_or_empty_string)`` so that both
-        ``check_running()`` and ``get_agent_status()`` share a single
-        source of truth.
-        """
-        # Layer 1: systemd
+    def check_running(self) -> bool:
+        """Check if agent is running."""
         if self._is_systemd_available():
             exit_code, out, _ = self.conn.execute(
                 f"systemctl is-active {SYSTEMD_SERVICE_NAME} 2>/dev/null"
             )
             if exit_code == 0 and out.strip() == "active":
-                # Try to obtain the PID even when systemd is managing the process
-                pid_code, pid_out, _ = self.conn.execute(
-                    f"systemctl show -p MainPID --value {SYSTEMD_SERVICE_NAME} 2>/dev/null"
-                )
-                pid_val = pid_out.strip() if pid_code == 0 else ""
-                pid = pid_val if pid_val.isdigit() and pid_val != "0" else ""
-                return True, pid
+                return True
 
-        # Layer 2: PID file
+        # Try PID file first
         exit_code, pid_str, _ = self.conn.execute(f"cat {AGENT_PID_FILE} 2>/dev/null")
         if exit_code == 0 and pid_str.strip().isdigit():
             pid = pid_str.strip()
             if self._is_process_alive(pid):
-                return True, pid
-
-        # Layer 3: pgrep fallback
+                return True
+        
+        # Fallback to pgrep only if PID file doesn't work
         exit_code, out, _ = self.conn.execute(
             "pgrep -f 'python.*observation_points' 2>/dev/null | head -1"
         )
-        if exit_code == 0 and out.strip().isdigit():
-            return True, out.strip()
-
-        return False, ""
-
-    def check_running(self) -> bool:
-        """Check if agent is running (delegates to unified resolver)."""
-        running, _ = self._resolve_running_state()
-        return running
+        return exit_code == 0 and out.strip().isdigit()
 
     def get_agent_status(self) -> Dict[str, Any]:
-        """Get detailed agent status (uses same resolver as check_running)."""
-        info: Dict[str, Any] = {"deployed": self.check_deployed(), "running": False, "pid": None}
-
-        running, pid_str = self._resolve_running_state()
-        info["running"] = running
-        if pid_str:
-            info["pid"] = int(pid_str)
-            # Get uptime
-            exit_code, out, _ = self.conn.execute(f"ps -o etime= -p {pid_str} 2>/dev/null")
-            if exit_code == 0:
-                info["uptime"] = out.strip()
-
+        """Get detailed agent status."""
+        info = {"deployed": self.check_deployed(), "running": False, "pid": None}
+        
+        exit_code, pid_str, _ = self.conn.execute(f"cat {AGENT_PID_FILE} 2>/dev/null")
+        if exit_code == 0 and pid_str.strip().isdigit():
+            pid = pid_str.strip()
+            if self._is_process_alive(pid):
+                info["running"] = True
+                info["pid"] = int(pid)
+                # Get uptime
+                exit_code, out, _ = self.conn.execute(f"ps -o etime= -p {pid} 2>/dev/null")
+                if exit_code == 0:
+                    info["uptime"] = out.strip()
+        
         return info
 
     async def wait_for_ready(
