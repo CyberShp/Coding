@@ -188,7 +188,7 @@ async def on_recovery_event(array_id: str, reason: str, *, status_cache: dict = 
 
     Actions:
     1. Update heartbeat
-    2. Refresh the unified status cache
+    2. Refresh the unified status cache (including agent_healthy)
     3. Broadcast via status WebSocket
     """
     from ..api.websocket import broadcast_status_update
@@ -199,6 +199,12 @@ async def on_recovery_event(array_id: str, reason: str, *, status_cache: dict = 
     # Refresh cached status if cache dict is provided
     if status_cache is not None and array_id in status_cache:
         status_obj = status_cache[array_id]
+        # Update healthy based on fresh heartbeat
+        status_obj.agent_healthy = is_agent_healthy(array_id)
+        last_hb = get_last_heartbeat(array_id)
+        if last_hb is not None:
+            status_obj.last_heartbeat_at = datetime.fromtimestamp(last_hb)
+        status_obj.health_source = _health_source_store.get(array_id, "none")
         # Recompute collect_status and clear stale issues
         _recompute_collect_status(status_obj)
         status_obj.status_version = _next_version(array_id)
