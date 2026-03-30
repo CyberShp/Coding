@@ -1122,42 +1122,87 @@ async def list_array_statuses(
     statuses = []
     for array in arrays:
         status_obj = _get_array_status(array.array_id)
-        status_obj.name = array.name
-        status_obj.host = array.host
-        status_obj.has_saved_password = bool(getattr(array, 'saved_password', ''))
 
         tag = tags_map.get(array.tag_id) if array.tag_id else None
-        status_obj.tag_id = array.tag_id
-        status_obj.tag_name = tag.name if tag else None
-        status_obj.tag_color = tag.color if tag else None
         l1, l2 = _l1_l2(tag)
-        status_obj.tag_l1_name = l1
-        status_obj.tag_l2_name = l2
 
         conn = ssh_pool.get_connection(array.array_id)
-        if conn:
-            status_obj.state = conn.state
-            status_obj.last_error = conn.last_error
 
-        # Apply batch-loaded observer status
-        if not status_obj.observer_status and array.array_id in obs_status_map:
+        # Compute observer_status from batch data
+        obs_dict = dict(status_obj.observer_status)  # keep existing cache
+        if not obs_dict and array.array_id in obs_status_map:
             for obs_name, (rank, level, msg) in obs_status_map[array.array_id].items():
-                obs_status = 'ok'
+                obs_status_val = 'ok'
                 if level in ('error', 'critical'):
-                    obs_status = 'error'
+                    obs_status_val = 'error'
                 elif level == 'warning':
-                    obs_status = 'warning'
-                status_obj.observer_status[obs_name] = {
-                    'status': obs_status,
+                    obs_status_val = 'warning'
+                obs_dict[obs_name] = {
+                    'status': obs_status_val,
                     'message': msg[:100],
                 }
 
-        # Apply batch-loaded active issues
-        if not status_obj.active_issues and array.array_id in active_issues_map:
-            status_obj.active_issues = active_issues_map[array.array_id]
+        issues = status_obj.active_issues
+        if not issues and array.array_id in active_issues_map:
+            issues = active_issues_map[array.array_id]
 
-        # Apply batch-loaded recent alert summary
-        status_obj.recent_alert_summary = summary_map.get(array.array_id, {})
+        # Use unified build_runtime_status
+        from ..core.runtime_status import build_runtime_status, get_transport_info
+        transport = get_transport_info(conn)
+        built = build_runtime_status(
+            array_id=array.array_id,
+            name=array.name,
+            host=array.host,
+            transport_connected=transport["transport_connected"],
+            transport_state=transport["transport_state"],
+            last_error=transport["last_error"],
+            agent_running=status_obj.agent_running,
+            running_source=status_obj.running_source,
+            running_confidence=status_obj.running_confidence,
+            service_active=status_obj.service_active,
+            service_substate=status_obj.service_substate,
+            main_pid=status_obj.main_pid,
+            pidfile_present=status_obj.pidfile_present,
+            pidfile_pid=status_obj.pidfile_pid,
+            pidfile_stale=status_obj.pidfile_stale,
+            matched_process_cmdline=status_obj.matched_process_cmdline,
+            last_heartbeat_at=array.last_heartbeat_at,
+            agent_deployed=status_obj.agent_deployed,
+            has_saved_password=bool(getattr(array, 'saved_password', '')),
+            tag_id=array.tag_id,
+            tag_name=tag.name if tag else None,
+            tag_color=tag.color if tag else None,
+            tag_l1_name=l1,
+            tag_l2_name=l2,
+            display_name=getattr(array, 'display_name', '') or '',
+            enrollment_status=getattr(array, 'enrollment_status', 'draft') or 'draft',
+            connection_mode=getattr(array, 'connection_mode', 'ssh_only') or 'ssh_only',
+            active_issues=issues,
+            recent_alert_summary=summary_map.get(array.array_id, {}),
+            observer_status=obs_dict,
+        )
+
+        # Sync cache with unified output
+        status_obj.name = array.name
+        status_obj.host = array.host
+        status_obj.state = ConnectionState(built["state"]) if built["state"] in [e.value for e in ConnectionState] else status_obj.state
+        status_obj.transport_connected = built["transport_connected"]
+        status_obj.agent_healthy = built["agent_healthy"]
+        status_obj.collect_status = built["collect_status"]
+        status_obj.health_source = built["health_source"]
+        status_obj.has_saved_password = built["has_saved_password"]
+        status_obj.tag_id = built["tag_id"]
+        status_obj.tag_name = built["tag_name"]
+        status_obj.tag_color = built["tag_color"]
+        status_obj.tag_l1_name = built["tag_l1_name"]
+        status_obj.tag_l2_name = built["tag_l2_name"]
+        status_obj.last_error = built["last_error"]
+        status_obj.active_issues = built["active_issues"]
+        status_obj.observer_status = built["observer_status"]
+        status_obj.recent_alert_summary = built["recent_alert_summary"]
+        status_obj.last_heartbeat_at = array.last_heartbeat_at
+        status_obj.status_version = built["status_version"]
+        status_obj.updated_at = datetime.fromisoformat(built["updated_at"])
 
         statuses.append(status_obj)
 
@@ -1780,7 +1825,7 @@ async def get_array_status(
     db: AsyncSession = Depends(get_db),
     ssh_pool: SSHPool = Depends(get_ssh_pool),
 ):
-    """Get array runtime status"""
+    """Get array runtime status (uses unified build_runtime_status)"""
     # Get array info
     result = await db.execute(
         select(ArrayModel).where(ArrayModel.array_id == array_id)
@@ -1793,19 +1838,15 @@ async def get_array_status(
             detail=f"Array {array_id} not found"
         )
     
-    # Get or create status
+    # Get or create cached status for running-state fields
     status_obj = _get_array_status(array_id)
-    status_obj.name = array.name
-    status_obj.host = array.host
     
     # Get connection state — lightweight read, no SSH probe or reconnect
     conn = ssh_pool.get_connection(array_id)
-    if conn:
-        status_obj.state = conn.state  # cached state, no network I/O
-        status_obj.last_error = conn.last_error
-    
+
     # If observer_status is empty, derive it from DB alerts
-    if not status_obj.observer_status:
+    obs_dict = dict(status_obj.observer_status)
+    if not obs_dict:
         from ..models.alert import AlertModel
         stmt = (
             select(AlertModel.observer_name, AlertModel.level, AlertModel.message)
@@ -1814,7 +1855,7 @@ async def get_array_status(
         )
         alert_rows = await db.execute(stmt)
         _level_rank = {'critical': 4, 'error': 3, 'warning': 2, 'info': 1}
-        _obs_best = {}  # track highest severity per observer
+        _obs_best = {}
         for row in alert_rows.all():
             obs_name = row.observer_name
             level = row.level
@@ -1823,42 +1864,102 @@ async def get_array_status(
             if prev is None or rank > prev[0]:
                 _obs_best[obs_name] = (rank, level, row.message or '')
         for obs_name, (rank, level, msg) in _obs_best.items():
-            obs_status = 'ok'
+            obs_status_val = 'ok'
             if level in ('error', 'critical'):
-                obs_status = 'error'
+                obs_status_val = 'error'
             elif level == 'warning':
-                obs_status = 'warning'
-            status_obj.observer_status[obs_name] = {
-                'status': obs_status,
+                obs_status_val = 'warning'
+            obs_dict[obs_name] = {
+                'status': obs_status_val,
                 'message': msg[:100],
             }
 
     # Derive active_issues from DB if cache is empty
-    if not status_obj.active_issues:
-        status_obj.active_issues = await _derive_active_issues_from_db(db, array_id)
+    issues = status_obj.active_issues
+    if not issues:
+        issues = await _derive_active_issues_from_db(db, array_id)
 
-    # Populate recent alert summary (last 2 hours) for health classification
-    status_obj.recent_alert_summary = await _compute_recent_alert_summary(db, array_id)
+    # Recent alert summary
+    alert_summary = await _compute_recent_alert_summary(db, array_id)
 
-    # Populate tag info for detail page
+    # Tag info
     from ..models.tag import TagModel
-    status_obj.tag_id = array.tag_id
+    tag_name = None
+    tag_color = None
+    tag_l1 = None
+    tag_l2 = None
     if array.tag_id:
         tag_result = await db.execute(select(TagModel).where(TagModel.id == array.tag_id))
         tag = tag_result.scalar_one_or_none()
         if tag:
-            status_obj.tag_name = tag.name
-            status_obj.tag_color = tag.color
+            tag_name = tag.name
+            tag_color = tag.color
             if tag.level == 2 and tag.parent_id:
                 pr = await db.execute(select(TagModel.name).where(TagModel.id == tag.parent_id))
-                status_obj.tag_l1_name = pr.scalar_one_or_none()
-                status_obj.tag_l2_name = tag.name
+                tag_l1 = pr.scalar_one_or_none()
+                tag_l2 = tag.name
             elif tag.level == 1:
-                status_obj.tag_l1_name = tag.name
-                status_obj.tag_l2_name = None
+                tag_l1 = tag.name
             else:
-                status_obj.tag_l1_name = None
-                status_obj.tag_l2_name = tag.name
+                tag_l2 = tag.name
+
+    # ── Use unified build_runtime_status ──
+    from ..core.runtime_status import build_runtime_status, get_transport_info
+    transport = get_transport_info(conn)
+    built = build_runtime_status(
+        array_id=array_id,
+        name=array.name,
+        host=array.host,
+        transport_connected=transport["transport_connected"],
+        transport_state=transport["transport_state"],
+        last_error=transport["last_error"],
+        agent_running=status_obj.agent_running,
+        running_source=status_obj.running_source,
+        running_confidence=status_obj.running_confidence,
+        service_active=status_obj.service_active,
+        service_substate=status_obj.service_substate,
+        main_pid=status_obj.main_pid,
+        pidfile_present=status_obj.pidfile_present,
+        pidfile_pid=status_obj.pidfile_pid,
+        pidfile_stale=status_obj.pidfile_stale,
+        matched_process_cmdline=status_obj.matched_process_cmdline,
+        last_heartbeat_at=array.last_heartbeat_at,
+        agent_deployed=status_obj.agent_deployed,
+        has_saved_password=bool(getattr(array, 'saved_password', '')),
+        tag_id=array.tag_id,
+        tag_name=tag_name,
+        tag_color=tag_color,
+        tag_l1_name=tag_l1,
+        tag_l2_name=tag_l2,
+        display_name=getattr(array, 'display_name', '') or '',
+        enrollment_status=getattr(array, 'enrollment_status', 'draft') or 'draft',
+        connection_mode=getattr(array, 'connection_mode', 'ssh_only') or 'ssh_only',
+        active_issues=issues,
+        recent_alert_summary=alert_summary,
+        observer_status=obs_dict,
+    )
+
+    # Sync cache with unified output
+    status_obj.name = array.name
+    status_obj.host = array.host
+    status_obj.state = ConnectionState(built["state"]) if built["state"] in [e.value for e in ConnectionState] else status_obj.state
+    status_obj.transport_connected = built["transport_connected"]
+    status_obj.agent_healthy = built["agent_healthy"]
+    status_obj.collect_status = built["collect_status"]
+    status_obj.health_source = built["health_source"]
+    status_obj.has_saved_password = built["has_saved_password"]
+    status_obj.tag_id = built["tag_id"]
+    status_obj.tag_name = built["tag_name"]
+    status_obj.tag_color = built["tag_color"]
+    status_obj.tag_l1_name = built["tag_l1_name"]
+    status_obj.tag_l2_name = built["tag_l2_name"]
+    status_obj.last_error = built["last_error"]
+    status_obj.active_issues = built["active_issues"]
+    status_obj.observer_status = built["observer_status"]
+    status_obj.recent_alert_summary = built["recent_alert_summary"]
+    status_obj.last_heartbeat_at = array.last_heartbeat_at
+    status_obj.status_version = built["status_version"]
+    status_obj.updated_at = datetime.fromisoformat(built["updated_at"])
 
     return status_obj
 
@@ -1969,11 +2070,33 @@ async def connect_array(
         except Exception:
             pass  # 保存密码失败不影响连接
     
-    # Check agent status
+    # Check agent status (with full running-state detection)
     config = get_config()
     deployer = AgentDeployer(conn, config)
     status_obj.agent_deployed = await _run_blocking(deployer.check_deployed, 10)
-    status_obj.agent_running = await _run_blocking(deployer.check_running, 10)
+    agent_state = await _run_blocking(deployer._resolve_running_state, 15)
+    status_obj.agent_running = agent_state["running"]
+    status_obj.running_source = agent_state["running_source"]
+    status_obj.running_confidence = agent_state["running_confidence"]
+    status_obj.service_active = agent_state["service_active"]
+    status_obj.service_substate = agent_state.get("service_substate", "")
+    status_obj.main_pid = agent_state.get("main_pid")
+    status_obj.pidfile_present = agent_state["pidfile_present"]
+    status_obj.pidfile_pid = agent_state.get("pidfile_pid")
+    status_obj.pidfile_stale = agent_state.get("pidfile_stale", False)
+    status_obj.matched_process_cmdline = agent_state.get("matched_process_cmdline", "")
+
+    # Broadcast status update via WebSocket so dashboard and detail pages sync
+    from .websocket import broadcast_status_update
+    await broadcast_status_update(array_id, {
+        "array_id": array_id,
+        "state": "connected",
+        "agent_running": status_obj.agent_running,
+        "agent_deployed": status_obj.agent_deployed,
+        "agent_healthy": status_obj.agent_healthy,
+        "transport_connected": True,
+        "event": "connect",
+    })
 
     if not status_obj.agent_deployed:
         return {
@@ -1982,6 +2105,7 @@ async def connect_array(
             "hint": "Agent 未部署，是否立即部署？",
             "agent_deployed": status_obj.agent_deployed,
             "agent_running": status_obj.agent_running,
+            "agent_healthy": status_obj.agent_healthy,
             "has_saved_password": True,
         }
 
@@ -1989,6 +2113,7 @@ async def connect_array(
         "status": "connected",
         "agent_deployed": status_obj.agent_deployed,
         "agent_running": status_obj.agent_running,
+        "agent_healthy": status_obj.agent_healthy,
         "has_saved_password": True,
     }
 
@@ -2006,6 +2131,16 @@ async def disconnect_array(
     # Update status
     status_obj = _get_array_status(array_id)
     status_obj.state = ConnectionState.DISCONNECTED
+    status_obj.transport_connected = False
+
+    # Broadcast disconnect status via WebSocket
+    from .websocket import broadcast_status_update
+    await broadcast_status_update(array_id, {
+        "array_id": array_id,
+        "state": "disconnected",
+        "transport_connected": False,
+        "event": "disconnect",
+    })
     
     return {"status": "disconnected"}
 
@@ -2361,6 +2496,14 @@ async def deploy_agent(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=result.get("error", "Deploy failed")
+        )
+
+    # Log warnings (e.g. systemd service install failure) without failing the deploy
+    if result.get("warnings"):
+        sys_warning(
+            "arrays",
+            f"Agent deployed for array {array_id} with warnings",
+            {"array_id": array_id, "warnings": result["warnings"]}
         )
 
     await _apply_observer_overrides(conn, config, db)

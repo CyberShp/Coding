@@ -1,33 +1,43 @@
 <template>
-  <div class="admin-login" @mousemove="onMouseMove" @mouseleave="onMouseLeave">
+  <div class="admin-login">
+    <!-- Animated background light spots -->
+    <div class="bg-spots">
+      <span class="spot spot-1"></span>
+      <span class="spot spot-2"></span>
+      <span class="spot spot-3"></span>
+    </div>
+
     <div class="login-container">
-      <!-- Left: Blob mascots group -->
-      <div class="mascots-area">
-        <div class="mascots-group">
-          <div class="mascot-slot slot-purple">
-            <PixelPet character="purple" :mood="mood" :look-at="lookAt" />
-          </div>
-          <div class="mascot-slot slot-orange">
-            <PixelPet character="orange" :mood="mood" :look-at="lookAt" />
-          </div>
-          <div class="mascot-slot slot-yellow">
-            <PixelPet character="yellow" :mood="mood" :look-at="lookAt" />
-          </div>
+      <!-- Left: System description panel -->
+      <div class="brand-panel">
+        <div class="brand-header">
+          <el-icon :size="28" class="brand-icon"><Monitor /></el-icon>
+          <h1 class="brand-title">Observation Web<br /><span class="brand-title-zh">异常判读台</span></h1>
+        </div>
+
+        <p class="brand-desc">
+          面向测试场景的异常判读台 — 告警准确、信息干净、反馈及时
+        </p>
+
+        <ul class="feature-list">
+          <li><el-icon><Check /></el-icon>多维度告警聚合与自动降噪</li>
+          <li><el-icon><Check /></el-icon>实时数据流监控与可视化</li>
+          <li><el-icon><Check /></el-icon>灵活的自定义查询与报表导出</li>
+          <li><el-icon><Check /></el-icon>细粒度权限管理与审计日志</li>
+        </ul>
+
+        <div class="brand-meta">
+          <span class="meta-tag">v3.0.0</span>
+          <span class="meta-divider">·</span>
+          <span class="meta-text">Production</span>
         </div>
       </div>
 
-      <!-- Right: Login form card -->
-      <div class="form-area">
+      <!-- Right: Login card -->
+      <div class="form-panel">
         <div class="login-card">
-          <div class="card-icon">
-            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
-              <line x1="12" y1="5" x2="12" y2="19" />
-              <line x1="5" y1="12" x2="19" y2="12" />
-            </svg>
-          </div>
-
-          <h2 class="card-title">欢迎回来!</h2>
-          <p class="card-subtitle">请输入管理员凭据</p>
+          <h2 class="card-title">管理员登录</h2>
+          <p class="card-hint">仅管理员需要登录，普通用户默认只读访问</p>
 
           <form @submit.prevent="handleSubmit" class="login-form">
             <div class="form-field">
@@ -36,10 +46,8 @@
                 v-model="form.username"
                 type="text"
                 class="field-input"
-                placeholder="请输入账号"
+                placeholder="请输入管理员账号"
                 autocomplete="username"
-                @focus="mood = 'watching'"
-                @blur="onInputBlur('username')"
               />
             </div>
 
@@ -52,23 +60,17 @@
                   class="field-input"
                   placeholder="请输入密码"
                   autocomplete="current-password"
-                  @focus="mood = 'watching'"
-                  @blur="onInputBlur('password')"
                 />
                 <button
                   type="button"
                   class="eye-toggle"
-                  @click="onTogglePassword"
+                  @click="showPassword = !showPassword"
                   :title="showPassword ? '隐藏密码' : '显示密码'"
                 >
-                  <svg v-if="!showPassword" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="#999" stroke-width="1.8">
-                    <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
-                    <circle cx="12" cy="12" r="3" />
-                  </svg>
-                  <svg v-else viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="#999" stroke-width="1.8">
-                    <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24" />
-                    <line x1="1" y1="1" x2="23" y2="23" />
-                  </svg>
+                  <el-icon :size="16">
+                    <View v-if="!showPassword" />
+                    <Hide v-else />
+                  </el-icon>
                 </button>
               </div>
             </div>
@@ -76,7 +78,6 @@
             <button
               type="submit"
               class="submit-btn"
-              :class="{ 'is-loading': loading }"
               :disabled="loading"
             >
               <span v-if="loading" class="btn-spinner"></span>
@@ -97,15 +98,13 @@
 import { ref, reactive, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import PixelPet from '../components/PixelPet.vue'
+import { Monitor, Check, View, Hide } from '@element-plus/icons-vue'
 import { useAuthStore } from '../stores/auth'
 
 const router = useRouter()
 const authStore = useAuthStore()
 
 const loading = ref(false)
-const mood = ref('idle')
-const lookAt = ref({ x: 0.5, y: 0.5 })
 const showPassword = ref(false)
 
 const form = reactive({
@@ -113,49 +112,18 @@ const form = reactive({
   password: '',
 })
 
-function onMouseMove(e) {
-  const rect = e.currentTarget.getBoundingClientRect()
-  lookAt.value = {
-    x: (e.clientX - rect.left) / rect.width,
-    y: (e.clientY - rect.top) / rect.height,
-  }
-}
-
-function onMouseLeave() {
-  lookAt.value = { x: 0.5, y: 0.5 }
-}
-
-function onInputBlur(field) {
-  if (field === 'username' && !form.password) mood.value = 'idle'
-  if (field === 'password' && !form.username) mood.value = 'idle'
-}
-
-function onTogglePassword() {
-  showPassword.value = !showPassword.value
-  if (showPassword.value) {
-    mood.value = 'hiding'
-    setTimeout(() => {
-      if (mood.value === 'hiding') mood.value = 'watching'
-    }, 1500)
-  }
-}
-
 async function handleSubmit() {
   if (!form.username || !form.password) {
     ElMessage.warning('请填写账号和密码')
     return
   }
   loading.value = true
-  mood.value = 'watching'
   try {
     await authStore.login(form.username, form.password)
-    mood.value = 'success'
     ElMessage.success('登录成功')
     setTimeout(() => router.push('/settings'), 800)
   } catch (err) {
-    mood.value = 'error'
     ElMessage.error(err.response?.data?.detail || '登录失败')
-    setTimeout(() => { mood.value = 'watching' }, 1500)
   } finally {
     loading.value = false
   }
@@ -169,110 +137,206 @@ onMounted(() => {
 </script>
 
 <style scoped>
+/* ---- Page layout ---- */
 .admin-login {
+  position: relative;
   min-height: 100vh;
   display: flex;
   align-items: center;
   justify-content: center;
-  background: #f5f5f0;
-  padding: 20px;
+  background: linear-gradient(135deg, #f0f4f8 0%, #e2e8f0 50%, #edf1f7 100%);
+  padding: 24px;
+  overflow: hidden;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
 }
 
 .login-container {
-  display: flex;
-  align-items: center;
-  gap: 60px;
-  max-width: 860px;
-  width: 100%;
-}
-
-/* ---- Mascots ---- */
-.mascots-area {
-  flex: 1;
-  display: flex;
-  justify-content: center;
-  align-items: flex-end;
-  min-width: 320px;
-}
-
-.mascots-group {
   position: relative;
-  width: 320px;
-  height: 260px;
-}
-
-.mascot-slot {
-  position: absolute;
-  bottom: 0;
-}
-
-.slot-purple {
-  width: 110px;
-  height: 200px;
-  left: 55px;
-  bottom: 0;
   z-index: 1;
-}
-
-.slot-orange {
-  width: 190px;
-  height: 140px;
-  left: 0;
-  bottom: 0;
-  z-index: 2;
-}
-
-.slot-yellow {
-  width: 120px;
-  height: 160px;
-  right: 10px;
-  bottom: 0;
-  z-index: 1;
-}
-
-/* ---- Form Card ---- */
-.form-area {
-  flex: 0 0 340px;
-}
-
-.login-card {
-  background: white;
+  display: flex;
+  align-items: stretch;
+  max-width: 920px;
+  width: 100%;
+  min-height: 480px;
   border-radius: 16px;
-  padding: 36px 32px 28px;
-  box-shadow: 0 2px 24px rgba(0, 0, 0, 0.06);
+  overflow: hidden;
+  box-shadow: 0 4px 40px rgba(15, 23, 42, 0.08), 0 1px 4px rgba(15, 23, 42, 0.04);
 }
 
-.card-icon {
-  width: 36px;
-  height: 36px;
-  margin: 0 auto 20px;
+/* ---- Animated background spots ---- */
+.bg-spots {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.spot {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(80px);
+  opacity: 0.35;
+}
+
+.spot-1 {
+  width: 420px;
+  height: 420px;
+  background: #93b5e1;
+  top: -10%;
+  left: -5%;
+  animation: float-spot 18s ease-in-out infinite;
+}
+
+.spot-2 {
+  width: 360px;
+  height: 360px;
+  background: #a8c5da;
+  bottom: -8%;
+  right: -4%;
+  animation: float-spot 22s ease-in-out infinite reverse;
+}
+
+.spot-3 {
+  width: 280px;
+  height: 280px;
+  background: #b4c6d4;
+  top: 40%;
+  left: 55%;
+  animation: float-spot 15s ease-in-out infinite 3s;
+}
+
+@keyframes float-spot {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  33% { transform: translate(30px, -20px) scale(1.05); }
+  66% { transform: translate(-20px, 15px) scale(0.95); }
+}
+
+/* ---- Left brand panel ---- */
+.brand-panel {
+  flex: 1;
+  background: linear-gradient(160deg, #0f172a 0%, #1e293b 100%);
+  color: #e2e8f0;
+  padding: 48px 40px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.brand-header {
   display: flex;
   align-items: center;
-  justify-content: center;
-  color: #333;
+  gap: 14px;
+  margin-bottom: 24px;
 }
 
-.card-title {
-  text-align: center;
+.brand-icon {
+  color: #60a5fa;
+  flex-shrink: 0;
+}
+
+.brand-title {
   font-size: 22px;
   font-weight: 700;
-  color: #1a1a1a;
-  margin: 0 0 6px;
+  line-height: 1.3;
+  margin: 0;
+  color: #f8fafc;
 }
 
-.card-subtitle {
-  text-align: center;
-  font-size: 13px;
-  color: #888;
+.brand-title-zh {
+  font-size: 16px;
+  font-weight: 400;
+  color: #94a3b8;
+}
+
+.brand-desc {
+  font-size: 14px;
+  line-height: 1.7;
+  color: #94a3b8;
   margin: 0 0 28px;
 }
 
-/* ---- Form Fields ---- */
+.feature-list {
+  list-style: none;
+  margin: 0 0 32px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.feature-list li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  color: #cbd5e1;
+}
+
+.feature-list li .el-icon {
+  color: #60a5fa;
+  flex-shrink: 0;
+}
+
+.brand-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: auto;
+  padding-top: 16px;
+  border-top: 1px solid rgba(148, 163, 184, 0.15);
+}
+
+.meta-tag {
+  font-size: 12px;
+  font-weight: 600;
+  color: #60a5fa;
+  background: rgba(96, 165, 250, 0.1);
+  padding: 2px 8px;
+  border-radius: 4px;
+}
+
+.meta-divider {
+  color: #475569;
+}
+
+.meta-text {
+  font-size: 12px;
+  color: #64748b;
+}
+
+/* ---- Right form panel ---- */
+.form-panel {
+  flex: 0 0 380px;
+  background: #ffffff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 48px 36px;
+}
+
+.login-card {
+  width: 100%;
+}
+
+.card-title {
+  font-size: 20px;
+  font-weight: 700;
+  color: #0f172a;
+  margin: 0 0 8px;
+}
+
+.card-hint {
+  font-size: 13px;
+  color: #94a3b8;
+  margin: 0 0 32px;
+  line-height: 1.6;
+}
+
+/* ---- Form ---- */
 .login-form {
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: 22px;
 }
 
 .form-field {
@@ -284,28 +348,30 @@ onMounted(() => {
 .field-label {
   font-size: 13px;
   font-weight: 500;
-  color: #555;
+  color: #475569;
 }
 
 .field-input {
   width: 100%;
-  border: none;
-  border-bottom: 1.5px solid #e0e0e0;
-  padding: 8px 0;
+  border: 1.5px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 10px 12px;
   font-size: 14px;
-  color: #1a1a1a;
-  background: transparent;
+  color: #0f172a;
+  background: #f8fafc;
   outline: none;
-  transition: border-color 0.2s;
+  transition: border-color 0.25s, box-shadow 0.25s, background-color 0.25s;
   box-sizing: border-box;
 }
 
 .field-input::placeholder {
-  color: #c0c0c0;
+  color: #94a3b8;
 }
 
 .field-input:focus {
-  border-bottom-color: #1a1a1a;
+  border-color: #3b82f6;
+  background: #ffffff;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
 }
 
 .password-wrapper {
@@ -313,12 +379,12 @@ onMounted(() => {
 }
 
 .password-wrapper .field-input {
-  padding-right: 36px;
+  padding-right: 40px;
 }
 
 .eye-toggle {
   position: absolute;
-  right: 0;
+  right: 10px;
   top: 50%;
   transform: translateY(-50%);
   background: none;
@@ -328,27 +394,28 @@ onMounted(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  opacity: 0.6;
-  transition: opacity 0.2s;
+  color: #94a3b8;
+  transition: color 0.2s;
 }
 
 .eye-toggle:hover {
-  opacity: 1;
+  color: #475569;
 }
 
-/* ---- Submit Button ---- */
+/* ---- Submit button ---- */
 .submit-btn {
   width: 100%;
   padding: 12px;
-  margin-top: 8px;
+  margin-top: 4px;
   border: none;
   border-radius: 8px;
-  background: #1a1a2e;
-  color: white;
+  background: linear-gradient(135deg, #1e3a5f 0%, #1e293b 100%);
+  color: #ffffff;
   font-size: 14px;
   font-weight: 600;
+  letter-spacing: 2px;
   cursor: pointer;
-  transition: background 0.2s, transform 0.1s;
+  transition: opacity 0.2s, transform 0.1s;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -356,7 +423,7 @@ onMounted(() => {
 }
 
 .submit-btn:hover:not(:disabled) {
-  background: #2d2d4a;
+  opacity: 0.9;
 }
 
 .submit-btn:active:not(:disabled) {
@@ -372,7 +439,7 @@ onMounted(() => {
   width: 16px;
   height: 16px;
   border: 2px solid rgba(255, 255, 255, 0.3);
-  border-top-color: white;
+  border-top-color: #ffffff;
   border-radius: 50%;
   animation: spin 0.6s linear infinite;
 }
@@ -384,58 +451,35 @@ onMounted(() => {
 /* ---- Footer ---- */
 .card-footer {
   text-align: center;
-  margin-top: 20px;
+  margin-top: 24px;
 }
 
 .back-link {
   font-size: 13px;
-  color: #888;
+  color: #94a3b8;
   cursor: pointer;
   text-decoration: none;
   transition: color 0.2s;
 }
 
 .back-link:hover {
-  color: #1a1a1a;
+  color: #1e293b;
 }
 
 /* ---- Responsive ---- */
 @media (max-width: 768px) {
   .login-container {
     flex-direction: column;
-    gap: 32px;
+    max-width: 420px;
   }
 
-  .mascots-area {
-    min-width: unset;
+  .brand-panel {
+    padding: 32px 28px;
   }
 
-  .mascots-group {
-    width: 260px;
-    height: 210px;
-  }
-
-  .slot-purple {
-    width: 90px;
-    height: 165px;
-    left: 45px;
-  }
-
-  .slot-orange {
-    width: 155px;
-    height: 115px;
-  }
-
-  .slot-yellow {
-    width: 100px;
-    height: 130px;
-    right: 5px;
-  }
-
-  .form-area {
+  .form-panel {
     flex: unset;
-    width: 100%;
-    max-width: 340px;
+    padding: 32px 28px;
   }
 }
 </style>

@@ -360,18 +360,19 @@ class TestLinkStatusObserver:
 # ---------- ErrorCodeObserver ----------
 
 class TestErrorCodeObserver:
-    @patch("observation_points.observers.error_code.run_command")
-    @patch("observation_points.observers.error_code.read_sysfs")
+    @patch("agent.observers.port_counters.run_command")
+    @patch("agent.observers.port_counters.read_sysfs")
     def test_no_errors(self, mock_sysfs, mock_cmd):
         mock_sysfs.return_value = "0"
         mock_cmd.return_value = (0, "", "")
-        from observation_points.observers.error_code import ErrorCodeObserver
-        obs = ErrorCodeObserver("error_code", {"ports": []})
+        from agent.observers.port_counters import PortCountersObserver
+        obs = PortCountersObserver("error_code", {"ports": [], "anytest_enabled": False, "pcie_enabled": False})
         result = obs.check()
         assert result.has_alert is False
 
     def test_counter_wrap_detection(self):
-        """BUG-CANDIDATE: Counter wrap should not trigger alert."""
-        from observation_points.observers.error_code import ErrorCodeObserver
-        obs = ErrorCodeObserver("error_code", {"ports": [], "threshold": 10})
-        obs._last_port_errors["eth0"] = {"rx_errors": 100}
+        """BUG-CANDIDATE: Counter wrap / anomaly jump should not trigger alert."""
+        from agent.observers.port_counters import PortCountersObserver
+        obs = PortCountersObserver("error_code", {"ports": [], "threshold": 10, "anytest_enabled": False, "pcie_enabled": False})
+        # Simulate previous baseline
+        obs._last_sysfs["eth0"] = {"rx_errors": 100}
