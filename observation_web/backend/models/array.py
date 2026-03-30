@@ -106,11 +106,19 @@ class ArrayStatus(BaseModel):
     name: str
     host: str
     state: ConnectionState = ConnectionState.DISCONNECTED
+    transport_connected: bool = False
     last_error: str = ""
     agent_deployed: bool = False
     agent_running: bool = False
+    agent_healthy: bool = False
+    collect_status: str = "unknown"  # ok / error / degraded / unknown
+    running_confidence: str = "low"  # high / medium / low
+    running_source: str = ""  # systemd / pidfile / pgrep / none
+    health_source: str = ""  # heartbeat / ingest / probe / none
+    last_heartbeat_at: Optional[datetime] = None
     has_saved_password: bool = False
     last_refresh: Optional[datetime] = None
+    status_version: int = 0
     tag_id: Optional[int] = None
     tag_name: Optional[str] = None
     tag_color: Optional[str] = None
@@ -120,6 +128,7 @@ class ArrayStatus(BaseModel):
     active_issues: List[Dict[str, Any]] = []
     recent_alerts: List[Dict[str, Any]] = []
     recent_alert_summary: Dict[str, int] = {}
+    updated_at: Optional[datetime] = None
 
 
 class Array(ArrayBase):

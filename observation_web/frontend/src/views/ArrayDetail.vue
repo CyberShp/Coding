@@ -61,7 +61,8 @@
             <el-tag :type="getStateType(array.state)">{{ getStateText(array.state) }}</el-tag>
           </el-descriptions-item>
           <el-descriptions-item label="Agent 状态">
-            <el-tag v-if="array.agent_running" type="success">运行中</el-tag>
+            <el-tag v-if="array.agent_running && array.agent_healthy" type="success">运行中（健康）</el-tag>
+            <el-tag v-else-if="array.agent_running && !array.agent_healthy" type="warning">运行中（无心跳/异常）</el-tag>
             <el-tag v-else-if="array.agent_deployed" type="warning">已部署</el-tag>
             <el-tag v-else type="info">未部署</el-tag>
           </el-descriptions-item>
@@ -392,6 +393,13 @@ const activeIssues = computed(() => {
   return array.value?.active_issues || []
 })
 
+// Watch for WebSocket-pushed status updates from the store
+watch(() => arrayStore.currentArray, (newVal) => {
+  if (newVal && array.value && newVal.array_id === array.value.array_id) {
+    array.value = { ...array.value, ...newVal }
+  }
+}, { deep: true })
+
 const unackedCount = computed(() => {
   return recentAlerts.value.filter(a => !a.is_acked).length
 })
@@ -629,6 +637,8 @@ async function loadArray() {
     const arrayId = route.params.id
     const response = await api.getArrayStatus(arrayId, { signal })
     array.value = response.data
+    // Also update store's currentArray so WS updates can sync back
+    arrayStore.currentArray = response.data
     await Promise.all([loadRecentAlerts(signal), loadWatchers()])
   } catch (error) {
     if (error?.name === 'CanceledError' || error?.code === 'ERR_CANCELED') return
@@ -814,7 +824,9 @@ watch(
 onMounted(() => {
   loadTags()
   loadArray()
-  refreshTimer = setInterval(silentRefresh, 30000) // 30 seconds
+  refreshTimer = setInterval(silentRefresh, 30000) // 30 seconds (fallback)
+  // Subscribe to status WebSocket for live updates
+  arrayStore.connectStatusWebSocket()
 })
 
 onUnmounted(() => {
@@ -826,6 +838,7 @@ onUnmounted(() => {
     clearInterval(refreshTimer)
     refreshTimer = null
   }
+  arrayStore.disconnectStatusWebSocket()
 })
 </script>
 

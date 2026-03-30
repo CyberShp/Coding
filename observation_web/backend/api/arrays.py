@@ -1134,11 +1134,6 @@ async def list_array_statuses(
         status_obj.tag_l1_name = l1
         status_obj.tag_l2_name = l2
 
-        conn = ssh_pool.get_connection(array.array_id)
-        if conn:
-            status_obj.state = conn.state
-            status_obj.last_error = conn.last_error
-
         # Apply batch-loaded observer status
         if not status_obj.observer_status and array.array_id in obs_status_map:
             for obs_name, (rank, level, msg) in obs_status_map[array.array_id].items():
@@ -1158,6 +1153,11 @@ async def list_array_statuses(
 
         # Apply batch-loaded recent alert summary
         status_obj.recent_alert_summary = summary_map.get(array.array_id, {})
+
+        # --- Unified status assembly (cached mode, no SSH probe) ---
+        conn = ssh_pool.get_connection(array.array_id)
+        from ..core.runtime_status import build_runtime_status
+        build_runtime_status(status_obj, ssh_conn=conn, probe_mode="cached")
 
         statuses.append(status_obj)
 
@@ -1798,12 +1798,6 @@ async def get_array_status(
     status_obj.name = array.name
     status_obj.host = array.host
     
-    # Get connection state — lightweight read, no SSH probe or reconnect
-    conn = ssh_pool.get_connection(array_id)
-    if conn:
-        status_obj.state = conn.state  # cached state, no network I/O
-        status_obj.last_error = conn.last_error
-    
     # If observer_status is empty, derive it from DB alerts
     if not status_obj.observer_status:
         from ..models.alert import AlertModel
@@ -1859,6 +1853,11 @@ async def get_array_status(
             else:
                 status_obj.tag_l1_name = None
                 status_obj.tag_l2_name = tag.name
+
+    # --- Unified status assembly (same function as /statuses) ---
+    conn = ssh_pool.get_connection(array_id)
+    from ..core.runtime_status import build_runtime_status
+    build_runtime_status(status_obj, ssh_conn=conn, probe_mode="cached")
 
     return status_obj
 
@@ -1969,11 +1968,24 @@ async def connect_array(
         except Exception:
             pass  # 保存密码失败不影响连接
     
-    # Check agent status
+    # Check agent status using strict deployer probe
     config = get_config()
     deployer = AgentDeployer(conn, config)
-    status_obj.agent_deployed = await _run_blocking(deployer.check_deployed, 10)
-    status_obj.agent_running = await _run_blocking(deployer.check_running, 10)
+    deployer_info = await _run_blocking(deployer.get_agent_status, 15)
+    status_obj.agent_deployed = deployer_info.get("deployed", False)
+    status_obj.agent_running = deployer_info.get("running", False)
+    status_obj.running_confidence = deployer_info.get("running_confidence", "low")
+    status_obj.running_source = deployer_info.get("running_source", "none")
+
+    # Register IP mapping for ingest
+    from ..core.runtime_status import register_ip_array_mapping, build_runtime_status, on_recovery_event
+    register_ip_array_mapping(array.host, array_id)
+
+    # Unified status assembly with deployer info
+    build_runtime_status(status_obj, ssh_conn=conn, deployer_info=deployer_info, probe_mode="strict")
+
+    # Trigger recovery event — auto-clears stale failure state + WS broadcast
+    await on_recovery_event(array_id, "connect_success", status_cache=_array_status_cache)
 
     if not status_obj.agent_deployed:
         return {
@@ -1982,6 +1994,7 @@ async def connect_array(
             "hint": "Agent 未部署，是否立即部署？",
             "agent_deployed": status_obj.agent_deployed,
             "agent_running": status_obj.agent_running,
+            "agent_healthy": status_obj.agent_healthy,
             "has_saved_password": True,
         }
 
@@ -1989,6 +2002,7 @@ async def connect_array(
         "status": "connected",
         "agent_deployed": status_obj.agent_deployed,
         "agent_running": status_obj.agent_running,
+        "agent_healthy": status_obj.agent_healthy,
         "has_saved_password": True,
     }
 

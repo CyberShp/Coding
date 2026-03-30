@@ -350,57 +350,182 @@ class AgentDeployer:
         exit_code, out, _ = self.conn.execute(f"test -d {deploy_path} && echo 'deployed'")
         return exit_code == 0 and "deployed" in out
 
-    def _resolve_running_state(self) -> Tuple[bool, str]:
-        """Unified 3-layer running detection: systemd → PID file → pgrep.
+    def _get_process_cmdline(self, pid: str) -> str:
+        """Read /proc/<pid>/cmdline (returns empty string on failure)."""
+        if not pid or not pid.isdigit():
+            return ""
+        exit_code, out, _ = self.conn.execute(
+            f"cat /proc/{pid}/cmdline 2>/dev/null | tr '\\0' ' '"
+        )
+        return out.strip() if exit_code == 0 else ""
 
-        Returns ``(is_running, pid_or_empty_string)`` so that both
-        ``check_running()`` and ``get_agent_status()`` share a single
-        source of truth.
+    def _cmdline_matches_agent(self, cmdline: str) -> bool:
+        """Return True if *cmdline* looks like our observation_points agent."""
+        if not cmdline:
+            return False
+        deploy_path = self.config.remote.agent_deploy_path
+        return "observation_points" in cmdline or deploy_path in cmdline
+
+    def _resolve_running_state(self) -> Dict[str, Any]:
+        """Unified 3-layer strict running detection: systemd → PID file → pgrep.
+
+        Returns a diagnostic dict consumed by both ``check_running()`` and
+        ``get_agent_status()``.  Fields:
+
+        * running (bool)
+        * pid (str)
+        * running_confidence: high / medium / low
+        * running_source: systemd / pidfile / pgrep / none
+        * service_active (str)
+        * service_substate (str)
+        * main_pid (str)
+        * pidfile_present (bool)
+        * pidfile_pid (str)
+        * pidfile_stale (bool)
+        * matched_process_cmdline (str)
         """
-        # Layer 1: systemd
+        diag: Dict[str, Any] = {
+            "running": False,
+            "pid": "",
+            "running_confidence": "low",
+            "running_source": "none",
+            "service_active": "",
+            "service_substate": "",
+            "main_pid": "",
+            "pidfile_present": False,
+            "pidfile_pid": "",
+            "pidfile_stale": False,
+            "matched_process_cmdline": "",
+        }
+
+        # ------------------------------------------------------------------
+        # Layer 1: systemd — strict validation
+        # ------------------------------------------------------------------
         if self._is_systemd_available():
             exit_code, out, _ = self.conn.execute(
-                f"systemctl is-active {SYSTEMD_SERVICE_NAME} 2>/dev/null"
+                f"systemctl show {SYSTEMD_SERVICE_NAME}"
+                " -p ActiveState -p SubState -p MainPID 2>/dev/null"
             )
-            if exit_code == 0 and out.strip() == "active":
-                # Try to obtain the PID even when systemd is managing the process
-                pid_code, pid_out, _ = self.conn.execute(
-                    f"systemctl show -p MainPID --value {SYSTEMD_SERVICE_NAME} 2>/dev/null"
-                )
-                pid_val = pid_out.strip() if pid_code == 0 else ""
-                pid = pid_val if pid_val.isdigit() and pid_val != "0" else ""
-                return True, pid
+            props: Dict[str, str] = {}
+            if exit_code == 0 and out:
+                for line in out.strip().splitlines():
+                    if "=" in line:
+                        k, v = line.split("=", 1)
+                        props[k.strip()] = v.strip()
 
-        # Layer 2: PID file
+            active_state = props.get("ActiveState", "")
+            sub_state = props.get("SubState", "")
+            main_pid = props.get("MainPID", "0")
+
+            diag["service_active"] = active_state
+            diag["service_substate"] = sub_state
+            diag["main_pid"] = main_pid
+
+            if active_state == "active" and main_pid.isdigit() and main_pid != "0":
+                if self._is_process_alive(main_pid):
+                    cmdline = self._get_process_cmdline(main_pid)
+                    if self._cmdline_matches_agent(cmdline):
+                        diag.update(
+                            running=True,
+                            pid=main_pid,
+                            running_confidence="high",
+                            running_source="systemd",
+                            matched_process_cmdline=cmdline[:200],
+                        )
+                        return diag
+                    else:
+                        logger.warning(
+                            "systemd MainPID %s cmdline mismatch on %s: %s",
+                            main_pid, self.conn.host, cmdline[:120],
+                        )
+                else:
+                    logger.warning(
+                        "systemd reports active but MainPID %s is not alive on %s",
+                        main_pid, self.conn.host,
+                    )
+
+        # ------------------------------------------------------------------
+        # Layer 2: PID file — with cmdline validation + stale detection
+        # ------------------------------------------------------------------
         exit_code, pid_str, _ = self.conn.execute(f"cat {AGENT_PID_FILE} 2>/dev/null")
         if exit_code == 0 and pid_str.strip().isdigit():
             pid = pid_str.strip()
+            diag["pidfile_present"] = True
+            diag["pidfile_pid"] = pid
             if self._is_process_alive(pid):
-                return True, pid
+                cmdline = self._get_process_cmdline(pid)
+                if self._cmdline_matches_agent(cmdline):
+                    diag.update(
+                        running=True,
+                        pid=pid,
+                        running_confidence="medium",
+                        running_source="pidfile",
+                        matched_process_cmdline=cmdline[:200],
+                    )
+                    return diag
+                else:
+                    logger.warning(
+                        "PID file PID %s cmdline mismatch on %s: %s",
+                        pid, self.conn.host, cmdline[:120],
+                    )
+            else:
+                diag["pidfile_stale"] = True
+                logger.info("Stale PID file detected on %s (PID %s)", self.conn.host, pid)
 
-        # Layer 3: pgrep fallback
+        # ------------------------------------------------------------------
+        # Layer 3: pgrep fallback — restricted to deploy path, low confidence
+        # ------------------------------------------------------------------
+        deploy_path = self.config.remote.agent_deploy_path
+        safe_path = shlex.quote(deploy_path)
         exit_code, out, _ = self.conn.execute(
-            "pgrep -f 'python.*observation_points' 2>/dev/null | head -1"
+            f"pgrep -af 'python.*{safe_path}.*observation_points' 2>/dev/null | head -1"
         )
-        if exit_code == 0 and out.strip().isdigit():
-            return True, out.strip()
+        if exit_code == 0 and out.strip():
+            parts = out.strip().split(None, 1)
+            pid = parts[0] if parts[0].isdigit() else ""
+            cmdline = parts[1] if len(parts) > 1 else ""
+            if pid and self._cmdline_matches_agent(cmdline):
+                diag.update(
+                    running=True,
+                    pid=pid,
+                    running_confidence="low",
+                    running_source="pgrep",
+                    matched_process_cmdline=cmdline[:200],
+                )
+                return diag
 
-        return False, ""
+        return diag
 
     def check_running(self) -> bool:
         """Check if agent is running (delegates to unified resolver)."""
-        running, _ = self._resolve_running_state()
-        return running
+        result = self._resolve_running_state()
+        return result["running"]
 
     def get_agent_status(self) -> Dict[str, Any]:
-        """Get detailed agent status (uses same resolver as check_running)."""
+        """Get detailed agent status (uses same resolver as check_running).
+
+        Returns a dict with at least:
+        * deployed, running, pid, uptime
+        * running_confidence, running_source
+        * Diagnostic fields (service_active, pidfile_stale, etc.)
+        """
         info: Dict[str, Any] = {"deployed": self.check_deployed(), "running": False, "pid": None}
 
-        running, pid_str = self._resolve_running_state()
-        info["running"] = running
+        diag = self._resolve_running_state()
+        info["running"] = diag["running"]
+        info["running_confidence"] = diag["running_confidence"]
+        info["running_source"] = diag["running_source"]
+        info["service_active"] = diag.get("service_active", "")
+        info["service_substate"] = diag.get("service_substate", "")
+        info["main_pid"] = diag.get("main_pid", "")
+        info["pidfile_present"] = diag.get("pidfile_present", False)
+        info["pidfile_pid"] = diag.get("pidfile_pid", "")
+        info["pidfile_stale"] = diag.get("pidfile_stale", False)
+        info["matched_process_cmdline"] = diag.get("matched_process_cmdline", "")
+
+        pid_str = diag.get("pid", "")
         if pid_str:
             info["pid"] = int(pid_str)
-            # Get uptime
             exit_code, out, _ = self.conn.execute(f"ps -o etime= -p {pid_str} 2>/dev/null")
             if exit_code == 0:
                 info["uptime"] = out.strip()

@@ -123,9 +123,13 @@
                   <el-tag :type="getStateTagType(arr.state)" size="small" effect="plain">
                     {{ arr.state === 'connected' ? '在线' : '离线' }}
                   </el-tag>
-                  <span v-if="arr.agent_running" class="tile-agent-badge">
+                  <span v-if="arr.agent_running && arr.agent_healthy" class="tile-agent-badge">
                     <el-icon color="#67c23a"><CircleCheck /></el-icon>
-                    Agent
+                    Agent（健康）
+                  </span>
+                  <span v-else-if="arr.agent_running && !arr.agent_healthy" class="tile-agent-badge tile-agent-unhealthy">
+                    <el-icon color="#e6a23c"><CircleCheck /></el-icon>
+                    Agent（无心跳）
                   </span>
                 </div>
                 <div class="tile-issues" v-if="(arr.active_issues || []).length > 0">
@@ -499,8 +503,10 @@ async function manualRefresh() {
 
 onMounted(() => {
   loadData()
-  // Auto-refresh every 30 seconds
+  // Auto-refresh every 30 seconds (fallback)
   refreshTimer = setInterval(silentRefresh, 30000)
+  // Subscribe to status WebSocket for live updates
+  arrayStore.connectStatusWebSocket()
 })
 
 onUnmounted(() => {
@@ -512,6 +518,7 @@ onUnmounted(() => {
     clearInterval(refreshTimer)
     refreshTimer = null
   }
+  arrayStore.disconnectStatusWebSocket()
 })
 </script>
 
