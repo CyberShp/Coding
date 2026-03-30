@@ -234,7 +234,7 @@
                 >{{ arr.site }}</el-tag>
               </div>
               <div class="array-card-bottom">
-                <span class="agent-indicator" :class="{ online: arr.agent_running }">
+                <span class="agent-indicator" :class="{ online: arr.agent_healthy, degraded: arr.agent_running && !arr.agent_healthy }">
                   <span class="agent-dot" />
                   Agent
                 </span>
@@ -424,7 +424,7 @@ const filteredAlertErrorCount = computed(() => {
 const filteredTotalCount = computed(() => filteredArrays.value.length)
 
 const onlineAgentCount = computed(() =>
-  filteredArrays.value.filter(a => a.agent_running).length,
+  filteredArrays.value.filter(a => a.agent_healthy).length,
 )
 
 const filteredConnectedCount = computed(() =>
@@ -461,8 +461,8 @@ const realAnomalyPending = computed(() =>
 
 const collectionFailureCount = computed(() =>
   filteredArrays.value.filter(a =>
-    (a.agent_deployed && !a.agent_running && a.state === 'connected') ||
-    a.state !== 'connected',
+    (a.agent_deployed && !a.agent_healthy && a.state === 'connected') ||
+    (a.state !== 'connected' && a.state !== 'degraded'),
   ).length,
 )
 
@@ -758,6 +758,8 @@ async function manualRefresh() {
 onMounted(() => {
   loadData()
   refreshTimer = setInterval(silentRefresh, 30000)
+  // Connect status WebSocket for real-time updates
+  arrayStore.connectStatusWebSocket()
 })
 
 onUnmounted(() => {
@@ -769,6 +771,7 @@ onUnmounted(() => {
     clearInterval(refreshTimer)
     refreshTimer = null
   }
+  arrayStore.disconnectStatusWebSocket()
 })
 </script>
 
