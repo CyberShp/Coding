@@ -7,7 +7,7 @@ from datetime import datetime
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import select, text
+from sqlalchemy import delete, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..db.database import get_db
@@ -134,64 +134,56 @@ async def sync_cards(db: AsyncSession = Depends(get_db)):
                 continue
             cards_data = _parse_card_output(output)
 
+            # Deduplicate by board_id AND card_no within this sync batch
             seen_board_ids = set()
-            batch_count = 0
+            seen_card_nos = set()
+            unique_cards = []
             for card_data in cards_data:
                 board_id = card_data.get("board_id", "")
                 card_no = card_data.get("card_no", "")
-
-                # Deduplicate by board_id within this sync batch
+                if board_id and board_id in seen_board_ids:
+                    continue
+                if card_no and card_no in seen_card_nos:
+                    continue
                 if board_id:
-                    if board_id in seen_board_ids:
-                        continue
                     seen_board_ids.add(board_id)
+                if card_no:
+                    seen_card_nos.add(card_no)
+                unique_cards.append(card_data)
 
-                # Primary lookup by (array_id, board_id) when board_id present
-                existing_card = None
-                if board_id:
-                    result_q = await db.execute(
-                        select(CardInventoryModel).where(
-                            CardInventoryModel.array_id == array_id,
-                            CardInventoryModel.board_id == board_id,
-                        )
-                    )
-                    existing_card = result_q.scalar_one_or_none()
+            # Delete-then-insert: avoids UNIQUE constraint violations
+            # when cards swap positions (card_no changes between syncs).
+            await db.execute(
+                delete(CardInventoryModel).where(
+                    CardInventoryModel.array_id == array_id
+                )
+            )
 
-                # Fallback to (array_id, card_no)
-                if not existing_card and card_no:
-                    result_q = await db.execute(
-                        select(CardInventoryModel).where(
-                            CardInventoryModel.array_id == array_id,
-                            CardInventoryModel.card_no == card_no,
-                        )
-                    )
-                    existing_card = result_q.scalar_one_or_none()
-
-                now = datetime.now()
-                if existing_card:
-                    existing_card.card_no = card_no
-                    existing_card.board_id = board_id
-                    existing_card.health_state = card_data.get("health_state", "")
-                    existing_card.running_state = card_data.get("running_state", "")
-                    existing_card.model = card_data.get("model", "")
-                    existing_card.raw_fields = json.dumps(card_data.get("raw_fields", {}))
-                    existing_card.last_updated = now
-                else:
-                    db.add(CardInventoryModel(
-                        array_id=array_id,
-                        card_no=card_no,
-                        board_id=board_id,
-                        health_state=card_data.get("health_state", ""),
-                        running_state=card_data.get("running_state", ""),
-                        model=card_data.get("model", ""),
-                        raw_fields=json.dumps(card_data.get("raw_fields", {})),
-                        last_updated=now,
-                    ))
+            now = datetime.now()
+            batch_count = 0
+            for card_data in unique_cards:
+                db.add(CardInventoryModel(
+                    array_id=array_id,
+                    card_no=card_data.get("card_no", ""),
+                    board_id=card_data.get("board_id", ""),
+                    health_state=card_data.get("health_state", ""),
+                    running_state=card_data.get("running_state", ""),
+                    model=card_data.get("model", ""),
+                    raw_fields=json.dumps(card_data.get("raw_fields", {})),
+                    last_updated=now,
+                ))
                 batch_count += 1
 
             await db.commit()
             synced += batch_count
             synced_arrays.append(array_name)
+
+            # Record heartbeat so the UI shows the array as healthy
+            try:
+                from ..core.runtime_status import record_heartbeat
+                record_heartbeat(array_id, source="card_sync")
+            except Exception as hb_err:
+                logger.debug("Failed to record heartbeat for %s: %s", array_name, hb_err)
         except Exception as e:
             await db.rollback()
             errors.append(f"{array_name} ({array_host}): {str(e)}")
