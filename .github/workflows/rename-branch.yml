@@ -5,6 +5,9 @@ name: Rename Branch
 # Trigger: manually from GitHub UI (Actions tab → Rename Branch → Run workflow)
 
 on:
+  push:
+    branches:
+      - 'copilot/improve-coverage-and-consistency-tests'
   workflow_dispatch:
     inputs:
       confirm:
@@ -18,7 +21,7 @@ permissions:
 jobs:
   rename:
     runs-on: ubuntu-latest
-    if: github.event.inputs.confirm == 'yes'
+    if: github.event_name == 'push' || github.event.inputs.confirm == 'yes'
     steps:
       - name: Create new branch from current SHA
         uses: actions/github-script@v7
