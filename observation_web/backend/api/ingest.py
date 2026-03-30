@@ -8,6 +8,7 @@ Supports two data types:
 
 import json
 import logging
+import threading
 from collections import deque
 from datetime import datetime
 from typing import Any, Dict, List, Optional
@@ -49,11 +50,13 @@ class IngestPayload(BaseModel):
 
 # ── Source IP → array_id mapping for backward compatibility ──────────────
 _ip_to_array_id: Dict[str, str] = {}
+_ip_mapping_lock = threading.Lock()
 
 
 def register_ip_array_mapping(source_ip: str, array_id: str):
     """Register a mapping from source_ip to array_id for ingest resolution."""
-    _ip_to_array_id[source_ip] = array_id
+    with _ip_mapping_lock:
+        _ip_to_array_id[source_ip] = array_id
 
 
 def _resolve_array_id(payload_array_id: Optional[str], source_ip: str) -> Optional[str]:
@@ -64,7 +67,8 @@ def _resolve_array_id(payload_array_id: Optional[str], source_ip: str) -> Option
     if payload_array_id and not payload_array_id.startswith("push_"):
         return payload_array_id
     # Fallback: controlled mapping
-    mapped = _ip_to_array_id.get(source_ip)
+    with _ip_mapping_lock:
+        mapped = _ip_to_array_id.get(source_ip)
     if mapped:
         return mapped
     return None

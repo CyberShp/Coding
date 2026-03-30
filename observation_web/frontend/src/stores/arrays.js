@@ -191,7 +191,7 @@ export const useArrayStore = defineStore('arrays', () => {
       console.warn('Status WebSocket max reconnect attempts reached')
       return
     }
-    const delay = Math.min(BASE_STATUS_RECONNECT_DELAY * Math.pow(2, statusReconnectAttempts), 30000)
+    const delay = Math.min(BASE_STATUS_RECONNECT_DELAY * (2 ** statusReconnectAttempts), 30000)
     statusReconnectAttempts++
     statusReconnectTimer = setTimeout(connectStatusWebSocket, delay)
   }

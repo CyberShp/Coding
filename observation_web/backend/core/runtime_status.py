@@ -9,6 +9,7 @@ MUST use ``build_runtime_status`` instead of assembling status independently.
 """
 
 import logging
+import threading
 import time
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
@@ -21,14 +22,16 @@ logger = logging.getLogger(__name__)
 HEALTHY_WINDOW_SECONDS = 120  # heartbeat within this window → healthy
 DEGRADED_WINDOW_SECONDS = 300  # heartbeat within this but > HEALTHY → degraded
 
-# ── Status version counter (monotonically increasing) ────────────────────
+# ── Status version counter (monotonically increasing, thread-safe) ───────
 _status_version_counter = 0
+_version_lock = threading.Lock()
 
 
 def _next_version() -> int:
     global _status_version_counter
-    _status_version_counter += 1
-    return _status_version_counter
+    with _version_lock:
+        _status_version_counter += 1
+        return _status_version_counter
 
 
 def build_runtime_status(
