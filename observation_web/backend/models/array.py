@@ -18,6 +18,7 @@ class ConnectionState(str, Enum):
     DISCONNECTED = "disconnected"
     CONNECTING = "connecting"
     CONNECTED = "connected"
+    DEGRADED = "degraded"
     ERROR = "error"
 
 
@@ -161,9 +162,15 @@ class ArrayStatus(BaseModel):
     name: str
     host: str
     state: ConnectionState = ConnectionState.DISCONNECTED
+    transport_connected: bool = False
     last_error: str = ""
     agent_deployed: bool = False
     agent_running: bool = False
+    agent_healthy: bool = False
+    collect_status: str = ""
+    running_source: str = "none"
+    running_confidence: str = "low"
+    health_source: str = "none"
     has_saved_password: bool = False
     last_refresh: Optional[datetime] = None
     tag_id: Optional[int] = None
@@ -179,6 +186,16 @@ class ArrayStatus(BaseModel):
     enrollment_status: str = "draft"
     connection_mode: str = "ssh_only"
     last_heartbeat_at: Optional[datetime] = None
+    # Agent detection diagnostics
+    service_active: bool = False
+    service_substate: str = ""
+    main_pid: Optional[int] = None
+    pidfile_present: bool = False
+    pidfile_pid: Optional[int] = None
+    pidfile_stale: bool = False
+    matched_process_cmdline: str = ""
+    status_version: Optional[int] = None
+    updated_at: Optional[datetime] = None
 
 
 class Array(ArrayBase):
