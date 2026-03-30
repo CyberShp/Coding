@@ -117,6 +117,7 @@ class TestPidFilePresence:
             "systemctl": (1, "", ""),              # systemd not running
             f"cat {AGENT_PID_FILE}": (0, "9999\n", ""),
             "kill -0": (0, "alive", ""),
+            "/proc/9999/cmdline": (0, "python -m observation_points", ""),
         })
         assert deployer.check_running() is True
 
@@ -135,11 +136,13 @@ class TestPidStale:
 
     def test_stale_pid_falls_through_to_pgrep(self):
         deployer, conn = _make_deployer()
+        deploy_path = deployer.config.remote.agent_deploy_path
         conn.execute.side_effect = _cmd_router({
             "systemctl": (1, "", ""),
             f"cat {AGENT_PID_FILE}": (0, "9999\n", ""),
             "kill -0": (0, "", ""),                 # process not alive
-            "pgrep": (0, "12345\n", ""),
+            "/proc/": (1, "", ""),                  # cmdline not found
+            "pgrep": (0, f"12345 python -m {deploy_path}/observation_points\n", ""),
         })
         assert deployer.check_running() is True
 
@@ -159,10 +162,11 @@ class TestPgrepFallback:
 
     def test_pgrep_hit(self):
         deployer, conn = _make_deployer()
+        deploy_path = deployer.config.remote.agent_deploy_path
         conn.execute.side_effect = _cmd_router({
             "systemctl": (1, "", ""),
             f"cat {AGENT_PID_FILE}": (1, "", ""),
-            "pgrep": (0, "7777\n", ""),
+            "pgrep": (0, f"7777 python -m {deploy_path}/observation_points\n", ""),
         })
         assert deployer.check_running() is True
 
@@ -192,20 +196,22 @@ class TestRunningStateMatrix:
 
     @staticmethod
     def _setup(deployer, conn, systemd_active, pid_state, pgrep_hit):
-        """Configure mock for a specific state combination."""
+        """Configure mock for a specific state combination.
+
+        Updated for strict detection: systemctl show returns multi-line
+        props, /proc/<pid>/cmdline is checked, pgrep returns pid+cmdline.
+        """
+        deploy_path = deployer.config.remote.agent_deploy_path
 
         def execute_side_effect(cmd, *args, **kwargs):
-            # systemd is-active
-            if "is-active" in cmd:
-                if systemd_active:
-                    return (0, "active\n", "")
-                return (1, "inactive\n", "")
             # systemd availability
             if "systemctl" in cmd and "/run/systemd/system" in cmd:
                 return (0, "", "")  # systemd is available
-            # systemd show MainPID
-            if "MainPID" in cmd:
-                return (0, "5555\n", "") if systemd_active else (0, "0\n", "")
+            # systemd show (strict: multi-property)
+            if "systemctl show" in cmd:
+                if systemd_active:
+                    return (0, "ActiveState=active\nSubState=running\nMainPID=5555\n", "")
+                return (0, "ActiveState=inactive\nSubState=dead\nMainPID=0\n", "")
             # PID file read
             if f"cat {AGENT_PID_FILE}" in cmd:
                 if pid_state == "alive":
@@ -213,19 +219,31 @@ class TestRunningStateMatrix:
                 elif pid_state == "stale":
                     return (0, "9999\n", "")
                 return (1, "", "No such file")
-            # Process alive check
+            # Process alive check (kill -0)
             if "kill -0" in cmd:
-                if pid_state == "alive":
+                if systemd_active and "5555" in cmd:
+                    return (0, "alive", "")
+                if pid_state == "alive" and "9999" in cmd:
                     return (0, "alive", "")
                 return (0, "", "")  # not alive
-            # pgrep
+            # /proc/<pid>/cmdline — return matching agent cmdline for alive PIDs
+            if "/proc/" in cmd and "cmdline" in cmd:
+                if systemd_active and "/proc/5555/" in cmd:
+                    return (0, f"python -m observation_points -c /etc/config.json", "")
+                if pid_state == "alive" and "/proc/9999/" in cmd:
+                    return (0, f"python -m observation_points -c /etc/config.json", "")
+                return (1, "", "No such file")
+            # pgrep (strict: returns pid + cmdline)
             if "pgrep" in cmd:
                 if pgrep_hit:
-                    return (0, "12345\n", "")
+                    return (0, f"12345 python -m {deploy_path}/observation_points\n", "")
                 return (1, "", "")
             # deploy check
             if "test -d" in cmd:
                 return (0, "deployed", "")
+            # uptime (ps -o etime)
+            if "ps -o etime" in cmd:
+                return (0, "1:23:45", "")
             return (0, "", "")
 
         conn.execute.side_effect = execute_side_effect

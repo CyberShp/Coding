@@ -31,6 +31,7 @@ _metrics_store: Dict[str, deque] = {}
 class IngestPayload(BaseModel):
     """Payload from agent push"""
     type: str  # "alert" or "metrics"
+    array_id: Optional[str] = None  # Real array_id — required for alert ingestion
     observer_name: Optional[str] = None
     level: Optional[str] = None
     message: Optional[str] = None
@@ -101,12 +102,38 @@ async def ingest_batch(
 
 
 async def _handle_alert(payload: IngestPayload, source_ip: str, db: AsyncSession):
-    """Process an incoming alert from agent push"""
+    """Process an incoming alert from agent push.
+
+    The payload MUST carry a real ``array_id``.  If it is missing we
+    attempt an IP → array_id mapping lookup.  If that also fails we
+    reject the request — we never generate ``push_xxx`` pseudo IDs.
+    """
     from ..core.alert_store import get_alert_store
     from ..models.alert import AlertCreate, AlertLevel
     from .websocket import broadcast_alert
+    from ..core.runtime_status import (
+        resolve_array_id_by_ip,
+        record_heartbeat,
+        on_recovery_event,
+    )
     
     try:
+        # --- Resolve array_id ---
+        real_array_id = payload.array_id
+        if not real_array_id:
+            real_array_id = resolve_array_id_by_ip(source_ip)
+        if not real_array_id:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Missing array_id in payload and no IP mapping for {source_ip}",
+            )
+        # Reject any pseudo ID pattern
+        if real_array_id.startswith("push_"):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Rejected pseudo array_id '{real_array_id}'; provide a real array_id",
+            )
+
         level_str = (payload.level or "info").lower()
         level = AlertLevel(level_str) if level_str in [l.value for l in AlertLevel] else AlertLevel.INFO
         
@@ -120,7 +147,7 @@ async def _handle_alert(payload: IngestPayload, source_ip: str, db: AsyncSession
                 pass
         
         alert_create = AlertCreate(
-            array_id=f"push_{source_ip}",  # Use source IP as array identifier
+            array_id=real_array_id,
             observer_name=payload.observer_name or "unknown",
             level=level,
             message=payload.message or "",
@@ -131,6 +158,9 @@ async def _handle_alert(payload: IngestPayload, source_ip: str, db: AsyncSession
         alert_store = get_alert_store()
         await alert_store.create_alert(db, alert_create)
         
+        # Record heartbeat for health tracking
+        record_heartbeat(real_array_id, source="ingest")
+
         # Broadcast via WebSocket
         await broadcast_alert({
             'array_id': alert_create.array_id,
@@ -141,8 +171,10 @@ async def _handle_alert(payload: IngestPayload, source_ip: str, db: AsyncSession
             'source': 'push',
         })
         
-        return {"ok": True, "message": "Alert ingested"}
+        return {"ok": True, "message": "Alert ingested", "array_id": real_array_id}
         
+    except HTTPException:
+        raise
     except Exception as e:
         sys_error("ingest", f"Failed to process pushed alert from {source_ip}", {"error": str(e)})
         raise HTTPException(status_code=500, detail=str(e))
@@ -150,21 +182,34 @@ async def _handle_alert(payload: IngestPayload, source_ip: str, db: AsyncSession
 
 async def _handle_metrics(payload: IngestPayload, source_ip: str):
     """Process incoming metrics from agent push"""
+    from ..core.runtime_status import resolve_array_id_by_ip, record_heartbeat
+
     try:
+        # Resolve real array_id (metrics can fall back to source_ip key)
+        real_array_id = payload.array_id
+        if not real_array_id:
+            real_array_id = resolve_array_id_by_ip(source_ip)
+        store_key = real_array_id or source_ip
+
         # Build metrics record
         record = {
             "ts": payload.ts or datetime.now().isoformat(),
             "source_ip": source_ip,
+            "array_id": store_key,
         }
         
         # Extract known metrics fields
-        extra = payload.dict(exclude={"type", "ts"}, exclude_none=True)
+        extra = payload.dict(exclude={"type", "ts", "array_id"}, exclude_none=True)
         record.update(extra)
         
         # Store in memory
-        if source_ip not in _metrics_store:
-            _metrics_store[source_ip] = deque(maxlen=MAX_METRICS_PER_ARRAY)
-        _metrics_store[source_ip].append(record)
+        if store_key not in _metrics_store:
+            _metrics_store[store_key] = deque(maxlen=MAX_METRICS_PER_ARRAY)
+        _metrics_store[store_key].append(record)
+
+        # Record heartbeat for health tracking
+        if real_array_id:
+            record_heartbeat(real_array_id, source="ingest")
         
         return {"ok": True}
         

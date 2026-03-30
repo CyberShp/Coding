@@ -32,14 +32,14 @@ class TestIngestBranches:
     """Branch coverage for /ingest and /ingest/batch endpoints."""
 
     async def test_ingest_alert_success(self, app_client):
-        """Type=alert ingestion succeeds."""
-        # Mock the alert_store to avoid SQLite concurrency issues in testing
+        """Type=alert ingestion succeeds (with real array_id)."""
         mock_store = AsyncMock()
         mock_store.create_alert = AsyncMock()
         with patch("backend.api.websocket.broadcast_alert", new=AsyncMock()), \
              patch("backend.core.alert_store.get_alert_store", return_value=mock_store):
             payload = {
                 "type": "alert",
+                "array_id": "arr-test-001",
                 "observer_name": "cpu_usage",
                 "level": "warning",
                 "message": "CPU high",
@@ -50,6 +50,7 @@ class TestIngestBranches:
         assert resp.status_code == 200
         data = resp.json()
         assert data["ok"] is True
+        assert data["array_id"] == "arr-test-001"
 
     async def test_ingest_metrics_success(self, app_client):
         """Type=metrics ingestion succeeds."""
@@ -79,7 +80,7 @@ class TestIngestBranches:
         with patch("backend.api.websocket.broadcast_alert", new=AsyncMock()), \
              patch("backend.core.alert_store.get_alert_store", return_value=mock_store):
             batch = [
-                {"type": "alert", "observer_name": "disk", "level": "info", "message": "ok"},
+                {"type": "alert", "array_id": "arr-batch-001", "observer_name": "disk", "level": "info", "message": "ok"},
                 {"type": "metrics", "cpu0": 10.5},
             ]
             resp = await app_client.post("/api/ingest/batch", content=json.dumps(batch),
@@ -106,6 +107,7 @@ class TestIngestBranches:
              patch("backend.core.alert_store.get_alert_store", return_value=mock_store):
             payload = {
                 "type": "alert",
+                "array_id": "arr-test-002",
                 "observer_name": "test",
                 "level": "super_critical",
                 "message": "test",
@@ -119,7 +121,7 @@ class TestIngestBranches:
         mock_store.create_alert = AsyncMock()
         with patch("backend.api.websocket.broadcast_alert", new=AsyncMock()), \
              patch("backend.core.alert_store.get_alert_store", return_value=mock_store):
-            payload = {"type": "alert", "observer_name": "x", "level": "info", "message": "m"}
+            payload = {"type": "alert", "array_id": "arr-test-003", "observer_name": "x", "level": "info", "message": "m"}
             resp = await app_client.post("/api/ingest", json=payload)
         assert resp.status_code == 200
 
@@ -130,7 +132,7 @@ class TestIngestBranches:
         with patch("backend.api.websocket.broadcast_alert", new=AsyncMock()), \
              patch("backend.core.alert_store.get_alert_store", return_value=mock_store):
             payload = {
-                "type": "alert", "observer_name": "x", "level": "info",
+                "type": "alert", "array_id": "arr-test-004", "observer_name": "x", "level": "info",
                 "message": "m", "timestamp": "not-a-date",
             }
             resp = await app_client.post("/api/ingest", json=payload)
@@ -143,7 +145,7 @@ class TestIngestBranches:
         with patch("backend.api.websocket.broadcast_alert", new=AsyncMock()), \
              patch("backend.core.alert_store.get_alert_store", return_value=mock_store):
             batch = [
-                {"type": "alert", "observer_name": "ok", "level": "info", "message": "ok"},
+                {"type": "alert", "array_id": "arr-batch-002", "observer_name": "ok", "level": "info", "message": "ok"},
                 {"not_a_valid": "item"},  # Missing 'type' → will error
             ]
             resp = await app_client.post("/api/ingest/batch", content=json.dumps(batch),

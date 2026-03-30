@@ -71,6 +71,7 @@ class TestIngestAPI:
     async def test_ingest_alert(self, app_client):
         payload = {
             "type": "alert",
+            "array_id": "arr-misc-001",
             "observer_name": "cpu_usage",
             "level": "warning",
             "message": "CPU high",
@@ -106,6 +107,7 @@ class TestIngestAPI:
     async def test_ingest_invalid_level_defaults(self, app_client):
         payload = {
             "type": "alert",
+            "array_id": "arr-misc-002",
             "observer_name": "test",
             "level": "invalid_level",
             "message": "test",
