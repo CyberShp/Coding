@@ -166,7 +166,7 @@ def _recompute_collect_status(status_obj: ArrayStatus) -> None:
         # If there are error-level active issues, mark degraded
         has_errors = any(
             i.get("level") in ("error", "critical")
-            for i in status_obj.active_issues
+            for i in (status_obj.active_issues or [])
         )
         status_obj.collect_status = "degraded" if has_errors else "ok"
     else:

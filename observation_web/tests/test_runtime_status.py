@@ -183,7 +183,7 @@ class TestSystemdMainPidInvalid:
         conn.execute.side_effect = _cmd_router({
             "/run/systemd/system": (0, "", ""),
             "systemctl show": (0, "ActiveState=active\nSubState=running\nMainPID=9999\n", ""),
-            "kill -0": (0, "", ""),  # not alive (no "alive" in output)
+            "kill -0": (0, "", ""),  # process dead (no "alive" marker in output)
             f"cat {AGENT_PID_FILE}": (1, "", ""),
             "pgrep": (1, "", ""),
         })
@@ -214,7 +214,7 @@ class TestStalePidFile:
         conn.execute.side_effect = _cmd_router({
             "systemctl": (1, "", ""),
             f"cat {AGENT_PID_FILE}": (0, "8888\n", ""),
-            "kill -0": (0, "", ""),  # not alive
+            "kill -0": (0, "", ""),  # process dead (no "alive" marker)
             "/proc/": (1, "", ""),
             "pgrep": (1, "", ""),
         })

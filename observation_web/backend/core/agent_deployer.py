@@ -476,8 +476,9 @@ class AgentDeployer:
         # Layer 3: pgrep fallback — restricted to deploy path, low confidence
         # ------------------------------------------------------------------
         deploy_path = self.config.remote.agent_deploy_path
+        safe_path = shlex.quote(deploy_path)
         exit_code, out, _ = self.conn.execute(
-            f"pgrep -af 'python.*{deploy_path}.*observation_points' 2>/dev/null | head -1"
+            f"pgrep -af 'python.*{safe_path}.*observation_points' 2>/dev/null | head -1"
         )
         if exit_code == 0 and out.strip():
             parts = out.strip().split(None, 1)
