@@ -182,8 +182,8 @@ async def sync_cards(db: AsyncSession = Depends(get_db)):
             try:
                 from ..core.runtime_status import record_heartbeat
                 record_heartbeat(array_id, source="card_sync")
-            except Exception:
-                pass
+            except Exception as hb_err:
+                logger.debug("Failed to record heartbeat for %s: %s", array_name, hb_err)
         except Exception as e:
             await db.rollback()
             errors.append(f"{array_name} ({array_host}): {str(e)}")
