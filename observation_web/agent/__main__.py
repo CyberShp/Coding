@@ -21,6 +21,7 @@ def setup_logging(log_level: str, log_file: Optional[str] = None):
     
     handlers = [logging.StreamHandler(sys.stdout)]
     if log_file:
+        Path(log_file).parent.mkdir(parents=True, exist_ok=True)
         handlers.append(logging.FileHandler(log_file, encoding='utf-8'))
     
     logging.basicConfig(
