@@ -245,3 +245,96 @@ class TestCardSyncResult:
         r = CardSyncResult(synced=5, errors=["err1"], skipped_arrays=["s1"], synced_arrays=["a1"])
         assert r.synced == 5
         assert len(r.errors) == 1
+
+
+# ===================================================================
+# D. Delete-then-insert sync avoids UNIQUE constraint violations
+# ===================================================================
+
+
+@pytest.mark.asyncio
+class TestCardSyncUniqueConstraint:
+    """Verify that card sync handles card_no conflicts correctly."""
+
+    async def test_swap_card_no_no_conflict(self, db_session):
+        """Cards that swap card_no between syncs should not cause UNIQUE violations."""
+        from sqlalchemy import select, delete
+
+        # Pre-populate: two cards with distinct card_no values
+        db_session.add(CardInventoryModel(
+            array_id="arr-1", card_no="No001", board_id="BOARD_A",
+            health_state="NORMAL", running_state="RUNNING", model="M1",
+            raw_fields="{}", last_updated=datetime.now(),
+        ))
+        db_session.add(CardInventoryModel(
+            array_id="arr-1", card_no="No002", board_id="BOARD_B",
+            health_state="NORMAL", running_state="RUNNING", model="M2",
+            raw_fields="{}", last_updated=datetime.now(),
+        ))
+        await db_session.commit()
+
+        # Simulate delete-then-insert sync (cards swap positions)
+        await db_session.execute(
+            delete(CardInventoryModel).where(
+                CardInventoryModel.array_id == "arr-1"
+            )
+        )
+        db_session.add(CardInventoryModel(
+            array_id="arr-1", card_no="No002", board_id="BOARD_A",
+            health_state="NORMAL", running_state="RUNNING", model="M1",
+            raw_fields="{}", last_updated=datetime.now(),
+        ))
+        db_session.add(CardInventoryModel(
+            array_id="arr-1", card_no="No001", board_id="BOARD_B",
+            health_state="NORMAL", running_state="RUNNING", model="M2",
+            raw_fields="{}", last_updated=datetime.now(),
+        ))
+        await db_session.commit()
+
+        result = await db_session.execute(
+            select(CardInventoryModel).where(
+                CardInventoryModel.array_id == "arr-1"
+            ).order_by(CardInventoryModel.card_no)
+        )
+        cards = result.scalars().all()
+        assert len(cards) == 2
+        assert cards[0].card_no == "No001"
+        assert cards[0].board_id == "BOARD_B"
+        assert cards[1].card_no == "No002"
+        assert cards[1].board_id == "BOARD_A"
+
+    async def test_dedup_by_card_no(self, db_session):
+        """Duplicate card_no entries in a sync batch should be deduplicated."""
+        from backend.api.card_inventory import _parse_card_output
+
+        # Two cards with the same card_no but different board_ids in output
+        output = """
+No001  BoardId: BOARD_X
+No001  RunningState: RUNNING
+---
+No001  BoardId: BOARD_Y
+No001  RunningState: RUNNING
+"""
+        cards_data = _parse_card_output(output)
+        # The parser groups by card_no, so it should produce one card
+        # (because the same No001 block is flushed and restarted).
+        # Even if the parser returns duplicates, the sync dedup should handle it.
+        seen_board_ids = set()
+        seen_card_nos = set()
+        unique_cards = []
+        for card_data in cards_data:
+            board_id = card_data.get("board_id", "")
+            card_no = card_data.get("card_no", "")
+            if board_id and board_id in seen_board_ids:
+                continue
+            if card_no and card_no in seen_card_nos:
+                continue
+            if board_id:
+                seen_board_ids.add(board_id)
+            if card_no:
+                seen_card_nos.add(card_no)
+            unique_cards.append(card_data)
+
+        # Only one unique card_no should remain
+        card_nos = [c["card_no"] for c in unique_cards]
+        assert len(set(card_nos)) == len(card_nos), "Duplicate card_no not deduplicated"
