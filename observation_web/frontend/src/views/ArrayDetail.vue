@@ -537,13 +537,15 @@ const unackedCount = computed(() => recentAlerts.value.filter(a => !a.is_acked).
 
 // ───── Zone 1: Status computed values ─────
 const agentDotClass = computed(() => {
-  if (array.value?.agent_running) return 'dot-success'
+  if (array.value?.agent_running && array.value?.agent_healthy) return 'dot-success'
+  if (array.value?.agent_running && !array.value?.agent_healthy) return 'dot-warning'
   if (array.value?.agent_deployed) return 'dot-warning'
   return 'dot-info'
 })
 
 const agentStatusText = computed(() => {
-  if (array.value?.agent_running) return '运行中'
+  if (array.value?.agent_running && array.value?.agent_healthy) return '运行中（健康）'
+  if (array.value?.agent_running && !array.value?.agent_healthy) return '运行中（无心跳/异常）'
   if (array.value?.agent_deployed) return '已部署未运行'
   return '未部署'
 })
@@ -1032,6 +1034,8 @@ onMounted(() => {
   loadTags()
   loadArray()
   refreshTimer = setInterval(silentRefresh, 30000)
+  // Connect status WebSocket — real-time updates without manual refresh
+  arrayStore.connectStatusWebSocket()
 })
 
 onUnmounted(() => {
@@ -1043,7 +1047,19 @@ onUnmounted(() => {
     clearInterval(refreshTimer)
     refreshTimer = null
   }
+  arrayStore.disconnectStatusWebSocket()
 })
+
+// Watch for status WebSocket updates to currentArray
+watch(
+  () => arrayStore.currentArray,
+  (newVal) => {
+    if (newVal && newVal.array_id === route.params.id) {
+      array.value = { ...array.value, ...newVal }
+    }
+  },
+  { deep: true },
+)
 </script>
 
 <style scoped>

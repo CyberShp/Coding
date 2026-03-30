@@ -209,41 +209,48 @@ class TestUnifiedRunningState:
         return AgentDeployer(mock_conn, config), mock_conn
 
     def test_running_when_systemd_active_but_pidfile_missing(self):
-        """systemd reports active → running=true even if PID file is absent."""
+        """systemd reports active + MainPID alive + cmdline matches → running=true."""
         deployer, conn = self._make_deployer()
 
         def execute_side_effect(cmd, **kw):
-            if "systemctl" in cmd and "is-active" in cmd:
-                return (0, "active\n", "")
             if "systemctl show" in cmd:
-                return (0, "4567\n", "")
-            if "test -d /run/systemd/system" in cmd or "command -v systemctl" in cmd:
+                return (0, "ActiveState=active\nSubState=running\nMainPID=4567\n", "")
+            if "command -v systemctl" in cmd or "test -d /run/systemd/system" in cmd:
                 return (0, "", "")
+            if "kill -0 4567" in cmd:
+                return (0, "alive", "")
+            if "/proc/4567/cmdline" in cmd:
+                return (0, "python3 -m observation_points --config /etc/cfg.json", "")
             if AGENT_PID_FILE in cmd and "cat" in cmd:
                 return (1, "", "No such file")
+            if "pgrep" in cmd:
+                return (1, "", "")
             return (0, "", "")
 
         conn.execute.side_effect = execute_side_effect
         status = deployer.get_agent_status()
         assert status["running"] is True
         assert status["running_source"] == "systemd"
+        assert status["running_confidence"] == "high"
         # check_running must agree
         conn.execute.side_effect = execute_side_effect
         assert deployer.check_running() is True
 
     def test_running_when_pidfile_missing_but_pgrep_hits(self):
-        """PID file missing, systemd inactive, but pgrep finds the process."""
+        """PID file missing, systemd inactive, pgrep finds process + cmdline matches."""
         deployer, conn = self._make_deployer()
 
         def execute_side_effect(cmd, **kw):
-            if "systemctl" in cmd and "is-active" in cmd:
-                return (3, "inactive\n", "")
-            if "test -d /run/systemd/system" in cmd or "command -v systemctl" in cmd:
+            if "systemctl show" in cmd:
+                return (0, "ActiveState=inactive\nSubState=dead\nMainPID=0\n", "")
+            if "command -v systemctl" in cmd or "test -d /run/systemd/system" in cmd:
                 return (0, "", "")
             if AGENT_PID_FILE in cmd and "cat" in cmd:
                 return (1, "", "No such file")
             if "pgrep" in cmd:
                 return (0, "9999\n", "")
+            if "/proc/9999/cmdline" in cmd:
+                return (0, f"python3 {deployer.config.remote.agent_deploy_path}/__main__.py", "")
             return (0, "", "")
 
         conn.execute.side_effect = execute_side_effect
@@ -284,26 +291,36 @@ class TestUnifiedRunningState:
     def test_check_running_and_get_agent_status_are_consistent(
         self, scenario, systemd_active, pid_alive, pgrep_hit, expected_running
     ):
-        """Parameterised: check_running() must equal get_agent_status()['running']."""
+        """Parameterised: check_running() must equal get_agent_status()['running'].
+
+        All 'alive' scenarios include valid cmdline matches for the stricter detection.
+        """
         deployer, conn = self._make_deployer()
+        deploy_path = deployer.config.remote.agent_deploy_path
 
         def execute_side_effect(cmd, **kw):
             if "command -v systemctl" in cmd or "test -d /run/systemd/system" in cmd:
                 return (0, "", "")
-            if "systemctl" in cmd and "is-active" in cmd:
-                if systemd_active:
-                    return (0, "active\n", "")
-                return (3, "inactive\n", "")
             if "systemctl show" in cmd:
-                return (0, "1234\n", "") if systemd_active else (1, "", "")
+                if systemd_active:
+                    return (0, "ActiveState=active\nSubState=running\nMainPID=1234\n", "")
+                return (0, "ActiveState=inactive\nSubState=dead\nMainPID=0\n", "")
             if AGENT_PID_FILE in cmd and "cat" in cmd:
                 if pid_alive:
                     return (0, "5678\n", "")
                 return (1, "", "")
             if "kill -0" in cmd:
-                if pid_alive:
+                # Check which PID is being checked
+                if systemd_active and "1234" in cmd:
+                    return (0, "alive\n", "")
+                if pid_alive and "5678" in cmd:
+                    return (0, "alive\n", "")
+                if pgrep_hit and "9999" in cmd:
                     return (0, "alive\n", "")
                 return (1, "", "")
+            if "/proc/" in cmd and "cmdline" in cmd:
+                # Return matching cmdline for all valid PIDs
+                return (0, f"python3 -m observation_points --path {deploy_path}", "")
             if "pgrep" in cmd:
                 if pgrep_hit:
                     return (0, "9999\n", "")
