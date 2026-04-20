@@ -540,11 +540,12 @@ const heartbeatAgeMs = ref(0)
 let heartbeatTimer = null
 
 function updateHeartbeatAge() {
-  if (!array.value?.last_refresh) {
+  const ts = array.value?.last_refresh || array.value?.last_heartbeat_at
+  if (!ts) {
     heartbeatAgeMs.value = Infinity
     return
   }
-  heartbeatAgeMs.value = Date.now() - new Date(array.value.last_refresh).getTime()
+  heartbeatAgeMs.value = Date.now() - new Date(ts).getTime()
 }
 
 const heartbeatState = computed(() => {
@@ -642,8 +643,8 @@ const observerList = computed(() => {
   if (Array.isArray(status)) return status
   return Object.entries(status).map(([name, info]) => ({
     name,
-    last_run: info.last_run || info.last_executed,
-    last_success: info.last_success,
+    last_run: info.last_run || info.last_executed || info.last_active_ts,
+    last_success: info.last_success || (info.status === 'ok' ? info.last_active_ts : null),
     last_error: info.last_error || info.error,
     avg_duration: info.avg_duration ?? info.duration,
     healthy: info.healthy ?? (info.status === 'ok' || info.status === 'healthy'),
@@ -1163,13 +1164,13 @@ watch(
   display: flex;
   align-items: center;
   gap: 10px;
-  max-height: 48px;
   padding: 8px 16px;
   background: #fafafa;
   border-bottom: 1px solid #ebeef5;
   border-radius: 6px;
   font-size: 13px;
   flex-wrap: wrap;
+  min-height: 40px;
 }
 
 .strip-name {
