@@ -79,7 +79,13 @@ export const useAlertStore = defineStore('alerts', () => {
   }
 
   function getAITranslation(alertId) {
-    return aiTranslations.value.get(alertId) || null
+    const val = aiTranslations.value.get(alertId)
+    if (val === undefined) return null
+    // LRU touch: delete + re-insert moves key to end of Map iteration order
+    const m = aiTranslations.value
+    m.delete(alertId)
+    m.set(alertId, val)
+    return val
   }
 
   // Critical event banner state
@@ -272,6 +278,8 @@ export const useAlertStore = defineStore('alerts', () => {
     reconnectTimer = setTimeout(connectWebSocket, delay)
   }
 
+  let intentionalDisconnect = false
+
   function connectWebSocket() {
     if (ws.value) return
 
@@ -283,17 +291,21 @@ export const useAlertStore = defineStore('alerts', () => {
     requestNotificationPermission()
 
     const wsUrl = `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/ws/alerts`
-    
+
     try {
-      ws.value = new WebSocket(wsUrl)
-      
-      ws.value.onopen = () => {
+      const socket = new WebSocket(wsUrl)
+      ws.value = socket
+
+      // All handlers are closure-scoped to THIS socket instance.
+      // If a stale socket fires onclose after a new one is already assigned
+      // to ws.value, the guard `socket !== ws.value` prevents clobbering.
+
+      socket.onopen = () => {
+        if (socket !== ws.value) return  // stale socket, ignore
         wsConnected.value = true
-        reconnectAttempts = 0  // Reset on successful connection
+        reconnectAttempts = 0
         console.log('WebSocket connected')
-        // Refresh recent alerts so list is correct after reconnect
         fetchRecentAlerts().catch(e => console.error('Fetch recent alerts on WS open failed:', e))
-        // Start heartbeat
         heartbeatTimer = setInterval(() => {
           if (ws.value && ws.value.readyState === WebSocket.OPEN) {
             ws.value.send(JSON.stringify({ type: 'ping' }))
@@ -301,10 +313,10 @@ export const useAlertStore = defineStore('alerts', () => {
         }, 30000)
       }
 
-      ws.value.onmessage = (event) => {
+      socket.onmessage = (event) => {
+        if (socket !== ws.value) return  // stale socket, ignore
         try {
           const data = JSON.parse(event.data)
-          
           if (data.type === 'alert') {
             handleNewAlert(data.data)
           }
@@ -313,14 +325,15 @@ export const useAlertStore = defineStore('alerts', () => {
         }
       }
 
-      ws.value.onclose = () => {
+      socket.onclose = () => {
+        if (socket !== ws.value) return  // stale socket — do NOT touch shared state
         wsConnected.value = false
         ws.value = null
         cleanupTimers()
         scheduleReconnect()
       }
 
-      ws.value.onerror = (error) => {
+      socket.onerror = (error) => {
         console.error('WebSocket error:', error)
       }
 
@@ -329,8 +342,6 @@ export const useAlertStore = defineStore('alerts', () => {
       scheduleReconnect()
     }
   }
-
-  let intentionalDisconnect = false
 
   function disconnectWebSocket() {
     cleanupTimers()

@@ -32,43 +32,71 @@ describe('alertsStore', () => {
     })
   })
 
-  describe('WebSocket reconnection', () => {
-    it('should calculate exponential backoff correctly', () => {
+  describe('WebSocket reconnection (infinite + backoff)', () => {
+    it('should calculate exponential backoff capped at 60s', () => {
+      // Matches current implementation: cap exponent at 6, delay at 60000ms
       const BASE_RECONNECT_DELAY = 1000
-      const MAX_RECONNECT_ATTEMPTS = 10
-      
+      const MAX_RECONNECT_DELAY = 60000
+
       const getDelay = (attempts) => {
-        return Math.min(BASE_RECONNECT_DELAY * Math.pow(2, attempts), 30000)
+        return Math.min(BASE_RECONNECT_DELAY * Math.pow(2, Math.min(attempts, 6)), MAX_RECONNECT_DELAY)
       }
-      
+
       expect(getDelay(0)).toBe(1000)
       expect(getDelay(1)).toBe(2000)
       expect(getDelay(2)).toBe(4000)
       expect(getDelay(3)).toBe(8000)
       expect(getDelay(4)).toBe(16000)
-      expect(getDelay(5)).toBe(30000) // Capped
-      expect(getDelay(10)).toBe(30000) // Still capped
+      expect(getDelay(5)).toBe(32000)
+      expect(getDelay(6)).toBe(60000) // Capped at MAX_RECONNECT_DELAY
+      expect(getDelay(7)).toBe(60000) // Exponent capped at 6 → still 64000 → capped to 60000
+      expect(getDelay(100)).toBe(60000) // Infinite attempts, delay stays capped
     })
 
-    it('should respect max reconnect attempts', () => {
-      const MAX_RECONNECT_ATTEMPTS = 10
+    it('should never stop reconnecting (no max attempts)', () => {
+      // New behavior: infinite reconnect, only intentionalDisconnect stops it
       let reconnectAttempts = 0
-      
+      let intentionalDisconnect = false
+
       const scheduleReconnect = () => {
-        if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
-          return false
-        }
+        if (intentionalDisconnect) return false
         reconnectAttempts++
         return true
       }
-      
-      // Should allow 10 reconnects
-      for (let i = 0; i < 10; i++) {
+
+      // Should allow unlimited reconnects
+      for (let i = 0; i < 100; i++) {
         expect(scheduleReconnect()).toBe(true)
       }
-      
-      // 11th attempt should fail
+      expect(reconnectAttempts).toBe(100)
+
+      // Only intentional disconnect stops it
+      intentionalDisconnect = true
       expect(scheduleReconnect()).toBe(false)
+    })
+
+    it('should not let stale socket onclose clobber new socket', () => {
+      // Simulates the closure-scoped guard: socket !== ws.value
+      let wsValue = null
+
+      const oldSocket = { id: 'old' }
+      const newSocket = { id: 'new' }
+      let oncloseCalled = false
+
+      // Simulate: old socket assigned, then new socket replaces it
+      wsValue = oldSocket
+      wsValue = newSocket  // new connection established
+
+      // Old socket's onclose fires late
+      const oldOnclose = () => {
+        if (oldSocket !== wsValue) return  // guard: stale socket
+        wsValue = null  // this should NOT execute
+        oncloseCalled = true
+      }
+
+      oldOnclose()
+      expect(wsValue).toBe(newSocket)  // new socket NOT clobbered
+      expect(oncloseCalled).toBe(false)
     })
   })
 

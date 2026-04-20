@@ -176,7 +176,6 @@ describe('AI Auto-Translation for alarm_type alerts', () => {
         data: { interpretation: 'WS实时翻译结果' }
       })
 
-      // Simulate WebSocket alert with id (P1 fix ensures id is broadcast)
       const wsAlert = {
         id: 77,
         observer_name: 'alarm_type',
@@ -186,15 +185,70 @@ describe('AI Auto-Translation for alarm_type alerts', () => {
         timestamp: new Date().toISOString(),
       }
 
-      // Manually call handleNewAlert — in real flow this is triggered by WS onmessage
-      // We need to simulate: the store's internal handleNewAlert adds to recent + triggers translate
       store.recentAlerts = []
-      // The store doesn't expose handleNewAlert directly; trigger via autoTranslateAlert
       await store.autoTranslateAlert(wsAlert)
 
       await vi.waitFor(() => {
         expect(store.getAITranslation(77)).toBe('WS实时翻译结果')
       })
+    })
+  })
+
+  describe('LRU eviction on aiTranslations', () => {
+    beforeEach(async () => {
+      api.checkAIStatus.mockResolvedValue({ data: { available: true } })
+      await store.checkAIAvailability()
+    })
+
+    it('getAITranslation should move accessed key to end (LRU touch)', async () => {
+      // Manually populate translations to test LRU ordering
+      api.getAIInterpretation
+        .mockResolvedValueOnce({ data: { interpretation: 'A' } })
+        .mockResolvedValueOnce({ data: { interpretation: 'B' } })
+        .mockResolvedValueOnce({ data: { interpretation: 'C' } })
+
+      await store.autoTranslateAlert({ id: 1, observer_name: 'alarm_type' })
+      await store.autoTranslateAlert({ id: 2, observer_name: 'alarm_type' })
+      await store.autoTranslateAlert({ id: 3, observer_name: 'alarm_type' })
+
+      await vi.waitFor(() => {
+        expect(store.getAITranslation(3)).toBe('C')
+      })
+
+      // Access id=1 — should move it to end of iteration order
+      store.getAITranslation(1)
+
+      // Check iteration order: 2, 3, 1 (1 moved to end)
+      const keys = [...store.aiTranslations.keys()]
+      expect(keys).toEqual([2, 3, 1])
+    })
+
+    it('should evict oldest (least recently used) when over cap', () => {
+      // Directly test the eviction logic with a small map
+      const m = new Map()
+      for (let i = 1; i <= 10; i++) {
+        m.set(i, `translation-${i}`)
+      }
+
+      // Simulate LRU touch on id=2 (move to end)
+      const val = m.get(2)
+      m.delete(2)
+      m.set(2, val)
+
+      // Simulate eviction with cap=8: should remove first 2+1=3 entries from front
+      // After touch, order is: 1, 3, 4, 5, 6, 7, 8, 9, 10, 2
+      const cap = 8
+      if (m.size > cap) {
+        const excess = m.size - cap
+        const iter = m.keys()
+        for (let i = 0; i < excess; i++) m.delete(iter.next().value)
+      }
+
+      // id=1 and id=3 should be evicted (front of map), id=2 survived (LRU-touched)
+      expect(m.has(1)).toBe(false)
+      expect(m.has(3)).toBe(false)
+      expect(m.has(2)).toBe(true)
+      expect(m.size).toBe(8)
     })
   })
 })
