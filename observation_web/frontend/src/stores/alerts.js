@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { ref, computed } from 'vue'
+import { ref, shallowRef, computed } from 'vue'
 import api from '../api'
 import { isCriticalAlert } from '../utils/alertTranslator'
 import { sendDesktopNotification, playAlertSound, requestNotificationPermission } from '../utils/notification'
@@ -12,7 +12,7 @@ export const useAlertStore = defineStore('alerts', () => {
   const recentAlerts = ref([])
   const stats = ref(null)
   const loading = ref(false)
-  const ws = ref(null)
+  const ws = shallowRef(null)  // shallowRef: WebSocket is a host object, never needs deep reactivity
   const wsConnected = ref(false)
 
   // AI auto-translation

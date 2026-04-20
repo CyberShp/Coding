@@ -1,207 +1,237 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
+import { useAlertStore } from '@/stores/alerts'
 
-describe('alertsStore', () => {
+// Mock api module
+vi.mock('@/api', () => ({
+  default: {
+    checkAIStatus: vi.fn().mockResolvedValue({ data: { available: false } }),
+    getAIInterpretation: vi.fn(),
+    getAlerts: vi.fn(),
+    getRecentAlerts: vi.fn().mockResolvedValue({ data: [] }),
+    getAlertStats: vi.fn(),
+  }
+}))
+
+// Mock notification utils
+vi.mock('@/utils/notification', () => ({
+  sendDesktopNotification: vi.fn(),
+  playAlertSound: vi.fn(),
+  requestNotificationPermission: vi.fn(),
+}))
+
+// Mock isCriticalAlert
+vi.mock('@/utils/alertTranslator', () => ({
+  isCriticalAlert: vi.fn(() => false),
+}))
+
+// ── WebSocket mock infrastructure ────────────────────────────
+class MockWebSocket {
+  static OPEN = 1
+  static CLOSED = 3
+  static instances = []
+
+  constructor(url) {
+    this.url = url
+    this.readyState = MockWebSocket.OPEN
+    this.onopen = null
+    this.onclose = null
+    this.onmessage = null
+    this.onerror = null
+    this._closed = false
+    MockWebSocket.instances.push(this)
+  }
+
+  send(data) {}
+
+  close() {
+    if (this._closed) return
+    this._closed = true
+    this.readyState = MockWebSocket.CLOSED
+    // Simulate async onclose (browser behavior)
+    if (this.onclose) {
+      setTimeout(() => this.onclose(), 0)
+    }
+  }
+
+  // Test helpers
+  simulateOpen() {
+    this.readyState = MockWebSocket.OPEN
+    if (this.onopen) this.onopen()
+  }
+
+  simulateClose() {
+    this.readyState = MockWebSocket.CLOSED
+    if (this.onclose) this.onclose()
+  }
+
+  simulateMessage(data) {
+    if (this.onmessage) this.onmessage({ data: JSON.stringify(data) })
+  }
+}
+
+describe('alertsStore (real store)', () => {
+  let store
+
   beforeEach(() => {
     setActivePinia(createPinia())
     vi.useFakeTimers()
+    MockWebSocket.instances = []
+    globalThis.WebSocket = MockWebSocket
+    store = useAlertStore()
   })
 
   afterEach(() => {
+    store.disconnectWebSocket()
     vi.useRealTimers()
     vi.clearAllMocks()
+    delete globalThis.WebSocket
   })
 
-  describe('state', () => {
+  describe('initial state', () => {
     it('should have correct initial state', () => {
-      const state = {
-        alerts: [],
-        recentAlerts: [],
-        stats: null,
-        loading: false,
-        wsConnected: false,
-        criticalEvents: [],
-      }
-      
-      expect(state.alerts).toEqual([])
-      expect(state.recentAlerts).toEqual([])
-      expect(state.stats).toBeNull()
-      expect(state.loading).toBe(false)
-      expect(state.wsConnected).toBe(false)
-      expect(state.criticalEvents).toEqual([])
+      expect(store.alerts).toEqual([])
+      expect(store.recentAlerts).toEqual([])
+      expect(store.stats).toBeNull()
+      expect(store.loading).toBe(false)
+      expect(store.wsConnected).toBe(false)
+      expect(store.criticalEvents).toEqual([])
     })
   })
 
-  describe('WebSocket reconnection (infinite + backoff)', () => {
-    it('should calculate exponential backoff capped at 60s', () => {
-      // Matches current implementation: cap exponent at 6, delay at 60000ms
-      const BASE_RECONNECT_DELAY = 1000
-      const MAX_RECONNECT_DELAY = 60000
+  describe('WebSocket lifecycle (real store)', () => {
+    it('connectWebSocket creates a WebSocket and sets wsConnected on open', () => {
+      store.connectWebSocket()
 
-      const getDelay = (attempts) => {
-        return Math.min(BASE_RECONNECT_DELAY * Math.pow(2, Math.min(attempts, 6)), MAX_RECONNECT_DELAY)
-      }
+      expect(MockWebSocket.instances.length).toBe(1)
+      const socket = MockWebSocket.instances[0]
+      expect(socket.url).toContain('/ws/alerts')
 
-      expect(getDelay(0)).toBe(1000)
-      expect(getDelay(1)).toBe(2000)
-      expect(getDelay(2)).toBe(4000)
-      expect(getDelay(3)).toBe(8000)
-      expect(getDelay(4)).toBe(16000)
-      expect(getDelay(5)).toBe(32000)
-      expect(getDelay(6)).toBe(60000) // Capped at MAX_RECONNECT_DELAY
-      expect(getDelay(7)).toBe(60000) // Exponent capped at 6 → still 64000 → capped to 60000
-      expect(getDelay(100)).toBe(60000) // Infinite attempts, delay stays capped
+      // Not connected yet until onopen
+      expect(store.wsConnected).toBe(false)
+
+      // Simulate server accepting connection
+      socket.simulateOpen()
+      expect(store.wsConnected).toBe(true)
     })
 
-    it('should never stop reconnecting (no max attempts)', () => {
-      // New behavior: infinite reconnect, only intentionalDisconnect stops it
-      let reconnectAttempts = 0
-      let intentionalDisconnect = false
+    it('disconnectWebSocket stops reconnection', () => {
+      store.connectWebSocket()
+      const socket = MockWebSocket.instances[0]
+      socket.simulateOpen()
+      expect(store.wsConnected).toBe(true)
 
-      const scheduleReconnect = () => {
-        if (intentionalDisconnect) return false
-        reconnectAttempts++
-        return true
-      }
-
-      // Should allow unlimited reconnects
-      for (let i = 0; i < 100; i++) {
-        expect(scheduleReconnect()).toBe(true)
-      }
-      expect(reconnectAttempts).toBe(100)
-
-      // Only intentional disconnect stops it
-      intentionalDisconnect = true
-      expect(scheduleReconnect()).toBe(false)
+      store.disconnectWebSocket()
+      // wsConnected may still be true until onclose fires, but no reconnect should happen
+      // Advance timers — no new WebSocket should be created
+      vi.advanceTimersByTime(120000)
+      // Only the original socket was created, no reconnect
+      expect(MockWebSocket.instances.length).toBe(1)
     })
 
-    it('should not let stale socket onclose clobber new socket', () => {
-      // Simulates the closure-scoped guard: socket !== ws.value
-      let wsValue = null
+    it('reconnects with exponential backoff on close (infinite, capped at 60s)', () => {
+      store.connectWebSocket()
+      const socket1 = MockWebSocket.instances[0]
+      socket1.simulateOpen()
+      expect(store.wsConnected).toBe(true)
 
-      const oldSocket = { id: 'old' }
-      const newSocket = { id: 'new' }
-      let oncloseCalled = false
+      // Simulate unexpected close
+      socket1.simulateClose()
+      expect(store.wsConnected).toBe(false)
 
-      // Simulate: old socket assigned, then new socket replaces it
-      wsValue = oldSocket
-      wsValue = newSocket  // new connection established
+      // First reconnect at 1s
+      vi.advanceTimersByTime(1000)
+      expect(MockWebSocket.instances.length).toBe(2)
 
-      // Old socket's onclose fires late
-      const oldOnclose = () => {
-        if (oldSocket !== wsValue) return  // guard: stale socket
-        wsValue = null  // this should NOT execute
-        oncloseCalled = true
-      }
+      // Simulate that one also closes
+      MockWebSocket.instances[1].simulateClose()
 
-      oldOnclose()
-      expect(wsValue).toBe(newSocket)  // new socket NOT clobbered
-      expect(oncloseCalled).toBe(false)
-    })
-  })
+      // Second reconnect at 2s
+      vi.advanceTimersByTime(2000)
+      expect(MockWebSocket.instances.length).toBe(3)
 
-  describe('timer cleanup', () => {
-    it('should clean up heartbeat timer on disconnect', () => {
-      let heartbeatTimer = setInterval(() => {}, 30000)
-      let reconnectTimer = setTimeout(() => {}, 5000)
-      
-      const cleanupTimers = () => {
-        if (heartbeatTimer) {
-          clearInterval(heartbeatTimer)
-          heartbeatTimer = null
-        }
-        if (reconnectTimer) {
-          clearTimeout(reconnectTimer)
-          reconnectTimer = null
-        }
-      }
-      
-      expect(heartbeatTimer).not.toBeNull()
-      expect(reconnectTimer).not.toBeNull()
-      
-      cleanupTimers()
-      
-      expect(heartbeatTimer).toBeNull()
-      expect(reconnectTimer).toBeNull()
-    })
-  })
+      // Third closes
+      MockWebSocket.instances[2].simulateClose()
 
-  describe('handleNewAlert', () => {
-    it('should add alert to recent list', () => {
-      const recentAlerts = []
-      
-      const handleNewAlert = (data) => {
-        recentAlerts.unshift(data)
-        if (recentAlerts.length > 20) {
-          recentAlerts.pop()
-        }
-      }
-      
-      const alert = { id: 1, level: 'warning', message: 'Test' }
-      handleNewAlert(alert)
-      
-      expect(recentAlerts.length).toBe(1)
-      expect(recentAlerts[0]).toEqual(alert)
+      // Third reconnect at 4s
+      vi.advanceTimersByTime(4000)
+      expect(MockWebSocket.instances.length).toBe(4)
     })
 
-    it('should limit recent alerts to 20', () => {
-      const recentAlerts = []
-      
-      const handleNewAlert = (data) => {
-        recentAlerts.unshift(data)
-        if (recentAlerts.length > 20) {
-          recentAlerts.pop()
-        }
+    it('keeps reconnecting beyond 10 attempts (infinite reconnect)', () => {
+      store.connectWebSocket()
+      MockWebSocket.instances[0].simulateOpen()
+      MockWebSocket.instances[0].simulateClose()
+
+      // Simulate 15 failed reconnections
+      for (let i = 0; i < 15; i++) {
+        vi.advanceTimersByTime(60000) // max delay
+        const latest = MockWebSocket.instances[MockWebSocket.instances.length - 1]
+        latest.simulateClose()
       }
-      
-      // Add 25 alerts
-      for (let i = 0; i < 25; i++) {
-        handleNewAlert({ id: i, level: 'info' })
-      }
-      
-      expect(recentAlerts.length).toBe(20)
-      expect(recentAlerts[0].id).toBe(24) // Most recent
+
+      // Should have 1 (original) + 15 (reconnects) = 16 instances
+      expect(MockWebSocket.instances.length).toBeGreaterThanOrEqual(16)
     })
 
-    it('should track critical events separately', () => {
-      const criticalEvents = []
-      
-      const isCriticalAlert = (data) => data.level === 'error' || data.level === 'critical'
-      
-      const handleNewAlert = (data) => {
-        if (isCriticalAlert(data)) {
-          criticalEvents.unshift(data)
-          if (criticalEvents.length > 50) {
-            criticalEvents.splice(50)
-          }
-        }
-      }
-      
-      handleNewAlert({ id: 1, level: 'info' })
-      handleNewAlert({ id: 2, level: 'error' })
-      handleNewAlert({ id: 3, level: 'critical' })
-      
-      expect(criticalEvents.length).toBe(2)
-      expect(criticalEvents[0].id).toBe(3)
-      expect(criticalEvents[1].id).toBe(2)
+    it('stale socket onclose does NOT clobber new socket', () => {
+      store.connectWebSocket()
+      const socket1 = MockWebSocket.instances[0]
+      socket1.simulateOpen()
+
+      // Simulate close — triggers reconnect timer
+      socket1.simulateClose()
+      expect(store.wsConnected).toBe(false)
+
+      // Reconnect timer fires — creates socket2
+      vi.advanceTimersByTime(1000)
+      expect(MockWebSocket.instances.length).toBe(2)
+      const socket2 = MockWebSocket.instances[1]
+      socket2.simulateOpen()
+      expect(store.wsConnected).toBe(true)
+
+      // Now socket1's onclose fires AGAIN (delayed, stale)
+      // This should be a no-op due to the closure guard
+      socket1.simulateClose()
+
+      // socket2 should still be the active connection
+      expect(store.wsConnected).toBe(true)
+      // No additional reconnect triggered
+      vi.advanceTimersByTime(60000)
+      expect(MockWebSocket.instances.length).toBe(2)
+    })
+
+    it('resets reconnect counter on successful connection', () => {
+      store.connectWebSocket()
+      MockWebSocket.instances[0].simulateOpen()
+      MockWebSocket.instances[0].simulateClose()
+
+      // After a few failed reconnects, delays should grow
+      vi.advanceTimersByTime(1000) // attempt 1
+      MockWebSocket.instances[1].simulateClose()
+      vi.advanceTimersByTime(2000) // attempt 2
+      MockWebSocket.instances[2].simulateClose()
+      vi.advanceTimersByTime(4000) // attempt 3
+      // This one succeeds
+      MockWebSocket.instances[3].simulateOpen()
+
+      // Now close again — delay should reset to 1s, not continue from 8s
+      MockWebSocket.instances[3].simulateClose()
+      vi.advanceTimersByTime(1000)
+      expect(MockWebSocket.instances.length).toBe(5) // reconnected at 1s, not 8s
     })
   })
 
   describe('recentCount computed', () => {
     it('should count only error and critical alerts', () => {
-      const recentAlerts = [
+      store.recentAlerts = [
         { level: 'info' },
         { level: 'warning' },
         { level: 'error' },
         { level: 'critical' },
         { level: 'error' },
       ]
-      
-      const recentCount = recentAlerts.filter(a => 
-        a.level === 'error' || a.level === 'critical'
-      ).length
-      
-      expect(recentCount).toBe(3)
+      expect(store.recentCount).toBe(3)
     })
   })
 })
