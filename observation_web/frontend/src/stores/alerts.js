@@ -43,20 +43,37 @@ export const useAlertStore = defineStore('alerts', () => {
     drainAIQueue()
   }
 
+  const AI_BATCH_SIZE = 5
+  const AI_TRANSLATIONS_MAX = 500  // LRU cap
+
   async function drainAIQueue() {
     if (aiFetching || aiFetchQueue.length === 0) return
     aiFetching = true
     while (aiFetchQueue.length > 0) {
-      const alertId = aiFetchQueue.shift()
-      if (aiTranslations.value.has(alertId)) continue
-      try {
-        const { data } = await api.getAIInterpretation(alertId)
-        if (data?.interpretation) {
-          const m = new Map(aiTranslations.value)
-          m.set(alertId, data.interpretation)
-          aiTranslations.value = m
+      // Take a batch of up to AI_BATCH_SIZE
+      const batch = []
+      while (batch.length < AI_BATCH_SIZE && aiFetchQueue.length > 0) {
+        const id = aiFetchQueue.shift()
+        if (!aiTranslations.value.has(id)) batch.push(id)
+      }
+      if (batch.length === 0) continue
+      // Fetch in parallel
+      const results = await Promise.allSettled(
+        batch.map(id => api.getAIInterpretation(id).then(r => ({ id, text: r.data?.interpretation })))
+      )
+      const m = new Map(aiTranslations.value)
+      for (const r of results) {
+        if (r.status === 'fulfilled' && r.value.text) {
+          m.set(r.value.id, r.value.text)
         }
-      } catch { /* AI unavailable for this alert, skip */ }
+      }
+      // LRU eviction: drop oldest entries if over cap
+      if (m.size > AI_TRANSLATIONS_MAX) {
+        const excess = m.size - AI_TRANSLATIONS_MAX
+        const iter = m.keys()
+        for (let i = 0; i < excess; i++) m.delete(iter.next().value)
+      }
+      aiTranslations.value = m
     }
     aiFetching = false
   }
@@ -76,7 +93,7 @@ export const useAlertStore = defineStore('alerts', () => {
   let heartbeatTimer = null
   let reconnectTimer = null
   let reconnectAttempts = 0
-  const MAX_RECONNECT_ATTEMPTS = 10
+  const MAX_RECONNECT_DELAY = 60000  // cap at 60s between attempts
   const BASE_RECONNECT_DELAY = 1000  // 1 second
 
   // Getters
@@ -246,16 +263,12 @@ export const useAlertStore = defineStore('alerts', () => {
   }
 
   function scheduleReconnect() {
-    if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
-      console.warn('WebSocket max reconnect attempts reached, stopping reconnection')
-      return
-    }
-    
-    // Exponential backoff: 1s, 2s, 4s, 8s, 16s, max 30s
-    const delay = Math.min(BASE_RECONNECT_DELAY * Math.pow(2, reconnectAttempts), 30000)
+    if (intentionalDisconnect) return  // User/component called disconnectWebSocket
+    // Infinite reconnect with exponential backoff capped at MAX_RECONNECT_DELAY
+    const delay = Math.min(BASE_RECONNECT_DELAY * Math.pow(2, Math.min(reconnectAttempts, 6)), MAX_RECONNECT_DELAY)
     reconnectAttempts++
-    
-    console.log(`WebSocket reconnecting in ${delay}ms (attempt ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})`)
+
+    console.log(`WebSocket reconnecting in ${delay}ms (attempt ${reconnectAttempts})`)
     reconnectTimer = setTimeout(connectWebSocket, delay)
   }
 
@@ -264,6 +277,7 @@ export const useAlertStore = defineStore('alerts', () => {
 
     // Clean up any existing timers
     cleanupTimers()
+    intentionalDisconnect = false
 
     // Request notification permission on first connect
     requestNotificationPermission()
@@ -316,9 +330,11 @@ export const useAlertStore = defineStore('alerts', () => {
     }
   }
 
+  let intentionalDisconnect = false
+
   function disconnectWebSocket() {
     cleanupTimers()
-    reconnectAttempts = MAX_RECONNECT_ATTEMPTS  // Prevent auto-reconnect
+    intentionalDisconnect = true  // Prevent auto-reconnect
     if (ws.value) {
       ws.value.close()
       ws.value = null
