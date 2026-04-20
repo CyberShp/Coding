@@ -10,11 +10,9 @@ class TestWebSocketConnection:
     """Test WebSocket connection handling."""
     
     @pytest.mark.asyncio
+    @pytest.mark.skip(reason="WebSocket connections require the websockets library; endpoint existence is verified in test_websocket_alert_endpoint_exists")
     async def test_websocket_connect(self, app_client):
         """WebSocket should accept connections."""
-        # Note: httpx AsyncClient doesn't support WebSocket directly.
-        # This test verifies the endpoint exists.
-        # For full WS testing, use websockets library or pytest-aiohttp.
         pass
     
     @pytest.mark.asyncio

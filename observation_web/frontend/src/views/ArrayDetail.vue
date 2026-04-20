@@ -33,262 +33,248 @@
     <div class="content" v-if="array">
 
       <!-- ════════════════════════════════════════════════
-           Zone 1: 状态总览 (Status Overview)
+           Zone 1: Status Strip (compact single-line)
            ════════════════════════════════════════════════ -->
-      <el-card class="zone-card zone-status-overview" shadow="hover">
-        <template #header>
-          <div class="card-header">
-            <span class="zone-title">状态总览</span>
-            <div class="header-meta">
-              <el-tag
-                v-for="w in watchers"
-                :key="w.ip"
-                :style="{ borderColor: w.color, color: w.color }"
-                effect="plain"
-                size="small"
-                class="watcher-tag"
-              >{{ w.nickname || w.ip }}</el-tag>
-              <el-select
-                v-model="array.tag_id"
-                placeholder="标签"
-                size="small"
-                clearable
-                style="width: 160px"
-                @change="handleTagChange"
-              >
-                <el-option
-                  v-for="tag in tags"
-                  :key="tag.id"
-                  :label="tag.parent_name ? `${tag.parent_name} / ${tag.name}` : tag.name"
-                  :value="tag.id"
-                />
-              </el-select>
-            </div>
-          </div>
-        </template>
-
-        <div class="status-grid">
-          <!-- Agent 状态 -->
-          <div class="status-item">
-            <span class="status-label">Agent 状态</span>
-            <span class="status-value">
-              <span class="status-dot" :class="agentDotClass"></span>
-              {{ agentStatusText }}
-            </span>
-          </div>
-          <!-- 连接状态 -->
-          <div class="status-item">
-            <span class="status-label">连接状态</span>
-            <span class="status-value">
-              <span class="status-dot" :class="`dot-${getStateType(array.state)}`"></span>
-              {{ getStateText(array.state) }}
-            </span>
-          </div>
-          <!-- 最近心跳 -->
-          <div class="status-item">
-            <span class="status-label">最近心跳</span>
-            <span class="status-value">{{ array.last_heartbeat ? formatRelativeTime(array.last_heartbeat) : '-' }}</span>
-          </div>
-          <!-- 数据新鲜度 -->
-          <div class="status-item">
-            <span class="status-label">数据新鲜度</span>
-            <span class="status-value" :class="dataFreshnessClass">
-              {{ array.last_refresh ? formatRelativeTime(array.last_refresh) : '未刷新' }}
-            </span>
-          </div>
-          <!-- 观察点总体健康 -->
-          <div class="status-item">
-            <span class="status-label">观察点总体健康</span>
-            <span class="status-value">
-              <el-tag :type="overallHealthType" size="small" effect="dark" round>{{ overallHealthText }}</el-tag>
-            </span>
-          </div>
-          <!-- 当前纳管模式 -->
-          <div class="status-item">
-            <span class="status-label">当前纳管模式</span>
-            <span class="status-value">{{ enrollmentModeText }}</span>
-          </div>
-          <!-- 地址 -->
-          <div class="status-item">
-            <span class="status-label">地址</span>
-            <span class="status-value mono">{{ array.host }}:{{ array.port }}</span>
-          </div>
-          <!-- 用户名 -->
-          <div class="status-item">
-            <span class="status-label">用户名</span>
-            <span class="status-value mono">{{ array.username }}</span>
-          </div>
+      <div class="status-strip">
+        <span class="status-dot" :class="`dot-${getStateType(array.state)}`"></span>
+        <span class="strip-name">{{ array.name }}</span>
+        <span class="strip-separator">|</span>
+        <span class="strip-ip">{{ array.host }}:{{ array.port }}</span>
+        <span class="strip-separator">|</span>
+        <span class="strip-mode">{{ enrollmentModeText }}</span>
+        <div class="strip-tags">
+          <el-tag
+            v-for="w in watchers"
+            :key="w.ip"
+            :style="{ borderColor: w.color, color: w.color }"
+            effect="plain"
+            size="small"
+            class="watcher-tag"
+          >{{ w.nickname || w.ip }}</el-tag>
+          <el-select
+            v-model="array.tag_id"
+            placeholder="标签"
+            size="small"
+            clearable
+            style="width: 140px"
+            @change="handleTagChange"
+          >
+            <el-option
+              v-for="tag in tags"
+              :key="tag.id"
+              :label="tag.parent_name ? `${tag.parent_name} / ${tag.name}` : tag.name"
+              :value="tag.id"
+            />
+          </el-select>
         </div>
-      </el-card>
+      </div>
 
       <!-- ════════════════════════════════════════════════
-           Zone 2: 活跃异常 (Active Anomalies)
+           Zone 2: 活跃异常 (Active Anomalies) — No Tabs
            ════════════════════════════════════════════════ -->
+
+      <!-- Fail-Strip: always visible when collection failures exist -->
+      <div v-if="collectionFailures.length > 0" class="fail-strip">
+        <div class="fail-strip-header">
+          <el-icon color="#ff4d4f"><CircleCheck /></el-icon>
+          <span class="fail-strip-title">采集失败 ({{ collectionFailures.length }})</span>
+        </div>
+        <div class="fail-strip-items">
+          <span
+            v-for="issue in collectionFailures"
+            :key="issue.key"
+            class="fail-strip-item"
+            @click="openIssueDetail(issue)"
+          >
+            <strong>{{ getObserverName(issue.observer) }}</strong>: {{ issue.message }}
+          </span>
+        </div>
+      </div>
+
+      <!-- Real Anomalies: always visible inline -->
       <el-card class="zone-card zone-anomalies" shadow="hover">
         <template #header>
           <div class="card-header">
             <el-tooltip content="来自系统级观察点：CPU、内存、AlarmType、PCIe、卡件等，不含端口误码/链路">
-              <span class="zone-title">活跃异常</span>
+              <span class="zone-title">真异常</span>
             </el-tooltip>
             <div class="header-meta">
-              <el-tag v-if="activeIssues.length > 0" type="danger" size="small" effect="dark">{{ activeIssues.length }} 项</el-tag>
+              <el-tag v-if="realAnomalies.length > 0" type="danger" size="small" effect="dark">{{ realAnomalies.length }} 项</el-tag>
               <el-tag v-else type="success" size="small" effect="dark">无异常</el-tag>
               <span v-if="unackedCount > 0" class="unacked-hint">未确认 {{ unackedCount }} 条</span>
             </div>
           </div>
         </template>
 
-        <!-- Category tabs -->
-        <el-tabs v-model="anomalyTab" class="anomaly-tabs" v-if="activeIssues.length > 0 || collectionFailures.length > 0 || recoveryEvents.length > 0">
-          <el-tab-pane :label="`真异常 (${realAnomalies.length})`" name="real">
-            <div v-if="realAnomalies.length > 0" class="issues-list">
-              <div
-                v-for="issue in realAnomalies"
-                :key="issue.key"
-                class="issue-item"
-                :class="[`issue-${issue.level}`]"
-                @click="openIssueDetail(issue)"
-              >
-                <div class="issue-row">
-                  <span class="issue-title">{{ issue.title }}</span>
-                  <el-tag :type="issue.level === 'error' || issue.level === 'critical' ? 'danger' : 'warning'" size="small">
-                    {{ issue.level === 'error' || issue.level === 'critical' ? '错误' : '警告' }}
-                  </el-tag>
-                  <span class="issue-observer">{{ getObserverName(issue.observer) }}</span>
-                  <span class="issue-since" v-if="issue.since">持续 {{ formatRelativeTime(issue.since) }}</span>
-                  <el-button
-                    v-if="issue.alert_id"
-                    size="small"
-                    type="success"
-                    text
-                    class="issue-ack-btn"
-                    @click.stop="handleAckIssue(issue)"
-                  ><el-icon><Check /></el-icon> 忽略</el-button>
-                </div>
-                <div class="issue-message">{{ issue.message }}</div>
-              </div>
+        <div v-if="realAnomalies.length > 0" class="issues-list">
+          <div
+            v-for="issue in realAnomalies"
+            :key="issue.key"
+            class="issue-item"
+            :class="[`issue-${issue.level}`]"
+            @click="openIssueDetail(issue)"
+          >
+            <div class="issue-row">
+              <span class="issue-title">{{ issue.title }}</span>
+              <el-tag :type="issue.level === 'error' || issue.level === 'critical' ? 'danger' : 'warning'" size="small">
+                {{ issue.level === 'error' || issue.level === 'critical' ? '错误' : '警告' }}
+              </el-tag>
+              <span class="issue-observer">{{ getObserverName(issue.observer) }}</span>
+              <span class="issue-since" v-if="issue.since">持续 {{ formatRelativeTime(issue.since) }}</span>
+              <el-button
+                v-if="issue.alert_id"
+                size="small"
+                type="success"
+                text
+                class="issue-ack-btn"
+                @click.stop="handleAckIssue(issue)"
+              ><el-icon><Check /></el-icon> 忽略</el-button>
             </div>
-            <div v-else class="issues-empty-inline">
-              <el-icon color="#67c23a"><CircleCheck /></el-icon>
-              <span>无真异常</span>
-            </div>
-          </el-tab-pane>
-
-          <el-tab-pane :label="`预期异常 (${expectedAnomalies.length})`" name="expected">
-            <div v-if="expectedAnomalies.length > 0" class="issues-list">
-              <div
-                v-for="issue in expectedAnomalies"
-                :key="issue.key"
-                class="issue-item issue-suppressed"
-                @click="openIssueDetail(issue)"
-              >
-                <div class="issue-row">
-                  <span class="issue-title">{{ issue.title }}</span>
-                  <el-tag type="info" size="small">已忽略</el-tag>
-                  <span class="issue-observer">{{ getObserverName(issue.observer) }}</span>
-                  <span class="issue-acked">确认人: {{ (issue.acked_by_nickname || issue.acked_by_ip) || '--' }}</span>
-                  <span class="issue-expires" v-if="issue.ack_expires_at">恢复: {{ formatDateTime(issue.ack_expires_at) }}</span>
-                </div>
-                <div class="issue-message">{{ issue.message }}</div>
-              </div>
-            </div>
-            <div v-else class="issues-empty-inline">
-              <el-icon color="#909399"><CircleCheck /></el-icon>
-              <span>无预期异常</span>
-            </div>
-          </el-tab-pane>
-
-          <el-tab-pane :label="`采集失败 (${collectionFailures.length})`" name="failures">
-            <div v-if="collectionFailures.length > 0" class="issues-list">
-              <div v-for="issue in collectionFailures" :key="issue.key" class="issue-item issue-failure" @click="openIssueDetail(issue)">
-                <div class="issue-row">
-                  <span class="issue-title">{{ issue.title }}</span>
-                  <el-tag type="danger" size="small">采集失败</el-tag>
-                  <span class="issue-observer">{{ getObserverName(issue.observer) }}</span>
-                </div>
-                <div class="issue-message">{{ issue.message }}</div>
-              </div>
-            </div>
-            <div v-else class="issues-empty-inline">
-              <el-icon color="#67c23a"><CircleCheck /></el-icon>
-              <span>无采集失败</span>
-            </div>
-          </el-tab-pane>
-
-          <el-tab-pane :label="`恢复事件 (${recoveryEvents.length})`" name="recovery">
-            <div v-if="recoveryEvents.length > 0" class="issues-list">
-              <div v-for="evt in recoveryEvents" :key="evt.id || evt.key" class="issue-item issue-recovery">
-                <div class="issue-row">
-                  <span class="issue-title">{{ evt.title || evt.message }}</span>
-                  <el-tag type="success" size="small">已恢复</el-tag>
-                  <span class="issue-observer">{{ getObserverName(evt.observer || evt.observer_name) }}</span>
-                </div>
-                <div class="issue-message">{{ evt.message }}</div>
-              </div>
-            </div>
-            <div v-else class="issues-empty-inline">
-              <el-icon color="#909399"><CircleCheck /></el-icon>
-              <span>无恢复事件</span>
-            </div>
-          </el-tab-pane>
-        </el-tabs>
-
-        <!-- All clear state -->
+            <div class="issue-message">{{ issue.message }}</div>
+          </div>
+        </div>
         <div v-else class="issues-empty">
           <el-icon :size="40" color="#67c23a"><CircleCheck /></el-icon>
           <p>所有监测项正常运行</p>
         </div>
       </el-card>
 
-      <!-- ════════════════════════════════════════════════
-           Zone 3: 最近事件流 (Recent Event Stream)
-           ════════════════════════════════════════════════ -->
-      <el-card class="zone-card zone-events" shadow="hover">
-        <template #header>
-          <div class="card-header">
-            <span class="zone-title">最近事件流</span>
-            <div class="header-meta">
-              <el-radio-group v-model="eventTimeWindow" size="small" @change="onTimeWindowChange">
-                <el-radio-button label="1h">1h</el-radio-button>
-                <el-radio-button label="6h">6h</el-radio-button>
-                <el-radio-button label="24h">24h</el-radio-button>
-                <el-radio-button label="72h">72h</el-radio-button>
-                <el-radio-button label="7d">7d</el-radio-button>
-                <el-radio-button label="21d">21d</el-radio-button>
-              </el-radio-group>
-              <el-button size="small" text @click="$router.push('/alerts')">查看全部</el-button>
+      <!-- Expected Anomalies + Recovery Events: collapsible -->
+      <el-collapse v-if="expectedAnomalies.length > 0 || recoveryEvents.length > 0" v-model="anomalyCollapseActive" class="anomaly-collapse">
+        <el-collapse-item v-if="expectedAnomalies.length > 0" :title="`预期异常 (${expectedAnomalies.length})`" name="expected">
+          <div class="issues-list">
+            <div
+              v-for="issue in expectedAnomalies"
+              :key="issue.key"
+              class="issue-item issue-suppressed"
+              @click="openIssueDetail(issue)"
+            >
+              <div class="issue-row">
+                <span class="issue-title">{{ issue.title }}</span>
+                <el-tag type="info" size="small">已忽略</el-tag>
+                <span class="issue-observer">{{ getObserverName(issue.observer) }}</span>
+                <span class="issue-acked">确认人: {{ (issue.acked_by_nickname || issue.acked_by_ip) || '--' }}</span>
+                <span class="issue-expires" v-if="issue.ack_expires_at">恢复: {{ formatDateTime(issue.ack_expires_at) }}</span>
+              </div>
+              <div class="issue-message">{{ issue.message }}</div>
             </div>
           </div>
-        </template>
+        </el-collapse-item>
 
-        <transition name="fade" mode="out-in">
-          <div :key="eventTimeWindow" class="event-stream-body">
-            <FoldedAlertList
-              :alerts="filteredAlerts"
-              :show-array-id="false"
-              empty-text="该时段暂无告警事件"
-              @select="openAlertDrawer"
-              @ack="handleAck"
-              @undo-ack="handleUndoAck"
-              @modify-ack="handleModifyAck"
-            />
+        <el-collapse-item v-if="recoveryEvents.length > 0" :title="`恢复事件 (${recoveryEvents.length})`" name="recovery">
+          <div class="issues-list">
+            <div v-for="evt in recoveryEvents" :key="evt.id || evt.key" class="issue-item issue-recovery">
+              <div class="issue-row">
+                <span class="issue-title">{{ evt.title || evt.message }}</span>
+                <el-tag type="success" size="small">已恢复</el-tag>
+                <span class="issue-observer">{{ getObserverName(evt.observer || evt.observer_name) }}</span>
+              </div>
+              <div class="issue-message">{{ evt.message }}</div>
+            </div>
           </div>
-        </transition>
-      </el-card>
+        </el-collapse-item>
+      </el-collapse>
 
       <!-- ════════════════════════════════════════════════
-           Zone 4: 中文释义 / AI 深解释
+           Zones 3 + 5: Widescreen 2-Column Layout
            ════════════════════════════════════════════════ -->
-      <el-card class="zone-card zone-ai-interpretation" shadow="hover">
-        <template #header>
-          <div class="card-header">
-            <span class="zone-title">
-              <el-icon><MagicStick /></el-icon>
-              中文释义 / AI 深解释
-            </span>
-          </div>
-        </template>
+      <div class="zones-3-5-container">
+        <!-- Zone 3: 最近事件流 (Recent Event Stream) -->
+        <el-card class="zone-card zone-events" shadow="hover">
+          <template #header>
+            <div class="card-header">
+              <span class="zone-title">最近事件流</span>
+              <div class="header-meta">
+                <el-radio-group v-model="eventTimeWindow" size="small" @change="onTimeWindowChange">
+                  <el-radio-button label="1h">1h</el-radio-button>
+                  <el-radio-button label="6h">6h</el-radio-button>
+                  <el-radio-button label="24h">24h</el-radio-button>
+                  <el-radio-button label="72h">72h</el-radio-button>
+                  <el-radio-button label="7d">7d</el-radio-button>
+                  <el-radio-button label="21d">21d</el-radio-button>
+                </el-radio-group>
+                <el-button size="small" text @click="$router.push('/alerts')">查看全部</el-button>
+              </div>
+            </div>
+          </template>
 
+          <transition name="fade" mode="out-in">
+            <div :key="eventTimeWindow" class="event-stream-body">
+              <FoldedAlertList
+                :alerts="filteredAlerts"
+                :show-array-id="false"
+                empty-text="该时段暂无告警事件"
+                @select="openAlertDrawer"
+                @ack="handleAck"
+                @undo-ack="handleUndoAck"
+                @modify-ack="handleModifyAck"
+              />
+            </div>
+          </transition>
+        </el-card>
+
+        <!-- Zone 5: 观察点状态 (Observer Status) -->
+        <el-card class="zone-card zone-observer-status" shadow="hover">
+          <template #header>
+            <div class="card-header">
+              <span class="zone-title">观察点状态</span>
+              <el-tag type="info" size="small">{{ observerList.length }} 个观察点</el-tag>
+            </div>
+          </template>
+
+          <el-table :data="observerList" stripe size="small" class="observer-table" empty-text="暂无观察点数据">
+            <el-table-column prop="name" label="名称" min-width="140">
+              <template #default="{ row }">
+                <span class="observer-name">{{ getObserverName(row.name) }}</span>
+                <span class="observer-key">{{ row.name }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="最近执行时间" min-width="160">
+              <template #default="{ row }">
+                {{ row.last_run ? formatDateTime(row.last_run) : '-' }}
+              </template>
+            </el-table-column>
+            <el-table-column label="最近成功时间" min-width="160">
+              <template #default="{ row }">
+                {{ row.last_success ? formatDateTime(row.last_success) : '-' }}
+              </template>
+            </el-table-column>
+            <el-table-column label="最近失败原因" min-width="200">
+              <template #default="{ row }">
+                <span v-if="row.last_error" class="observer-error">{{ row.last_error }}</span>
+                <span v-else class="observer-ok">-</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="平均耗时" min-width="100" align="center">
+              <template #default="{ row }">
+                {{ row.avg_duration != null ? `${row.avg_duration.toFixed(1)}s` : '-' }}
+              </template>
+            </el-table-column>
+            <el-table-column label="状态" min-width="80" align="center">
+              <template #default="{ row }">
+                <el-tag :type="row.healthy === false ? 'danger' : 'success'" size="small">
+                  {{ row.healthy === false ? '异常' : '正常' }}
+                </el-tag>
+              </template>
+            </el-table-column>
+          </el-table>
+        </el-card>
+      </div>
+
+      <!-- ════════════════════════════════════════════════
+           Zone 4: AI 释义 — Floating Button + Drawer
+           ════════════════════════════════════════════════ -->
+      <div class="ai-fab" @click="aiDrawerVisible = true">
+        <el-icon :size="22"><MagicStick /></el-icon>
+        <span class="ai-fab-label">AI 释义</span>
+      </div>
+
+      <el-drawer
+        v-model="aiDrawerVisible"
+        title="中文释义 / AI 深解释"
+        direction="rtl"
+        size="400px"
+      >
         <!-- Local lightweight interpretation for selected alert -->
         <div v-if="selectedInterpretation" class="interpretation-section">
           <div class="interpretation-header">
@@ -334,56 +320,7 @@
             </p>
           </div>
         </div>
-      </el-card>
-
-      <!-- ════════════════════════════════════════════════
-           Zone 5: 观察点状态 (Observer Status)
-           ════════════════════════════════════════════════ -->
-      <el-card class="zone-card zone-observer-status" shadow="hover">
-        <template #header>
-          <div class="card-header">
-            <span class="zone-title">观察点状态</span>
-            <el-tag type="info" size="small">{{ observerList.length }} 个观察点</el-tag>
-          </div>
-        </template>
-
-        <el-table :data="observerList" stripe size="small" class="observer-table" empty-text="暂无观察点数据">
-          <el-table-column prop="name" label="名称" min-width="140">
-            <template #default="{ row }">
-              <span class="observer-name">{{ getObserverName(row.name) }}</span>
-              <span class="observer-key">{{ row.name }}</span>
-            </template>
-          </el-table-column>
-          <el-table-column label="最近执行时间" min-width="160">
-            <template #default="{ row }">
-              {{ row.last_run ? formatDateTime(row.last_run) : '-' }}
-            </template>
-          </el-table-column>
-          <el-table-column label="最近成功时间" min-width="160">
-            <template #default="{ row }">
-              {{ row.last_success ? formatDateTime(row.last_success) : '-' }}
-            </template>
-          </el-table-column>
-          <el-table-column label="最近失败原因" min-width="200">
-            <template #default="{ row }">
-              <span v-if="row.last_error" class="observer-error">{{ row.last_error }}</span>
-              <span v-else class="observer-ok">-</span>
-            </template>
-          </el-table-column>
-          <el-table-column label="平均耗时" min-width="100" align="center">
-            <template #default="{ row }">
-              {{ row.avg_duration != null ? `${row.avg_duration.toFixed(1)}s` : '-' }}
-            </template>
-          </el-table-column>
-          <el-table-column label="状态" min-width="80" align="center">
-            <template #default="{ row }">
-              <el-tag :type="row.healthy === false ? 'danger' : 'success'" size="small">
-                {{ row.healthy === false ? '异常' : '正常' }}
-              </el-tag>
-            </template>
-          </el-table-column>
-        </el-table>
-      </el-card>
+      </el-drawer>
 
       <!-- ════════════════════════════════════════════════
            Operational Zones (collapsed by default)
@@ -392,11 +329,6 @@
         <!-- Performance Monitor -->
         <el-collapse-item title="性能监控" name="perf" v-if="array.state === 'connected'">
           <PerformanceMonitor :array-id="array.array_id" />
-        </el-collapse-item>
-
-        <!-- Port Traffic -->
-        <el-collapse-item title="端口流量监控" name="traffic">
-          <PortTrafficChart :array-id="array.array_id" />
         </el-collapse-item>
 
         <!-- Event Timeline -->
@@ -479,7 +411,6 @@ import { useAlertStore } from '../stores/alerts'
 import api from '../api'
 import LogViewer from '../components/LogViewer.vue'
 import PerformanceMonitor from '../components/PerformanceMonitor.vue'
-import PortTrafficChart from '../components/PortTrafficChart.vue'
 import EventTimeline from '../components/EventTimeline.vue'
 import SnapshotDiff from '../components/SnapshotDiff.vue'
 import AlertDetailDrawer from '@/components/AlertDetailDrawer.vue'
@@ -514,8 +445,11 @@ const aiSummaryLoading = ref(false)
 const aiSummaryError = ref('')
 const aiSummaryText = ref('')
 
-// ───── Zone 2: Anomaly category tab ─────
-const anomalyTab = ref('real')
+// ───── Zone 2: Anomaly collapse (expected + recovery) ─────
+const anomalyCollapseActive = ref([])
+
+// ───── Zone 4: AI Drawer ─────
+const aiDrawerVisible = ref(false)
 
 // ───── Zone 3: Time window ─────
 const eventTimeWindow = ref('24h')
@@ -1131,48 +1065,46 @@ watch(
   flex-wrap: wrap;
 }
 
-/* ───── Zone 1: Status Overview ───── */
-.status-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-  gap: 16px;
-}
-
-.status-item {
+/* ───── Zone 1: Status Strip ───── */
+.status-strip {
   display: flex;
-  flex-direction: column;
-  gap: 4px;
-  padding: 10px 14px;
-  background: #f8f9fb;
-  border-radius: 8px;
-  transition: background 0.2s;
+  align-items: center;
+  gap: 10px;
+  max-height: 48px;
+  padding: 8px 16px;
+  background: #fafafa;
+  border-bottom: 1px solid #ebeef5;
+  border-radius: 6px;
+  font-size: 13px;
+  flex-wrap: wrap;
 }
 
-.status-item:hover {
-  background: #f0f2f5;
-}
-
-.status-label {
-  font-size: 12px;
-  color: #909399;
-  font-weight: 500;
-  text-transform: uppercase;
-  letter-spacing: 0.3px;
-}
-
-.status-value {
-  font-size: 14px;
+.strip-name {
   font-weight: 600;
+  font-size: 14px;
   color: #303133;
+}
+
+.strip-ip {
+  color: #606266;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+}
+
+.strip-mode {
+  color: #909399;
+  font-size: 12px;
+}
+
+.strip-separator {
+  color: #dcdfe6;
+  font-size: 12px;
+}
+
+.strip-tags {
   display: flex;
   align-items: center;
   gap: 6px;
-}
-
-.status-value.mono {
-  font-family: 'SF Mono', 'Fira Code', monospace;
-  font-weight: 500;
-  font-size: 13px;
+  margin-left: auto;
 }
 
 /* Status dots */
@@ -1198,9 +1130,59 @@ watch(
   font-size: 11px;
 }
 
-/* ───── Zone 2: Active Anomalies ───── */
-.anomaly-tabs :deep(.el-tabs__header) {
-  margin-bottom: 12px;
+/* ───── Zone 2: Fail-Strip + Anomalies ───── */
+.fail-strip {
+  background: #fff2f0;
+  border-left: 4px solid #ff4d4f;
+  border-radius: 6px;
+  padding: 10px 14px;
+}
+
+.fail-strip-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+  font-weight: 600;
+  font-size: 13px;
+  color: #cf1322;
+}
+
+.fail-strip-title {
+  color: #cf1322;
+}
+
+.fail-strip-items {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.fail-strip-item {
+  font-size: 12px;
+  color: #434343;
+  cursor: pointer;
+  padding: 2px 0;
+  transition: color 0.2s;
+}
+
+.fail-strip-item:hover {
+  color: #ff4d4f;
+}
+
+.fail-strip-item strong {
+  font-weight: 600;
+  color: #595959;
+}
+
+.anomaly-collapse {
+  border: none;
+}
+
+.anomaly-collapse :deep(.el-collapse-item__header) {
+  font-size: 13px;
+  font-weight: 500;
+  color: #606266;
 }
 
 .unacked-hint {
@@ -1313,6 +1295,27 @@ watch(
   font-size: 13px;
 }
 
+/* ───── Zones 3+5: 2-Column Layout ───── */
+.zones-3-5-container {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+@media (min-width: 1201px) {
+  .zones-3-5-container {
+    flex-direction: row;
+  }
+  .zones-3-5-container .zone-events {
+    flex: 0 0 calc(60% - 8px);
+    max-width: calc(60% - 8px);
+  }
+  .zones-3-5-container .zone-observer-status {
+    flex: 0 0 calc(40% - 8px);
+    max-width: calc(40% - 8px);
+  }
+}
+
 /* ───── Zone 3: Event Stream ───── */
 .event-stream-body {
   min-height: 100px;
@@ -1402,6 +1405,35 @@ watch(
   margin-top: 10px;
   font-size: 12px;
   color: var(--el-text-color-secondary);
+}
+
+/* ───── Zone 4: AI FAB + Drawer ───── */
+.ai-fab {
+  position: fixed;
+  bottom: 32px;
+  right: 32px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 12px 18px;
+  background: var(--el-color-primary);
+  color: #fff;
+  border-radius: 24px;
+  cursor: pointer;
+  box-shadow: 0 4px 16px rgba(64, 158, 255, 0.4);
+  transition: transform 0.2s, box-shadow 0.2s;
+  z-index: 100;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.ai-fab:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(64, 158, 255, 0.5);
+}
+
+.ai-fab-label {
+  white-space: nowrap;
 }
 
 /* ───── Zone 5: Observer Status ───── */

@@ -15,14 +15,18 @@ class TestSSHConnection:
         conn = SSHConnection("arr-001", "192.168.1.1", 22, "admin")
         assert conn.is_connected() is False
 
+    @patch("backend.core.ssh_pool.PARAMIKO_AVAILABLE", False)
     def test_connect_without_paramiko(self):
-        """BUG-MARKER: Connect without paramiko should fail gracefully."""
+        """Connect should fail gracefully and return False when paramiko unavailable."""
         conn = SSHConnection("arr-001", "192.168.1.1", 22, "admin")
-        # connect() returns bool, may fail if paramiko not available
+        result = conn.connect()
+        assert result is False
+        assert not conn.is_connected()
 
+    @patch("backend.core.ssh_pool.tcp_probe", return_value=True)
     @patch("backend.core.ssh_pool.PARAMIKO_AVAILABLE", True)
     @patch("backend.core.ssh_pool.paramiko")
-    def test_connect_with_paramiko(self, mock_paramiko):
+    def test_connect_with_paramiko(self, mock_paramiko, mock_probe):
         mock_client = MagicMock()
         mock_paramiko.SSHClient.return_value = mock_client
         mock_transport = MagicMock()
@@ -32,6 +36,7 @@ class TestSSHConnection:
         conn = SSHConnection("arr-001", "192.168.1.1", 22, "admin")
         conn._password = "test123"
         result = conn.connect()
+        assert result is True
 
     def test_execute_when_disconnected(self):
         """Execute on disconnected should return error tuple, not raise."""
@@ -95,6 +100,7 @@ class TestSSHPool:
         pool = SSHPool()
         pool.add_connection("arr-001", "192.168.1.1", 22, "admin")
         pool.close_all()
+        assert pool.get_connection("arr-001") is None
 
     def test_cleanup_idle_connections(self):
         pool = SSHPool()

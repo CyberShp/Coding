@@ -79,14 +79,23 @@
           @undo-ack="handleUndoAck"
           @modify-ack="handleModifyAck"
         />
-        <!-- 批量操作栏 -->
-        <div v-if="selectedIds.length > 0" class="batch-actions">
-          <span class="batch-count">已选 {{ selectedIds.length }} 条</span>
-          <el-button size="small" @click="handleBatchUndo">批量撤销</el-button>
-          <el-button size="small" type="success" @click="handleBatchModify('confirmed_ok')">批量确认无问题</el-button>
-          <el-button size="small" type="warning" @click="handleBatchModify('dismiss')">批量忽略24h</el-button>
-          <el-button size="small" text @click="selectedIds = []">取消选择</el-button>
-        </div>
+        <!-- 批量操作栏 (sticky bottom toolbar) -->
+        <transition name="batch-slide">
+          <div v-if="selectedIds.length > 0" class="batch-actions-sticky">
+            <div class="batch-actions-inner">
+              <el-badge :value="selectedIds.length" type="primary" class="batch-badge">
+                <span class="batch-count">已选 {{ selectedIds.length }} 条</span>
+              </el-badge>
+              <div class="batch-buttons">
+                <el-button size="small" @click="handleBatchUndo">批量撤销</el-button>
+                <el-button size="small" type="success" @click="handleBatchModify('confirmed_ok')">批量确认</el-button>
+                <el-button size="small" type="warning" @click="handleBatchModify('dismiss')">批量忽略 24h</el-button>
+                <el-button size="small" type="info" plain @click="selectedIds = []">清除选择</el-button>
+              </div>
+              <span class="batch-shortcut-hint">Ctrl+A 全选当前页</span>
+            </div>
+          </div>
+        </transition>
       </div>
 
       <!-- Aggregated view -->
@@ -109,12 +118,39 @@
             </div>
           </template>
           <template v-else>
-            <div class="agg-header">
-              <el-tag :type="getLevelType(item.level)" size="small">{{ getLevelText(item.level) }}</el-tag>
-              <span class="agg-obs">{{ getObserverLabel(item.observer_name) }}</span>
-              <span class="agg-msg">{{ getTranslatedSummary(item) }}</span>
-              <span class="agg-time">{{ formatDateTime(item.timestamp) }}</span>
-            </div>
+            <el-tooltip
+              placement="right"
+              :show-after="500"
+              :enterable="true"
+              :hide-after="0"
+              effect="dark"
+            >
+              <template #content>
+                <div class="tooltip-ai-context">
+                  <div class="tooltip-context-line">{{ OBSERVER_CONTEXT[item.observer_name] || '观察点告警，请查看详情' }}</div>
+                  <div class="tooltip-similar-line">最近 24h 同类告警: {{ getSimilarAlertCount(item.observer_name) }} 条</div>
+                </div>
+              </template>
+              <div class="agg-header">
+                <el-tag :type="getLevelType(item.level)" size="small">{{ getLevelText(item.level) }}</el-tag>
+                <span class="agg-obs">{{ getObserverLabel(item.observer_name) }}</span>
+                <span class="agg-msg">{{ getTranslatedSummary(item) }}</span>
+                <span class="agg-time">{{ formatDateTime(item.timestamp) }}</span>
+                <!-- Quick ack button for unacknowledged alerts -->
+                <span v-if="quickAckedIds.has(item.id)" class="quick-ack-done">已处理</span>
+                <el-button
+                  v-else-if="!item.is_acked"
+                  class="quick-ack-btn"
+                  size="small"
+                  type="success"
+                  circle
+                  plain
+                  @click.stop="handleQuickAck(item)"
+                >
+                  <el-icon><Check /></el-icon>
+                </el-button>
+              </div>
+            </el-tooltip>
           </template>
         </div>
         <el-empty v-if="!loading && alerts.length === 0" description="暂无告警" />
@@ -139,9 +175,9 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted, onUnmounted, watch } from 'vue'
+import { ref, reactive, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
-import { Search, Download, ArrowRight } from '@element-plus/icons-vue'
+import { Search, Download, ArrowRight, Check } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import api from '../api'
 import { useAlertStore } from '@/stores/alerts'
@@ -163,6 +199,43 @@ const drawerVisible = ref(false)
 const selectedAlert = ref(null)
 const aggregateMode = ref(false)
 const selectedIds = ref([])
+const quickAckedIds = ref(new Set())
+
+// AI context descriptions for observer types
+const OBSERVER_CONTEXT = {
+  cpu_usage: 'CPU 使用率超阈值，建议检查进程占用',
+  disk_health: '磁盘健康异常，建议检查 SMART 状态',
+  port_traffic: '端口流量异常，可能存在带宽瓶颈',
+  error_code: '设备报错代码，参考厂商手册',
+  temperature: '温度超限，检查散热和环境',
+  fan_status: '风扇状态异常，检查硬件',
+  power_supply: '电源异常，检查冗余状态',
+  connection_status: '连接状态变化，检查网络',
+}
+
+/**
+ * Count alerts in the last 24h with the same observer_name
+ */
+function getSimilarAlertCount(observerName) {
+  return alerts.value.filter(a => a.observer_name === observerName).length
+}
+
+/**
+ * Build tooltip content for an alert item
+ */
+function getTooltipContent(item) {
+  const obs = item.observer_name || ''
+  const context = OBSERVER_CONTEXT[obs] || '观察点告警，请查看详情'
+  const count = getSimilarAlertCount(obs)
+  return `${context}\n最近 24h 同类告警: ${count} 条`
+}
+
+/**
+ * Get all visible (filtered) alert IDs for Ctrl+A select-all
+ */
+const allVisibleAlertIds = computed(() => {
+  return alerts.value.filter(a => a.id).map(a => a.id)
+})
 
 const filters = reactive({
   level: '',
@@ -199,6 +272,11 @@ function getObserverLabel(name) {
 }
 
 function getTranslatedSummary(row) {
+  // Prefer AI translation for alarm_type alerts when available
+  if (row.observer_name === 'alarm_type' && row.id) {
+    const aiText = alertStore.getAITranslation(row.id)
+    if (aiText) return aiText
+  }
   const result = translateAlert(row)
   return result.summary || row.message
 }
@@ -270,6 +348,33 @@ async function handleBatchModify(ackType) {
   }
 }
 
+async function handleQuickAck(item) {
+  if (!item.id) return
+  try {
+    await api.ackAlerts([item.id], '', { ack_type: 'dismiss' })
+    item.is_acked = true
+    quickAckedIds.value.add(item.id)
+    // Remove the "已处理" text after 2 seconds
+    setTimeout(() => {
+      quickAckedIds.value.delete(item.id)
+    }, 2000)
+  } catch (e) {
+    ElMessage.error('确认失败: ' + (e.response?.data?.detail || e.message))
+  }
+}
+
+function handleKeyDown(e) {
+  // Ctrl+A (Windows/Linux) or Cmd+A (Mac): select all visible alerts
+  if ((e.ctrlKey || e.metaKey) && e.key === 'a') {
+    // Only act when in flat (non-aggregate) mode and not in an input
+    const tag = e.target?.tagName?.toLowerCase()
+    if (tag === 'input' || tag === 'textarea') return
+    if (aggregateMode.value) return
+    e.preventDefault()
+    selectedIds.value = [...allVisibleAlertIds.value]
+  }
+}
+
 function onAckChanged({ alertId, acked }) {
   const a = alerts.value.find(x => x.id === alertId)
   if (a) a.is_acked = acked
@@ -307,6 +412,11 @@ async function loadAlerts() {
     if (allowed) {
       alerts.value = alerts.value.filter(a => allowed.has(a.array_id))
     }
+
+    // Auto-translate alarm_type alerts when AI is available
+    alertStore.checkAIAvailability().then(() => {
+      for (const a of alerts.value) alertStore.autoTranslateAlert(a)
+    })
 
     // Load stats
     const statsResponse = await api.getAlertStats(filters.hours)
@@ -433,6 +543,9 @@ onMounted(() => {
 
   // Periodic full reload every 30 seconds
   refreshTimer = setInterval(silentReloadAlerts, 30000)
+
+  // Keyboard shortcut: Ctrl+A / Cmd+A to select all visible alerts
+  document.addEventListener('keydown', handleKeyDown)
 })
 
 onUnmounted(() => {
@@ -440,6 +553,7 @@ onUnmounted(() => {
     clearInterval(refreshTimer)
     refreshTimer = null
   }
+  document.removeEventListener('keydown', handleKeyDown)
 })
 </script>
 
@@ -514,21 +628,104 @@ onUnmounted(() => {
   justify-content: flex-end;
 }
 
-.batch-actions {
+/* ─── Sticky batch toolbar ─── */
+.batch-actions-sticky {
+  position: sticky;
+  bottom: 0;
+  z-index: 10;
+  background: #fff;
+  box-shadow: 0 -2px 8px rgba(0, 0, 0, 0.08);
+  border-radius: 8px 8px 0 0;
+  margin-top: 12px;
+}
+
+.batch-actions-inner {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 12px 16px;
-  margin-top: 12px;
-  background: var(--el-fill-color-light);
-  border-radius: 6px;
-  border: 1px solid var(--el-border-color-lighter);
+  gap: 16px;
+  padding: 12px 20px;
+}
+
+.batch-badge {
+  flex-shrink: 0;
 }
 
 .batch-count {
   font-size: 14px;
-  color: var(--el-text-color-regular);
-  margin-right: 8px;
+  font-weight: 600;
+  color: var(--el-text-color-primary);
+  padding-right: 4px;
+}
+
+.batch-buttons {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.batch-shortcut-hint {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--el-text-color-placeholder);
+  white-space: nowrap;
+}
+
+/* Batch toolbar slide transition */
+.batch-slide-enter-active,
+.batch-slide-leave-active {
+  transition: all 0.25s ease;
+}
+
+.batch-slide-enter-from,
+.batch-slide-leave-to {
+  opacity: 0;
+  transform: translateY(20px);
+}
+
+/* ─── Quick ack button on aggregated rows ─── */
+.quick-ack-btn {
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  font-size: 12px;
+  margin-left: 4px;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+
+.agg-item:hover .quick-ack-btn {
+  opacity: 1;
+}
+
+.quick-ack-done {
+  flex-shrink: 0;
+  font-size: 12px;
+  color: var(--el-color-success);
+  margin-left: 4px;
+  animation: quick-ack-fade 2s ease forwards;
+}
+
+@keyframes quick-ack-fade {
+  0% { opacity: 1; }
+  70% { opacity: 1; }
+  100% { opacity: 0; }
+}
+
+/* ─── Tooltip AI context styles ─── */
+.tooltip-ai-context {
+  font-size: 13px;
+  line-height: 1.6;
+  max-width: 280px;
+}
+
+.tooltip-context-line {
+  margin-bottom: 4px;
+}
+
+.tooltip-similar-line {
+  color: #a0cfff;
+  font-size: 12px;
 }
 
 /* Aggregated view styles */

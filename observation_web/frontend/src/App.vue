@@ -207,11 +207,7 @@
           </div>
 
           <el-main class="main-content">
-            <router-view v-slot="{ Component }">
-              <transition name="fade" mode="out-in">
-                <component :is="Component" />
-              </transition>
-            </router-view>
+            <router-view />
           </el-main>
         </el-container>
       </el-container>
@@ -562,6 +558,11 @@ html, body, #app {
 .fade-enter-from,
 .fade-leave-to {
   opacity: 0;
+}
+
+.fade-enter-to,
+.fade-leave-from {
+  opacity: 1;
 }
 
 /* Online users */

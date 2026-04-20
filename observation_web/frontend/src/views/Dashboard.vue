@@ -40,18 +40,49 @@
     <!-- ===================== Layer 1: Global Health Summary ===================== -->
     <div class="layer layer-summary">
       <div class="summary-cards">
-        <div class="summary-card clickable" @click="$router.push('/arrays')">
-          <div class="summary-icon icon-primary">
-            <el-icon size="22"><Cpu /></el-icon>
+        <!-- Anomaly card: first position, 2x width -->
+        <div
+          v-if="activeAnomalyCount > 0"
+          class="summary-card summary-card-anomaly clickable"
+          @click="$router.push({ path: '/alerts', query: { level: 'error' } })"
+        >
+          <div class="summary-icon icon-danger">
+            <el-icon size="22"><Warning /></el-icon>
           </div>
           <div class="summary-body">
             <template v-if="!initialLoaded">
               <div class="skeleton-value" />
             </template>
             <template v-else>
-              <div class="summary-value">{{ filteredTotalCount }}</div>
+              <div class="summary-value">{{ activeAnomalyCount }}</div>
             </template>
-            <div class="summary-label">纳管阵列总数</div>
+            <div class="summary-label">活跃异常数</div>
+          </div>
+        </div>
+        <!-- Green banner when no anomalies -->
+        <div v-else class="summary-card summary-card-healthy">
+          <div class="summary-icon icon-success">
+            <el-icon size="22"><Monitor /></el-icon>
+          </div>
+          <div class="summary-body">
+            <div class="summary-value healthy-text">系统运行平稳</div>
+            <div class="summary-label">活跃异常数: 0</div>
+          </div>
+        </div>
+
+        <!-- Needs manual: second position -->
+        <div class="summary-card clickable" @click="$router.push('/alerts')">
+          <div class="summary-icon icon-warning">
+            <el-icon size="22"><Bell /></el-icon>
+          </div>
+          <div class="summary-body">
+            <template v-if="!initialLoaded">
+              <div class="skeleton-value" />
+            </template>
+            <template v-else>
+              <div class="summary-value">{{ needsManualCount }}</div>
+            </template>
+            <div class="summary-label">需要人工处理</div>
           </div>
         </div>
 
@@ -92,33 +123,19 @@
           </div>
         </div>
 
-        <div class="summary-card clickable" @click="$router.push({ path: '/alerts', query: { level: 'error' } })">
-          <div class="summary-icon icon-danger">
-            <el-icon size="22"><Warning /></el-icon>
+        <!-- Total arrays: demoted to last, smaller -->
+        <div class="summary-card summary-card-demoted clickable" @click="$router.push('/arrays')">
+          <div class="summary-icon icon-primary summary-icon-sm">
+            <el-icon size="18"><Cpu /></el-icon>
           </div>
           <div class="summary-body">
             <template v-if="!initialLoaded">
               <div class="skeleton-value" />
             </template>
             <template v-else>
-              <div class="summary-value">{{ activeAnomalyCount }}</div>
+              <div class="summary-value summary-value-sm">{{ filteredTotalCount }}</div>
             </template>
-            <div class="summary-label">活跃异常数</div>
-          </div>
-        </div>
-
-        <div class="summary-card clickable" @click="$router.push('/alerts')">
-          <div class="summary-icon icon-warning">
-            <el-icon size="22"><Bell /></el-icon>
-          </div>
-          <div class="summary-body">
-            <template v-if="!initialLoaded">
-              <div class="skeleton-value" />
-            </template>
-            <template v-else>
-              <div class="summary-value">{{ needsManualCount }}</div>
-            </template>
-            <div class="summary-label">需要人工处理</div>
+            <div class="summary-label">纳管阵列总数</div>
           </div>
         </div>
       </div>
@@ -129,7 +146,7 @@
       <div class="focus-cards">
         <div
           class="focus-card focus-anomaly"
-          :class="{ 'has-items': realAnomalyPending > 0 }"
+          :class="{ 'has-items': realAnomalyPending > 0, 'focus-pulse': realAnomalyPending > 0 }"
           @click="$router.push({ path: '/alerts', query: { level: 'error' } })"
         >
           <div class="focus-count">{{ realAnomalyPending }}</div>
@@ -161,13 +178,13 @@
       </div>
     </div>
 
-    <!-- ===================== Layer 3: Array Grid + Alert Stream ===================== -->
+    <!-- ===================== Layer 3: Status Heatmap + Alert Stream ===================== -->
     <el-row :gutter="20" class="layer layer-grid">
       <el-col :span="16">
         <el-card class="content-card">
           <template #header>
             <div class="card-header">
-              <span>阵列概览</span>
+              <span>阵列状态热力图</span>
               <el-button text size="small" @click="loadArrays">
                 <el-icon><Refresh /></el-icon>
               </el-button>
@@ -175,77 +192,25 @@
           </template>
 
           <!-- Skeleton loading -->
-          <div v-if="!initialLoaded" class="array-grid">
-            <div v-for="n in 6" :key="n" class="array-card skeleton-card">
-              <div class="skeleton-bar" style="width: 60%; height: 14px;" />
-              <div class="skeleton-bar" style="width: 40%; height: 12px; margin-top: 6px;" />
-              <div class="skeleton-bar" style="width: 80%; height: 12px; margin-top: 10px;" />
-            </div>
+          <div v-if="!initialLoaded" class="heatmap-grid">
+            <div v-for="n in 12" :key="n" class="heatmap-dot heatmap-dot-skeleton" />
           </div>
 
-          <!-- Array cards -->
-          <div v-else-if="filteredArrays.length > 0" class="array-grid">
-            <div
+          <!-- Status Heatmap Dot Grid -->
+          <div v-else-if="filteredArrays.length > 0" class="heatmap-grid">
+            <el-tooltip
               v-for="arr in filteredArrays"
               :key="arr.array_id"
-              class="array-card"
-              @click="$router.push(`/arrays/${arr.array_id}`)"
+              :content="getHeatmapTooltip(arr)"
+              placement="top"
+              :show-after="200"
             >
-              <div class="array-card-top">
-                <div class="array-name-row">
-                  <span class="status-dot" :class="getStatusDotClass(arr)" />
-                  <span class="array-display-name">{{ arr.display_name || arr.name }}</span>
-                  <el-badge
-                    v-if="getActiveIssueCount(arr) > 0"
-                    :value="getActiveIssueCount(arr)"
-                    type="danger"
-                    class="issue-badge"
-                  />
-                </div>
-                <div class="array-ip">{{ arr.host }}</div>
-              </div>
-              <div class="array-card-tags">
-                <el-tag
-                  v-if="arr.tag_l1_name"
-                  size="small"
-                  effect="plain"
-                  :color="arr.tag_color || undefined"
-                  class="dim-tag"
-                >{{ arr.tag_l1_name }}</el-tag>
-                <el-tag
-                  v-if="arr.tag_l2_name"
-                  size="small"
-                  effect="plain"
-                  class="dim-tag"
-                >{{ arr.tag_l2_name }}</el-tag>
-                <el-tag
-                  v-if="arr.env_type"
-                  size="small"
-                  type="info"
-                  effect="plain"
-                  class="dim-tag"
-                >{{ arr.env_type }}</el-tag>
-                <el-tag
-                  v-if="arr.site"
-                  size="small"
-                  type="info"
-                  effect="plain"
-                  class="dim-tag"
-                >{{ arr.site }}</el-tag>
-              </div>
-              <div class="array-card-bottom">
-                <span class="agent-indicator" :class="{ online: arr.agent_healthy, degraded: arr.agent_running && !arr.agent_healthy }">
-                  <span class="agent-dot" />
-                  Agent
-                </span>
-                <span class="freshness-indicator" :class="getFreshnessClass(arr)">
-                  {{ getFreshnessLabel(arr) }}
-                </span>
-                <span class="last-report" v-if="arr.last_heartbeat_at || arr.last_refresh">
-                  {{ formatRelativeTime(arr.last_heartbeat_at || arr.last_refresh) }}
-                </span>
-              </div>
-            </div>
+              <div
+                class="heatmap-dot"
+                :class="getHeatmapDotClass(arr)"
+                @click="$router.push(`/arrays/${arr.array_id}`)"
+              />
+            </el-tooltip>
           </div>
 
           <el-empty v-else-if="preferencesStore.personalViewActive" description="未配置关注的阵列或标签">
@@ -494,6 +459,26 @@ function getStatusDotClass(arr) {
   return 'dot-ok'
 }
 
+function getHeatmapDotClass(arr) {
+  if (arr.state !== 'connected') return 'heatmap-offline'
+  const issues = arr.active_issues || []
+  if (issues.length > 0) {
+    return issues.some(i => i.level === 'error' || i.level === 'critical')
+      ? 'heatmap-error' : 'heatmap-warning'
+  }
+  const s = arr.recent_alert_summary || {}
+  if ((s.error || 0) + (s.critical || 0) > 0) return 'heatmap-warning'
+  return 'heatmap-healthy'
+}
+
+function getHeatmapTooltip(arr) {
+  const name = arr.display_name || arr.name || '未命名'
+  const ip = arr.host || '-'
+  const issues = arr.active_issues || []
+  const lastIssue = issues.length > 0 ? issues[0].message || issues[0].type || '有异常' : '无异常'
+  return `${name} | ${ip} | ${lastIssue}`
+}
+
 function getFreshnessClass(arr) {
   return 'freshness-' + getArrayFreshness(arr)
 }
@@ -573,7 +558,7 @@ const trendChartOption = computed(() => ({
     type: 'value',
     minInterval: 1,
     axisLabel: { fontSize: 11, color: '#909399' },
-    splitLine: { lineStyle: { color: '#f0f0f0' } },
+    splitLine: { lineStyle: { color: '#d9d9d9' } },
   },
   series: [{
     name: '\u5f02\u5e38\u6570',
@@ -581,11 +566,11 @@ const trendChartOption = computed(() => ({
     smooth: true,
     symbol: 'circle',
     symbolSize: 4,
-    lineStyle: { width: 2, color: '#f56c6c' },
-    itemStyle: { color: '#f56c6c' },
+    lineStyle: { width: 2, color: '#ff4d4f' },
+    itemStyle: { color: '#ff4d4f' },
     areaStyle: { color: { type: 'linear', x: 0, y: 0, x2: 0, y2: 1, colorStops: [
-      { offset: 0, color: 'rgba(245,108,108,0.25)' },
-      { offset: 1, color: 'rgba(245,108,108,0.02)' },
+      { offset: 0, color: 'rgba(255,77,79,0.3)' },
+      { offset: 1, color: 'rgba(255,77,79,0.03)' },
     ]}},
     data: stats.value?.trend_24h?.map(t => t.count) || [],
   }],
@@ -615,10 +600,10 @@ const healthPieOption = computed(() => {
       label: { show: false },
       emphasis: { label: { show: true, fontSize: 13, fontWeight: 'bold' } },
       data: [
-        { value: ok, name: '\u5065\u5eb7', itemStyle: { color: '#67c23a' } },
-        { value: warn, name: '\u544a\u8b66', itemStyle: { color: '#e6a23c' } },
-        { value: err, name: '\u5f02\u5e38', itemStyle: { color: '#f56c6c' } },
-        { value: offline, name: '\u79bb\u7ebf', itemStyle: { color: '#c0c4cc' } },
+        { value: ok, name: '\u5065\u5eb7', itemStyle: { color: '#52c41a' } },
+        { value: warn, name: '\u544a\u8b66', itemStyle: { color: '#faad14' } },
+        { value: err, name: '\u5f02\u5e38', itemStyle: { color: '#ff4d4f' } },
+        { value: offline, name: '\u79bb\u7ebf', itemStyle: { color: '#8c8c8c' } },
       ].filter(d => d.value > 0),
     }],
   }
@@ -833,7 +818,7 @@ onUnmounted(() => {
 /* Layer 1: Summary cards */
 .summary-cards {
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
+  grid-template-columns: 2fr 1fr 1fr 1fr 0.8fr;
   gap: 16px;
 }
 
@@ -855,6 +840,44 @@ onUnmounted(() => {
 .summary-card.clickable:hover {
   transform: translateY(-2px);
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+}
+
+/* Anomaly card: dominant when active */
+.summary-card-anomaly {
+  background: #fff2f0;
+  border: 2px solid #ff4d4f;
+}
+
+.summary-card-anomaly .summary-value {
+  color: #ff4d4f;
+  font-size: 32px;
+}
+
+/* Green healthy banner */
+.summary-card-healthy {
+  background: #f6ffed;
+  border: 2px solid #52c41a;
+}
+
+.healthy-text {
+  color: #52c41a !important;
+  font-size: 18px !important;
+  font-weight: 600 !important;
+}
+
+/* Demoted last card: smaller */
+.summary-card-demoted {
+  padding: 12px 14px;
+}
+
+.summary-card-demoted .summary-value-sm {
+  font-size: 18px;
+}
+
+.summary-icon-sm {
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
 }
 
 .summary-icon {
@@ -955,10 +978,20 @@ onUnmounted(() => {
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
 }
 
-.focus-card.has-items.focus-anomaly    { border-left-color: #f56c6c; background: #fef0f0; }
+.focus-card.has-items.focus-anomaly    { border-left-color: #ff4d4f; background: #fff2f0; }
 .focus-card.has-items.focus-expected   { border-left-color: #409eff; background: #ecf5ff; }
-.focus-card.has-items.focus-collection { border-left-color: #e6a23c; background: #fdf6ec; }
-.focus-card.has-items.focus-recovered  { border-left-color: #67c23a; background: #f0f9eb; }
+.focus-card.has-items.focus-collection { border-left-color: #faad14; background: #fffbe6; }
+.focus-card.has-items.focus-recovered  { border-left-color: #52c41a; background: #f6ffed; }
+
+/* Pulse animation for anomaly card when active */
+.focus-pulse {
+  animation: focus-pulse-anim 2s ease-in-out infinite;
+}
+
+@keyframes focus-pulse-anim {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(255, 77, 79, 0.3); }
+  50% { box-shadow: 0 0 0 6px rgba(255, 77, 79, 0); }
+}
 
 .focus-count {
   font-size: 22px;
@@ -973,7 +1006,7 @@ onUnmounted(() => {
   white-space: nowrap;
 }
 
-/* Layer 3: Array grid */
+/* Layer 3: Status Heatmap */
 .content-card {
   margin-bottom: 20px;
 }
@@ -984,47 +1017,46 @@ onUnmounted(() => {
   align-items: center;
 }
 
-.array-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
-  gap: 12px;
+/* Heatmap dot grid */
+.heatmap-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 8px 0;
 }
 
-.array-card {
-  background: #fff;
-  border: 1px solid #ebeef5;
-  border-radius: 8px;
-  padding: 14px 16px;
+.heatmap-dot {
+  width: 24px;
+  height: 24px;
+  border-radius: 4px;
   cursor: pointer;
-  transition: all 0.2s ease;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
 }
 
-.array-card:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
-  border-color: #d0d3d9;
+.heatmap-dot:hover {
+  transform: scale(1.3);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+  z-index: 1;
 }
 
-.skeleton-card {
+.heatmap-dot.heatmap-healthy { background: #52c41a; }
+.heatmap-dot.heatmap-warning { background: #faad14; }
+.heatmap-dot.heatmap-error   { background: #ff4d4f; }
+.heatmap-dot.heatmap-offline { background: #8c8c8c; }
+
+.heatmap-dot-skeleton {
+  background: linear-gradient(90deg, #f0f0f0 25%, #e8e8e8 50%, #f0f0f0 75%);
+  background-size: 200% 100%;
+  animation: skeleton-pulse 1.5s ease infinite;
   cursor: default;
-  pointer-events: none;
 }
 
+/* Keep legacy classes for compatibility */
 .skeleton-bar {
   border-radius: 4px;
   background: linear-gradient(90deg, #f0f0f0 25%, #e8e8e8 50%, #f0f0f0 75%);
   background-size: 200% 100%;
   animation: skeleton-pulse 1.5s ease infinite;
-}
-
-.array-card-top {
-  margin-bottom: 8px;
-}
-
-.array-name-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
 }
 
 .status-dot {
@@ -1034,79 +1066,10 @@ onUnmounted(() => {
   flex-shrink: 0;
 }
 
-.status-dot.dot-ok      { background: #67c23a; }
-.status-dot.dot-warning  { background: #e6a23c; }
-.status-dot.dot-error    { background: #f56c6c; }
-.status-dot.dot-offline  { background: #c0c4cc; }
-
-.array-display-name {
-  font-weight: 600;
-  font-size: 14px;
-  color: #303133;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  flex: 1;
-  min-width: 0;
-}
-
-.issue-badge {
-  flex-shrink: 0;
-}
-
-.issue-badge :deep(.el-badge__content) {
-  font-size: 10px;
-}
-
-.array-ip {
-  font-size: 12px;
-  color: #909399;
-  margin-left: 16px;
-  margin-top: 2px;
-}
-
-.array-card-tags {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  margin-bottom: 8px;
-  min-height: 22px;
-}
-
-.dim-tag {
-  font-size: 11px;
-  height: 20px;
-  line-height: 18px;
-  border-color: #e4e7ed;
-}
-
-.array-card-bottom {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  font-size: 11px;
-  color: #909399;
-  border-top: 1px solid #f5f5f5;
-  padding-top: 8px;
-}
-
-.agent-indicator {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  color: #c0c4cc;
-}
-
-.agent-indicator.online {
-  color: #67c23a;
-}
-
-.agent-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: currentColor;
-}
+.status-dot.dot-ok      { background: #52c41a; }
+.status-dot.dot-warning  { background: #faad14; }
+.status-dot.dot-error    { background: #ff4d4f; }
+.status-dot.dot-offline  { background: #8c8c8c; }
 
 .freshness-indicator {
   font-size: 11px;
@@ -1114,14 +1077,9 @@ onUnmounted(() => {
   border-radius: 3px;
 }
 
-.freshness-fresh   { color: #67c23a; background: #f0f9eb; }
-.freshness-stale   { color: #e6a23c; background: #fdf6ec; }
-.freshness-unknown  { color: #909399; background: #f4f4f5; }
-
-.last-report {
-  margin-left: auto;
-  white-space: nowrap;
-}
+.freshness-fresh   { color: #52c41a; background: #f6ffed; }
+.freshness-stale   { color: #faad14; background: #fffbe6; }
+.freshness-unknown  { color: #8c8c8c; background: #f5f5f5; }
 
 /* Alert stream */
 .alerts-card {
@@ -1152,7 +1110,10 @@ onUnmounted(() => {
 /* Responsive */
 @media (max-width: 1200px) {
   .summary-cards {
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: 2fr 1fr 1fr;
+  }
+  .summary-card-demoted {
+    grid-column: span 1;
   }
   .focus-cards {
     grid-template-columns: repeat(2, 1fr);
@@ -1161,12 +1122,13 @@ onUnmounted(() => {
 
 @media (max-width: 768px) {
   .summary-cards {
-    grid-template-columns: repeat(2, 1fr);
+    grid-template-columns: 1fr 1fr;
+  }
+  .summary-card-anomaly,
+  .summary-card-healthy {
+    grid-column: span 2;
   }
   .focus-cards {
-    grid-template-columns: 1fr;
-  }
-  .array-grid {
     grid-template-columns: 1fr;
   }
 }

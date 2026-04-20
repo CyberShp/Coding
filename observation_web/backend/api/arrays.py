@@ -283,13 +283,14 @@ async def sync_array_alerts(
             if new_alerts:
                 new_alerts_count, created_db_alerts = await alert_store.create_alerts_batch(db, new_alerts)
                 await _auto_ack_new_alerts(db, array_id, created_db_alerts)
-                for alert in new_alerts[-10:]:
+                for db_alert in created_db_alerts[-10:]:
                     await broadcast_alert({
-                        'array_id': alert.array_id,
-                        'observer_name': alert.observer_name,
-                        'level': alert.level.value,
-                        'message': alert.message,
-                        'timestamp': alert.timestamp.isoformat(),
+                        'id': db_alert.id,
+                        'array_id': db_alert.array_id,
+                        'observer_name': db_alert.observer_name,
+                        'level': db_alert.level,
+                        'message': db_alert.message,
+                        'timestamp': db_alert.timestamp.isoformat() if db_alert.timestamp else None,
                     })
 
     await _update_sync_position(db, array_id, total_lines, last_pos)
@@ -2314,13 +2315,14 @@ async def refresh_array(
                     await _auto_ack_new_alerts(db, array_id, created_db_alerts)
                     sys_info("arrays", f"Synced {new_alerts_count} new alerts for {array_id}")
                     
-                    for alert in new_alerts[-10:]:
+                    for db_alert in created_db_alerts[-10:]:
                         await broadcast_alert({
-                            'array_id': alert.array_id,
-                            'observer_name': alert.observer_name,
-                            'level': alert.level.value,
-                            'message': alert.message,
-                            'timestamp': alert.timestamp.isoformat(),
+                            'id': db_alert.id,
+                            'array_id': db_alert.array_id,
+                            'observer_name': db_alert.observer_name,
+                            'level': db_alert.level,
+                            'message': db_alert.message,
+                            'timestamp': db_alert.timestamp.isoformat() if db_alert.timestamp else None,
                         })
                 
                 # Update observer status from recent alerts

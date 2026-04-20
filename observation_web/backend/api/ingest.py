@@ -170,10 +170,11 @@ async def _handle_alert(payload: IngestPayload, source_ip: str, db: AsyncSession
         )
         
         alert_store = get_alert_store()
-        await alert_store.create_alert(db, alert_create)
-        
-        # Broadcast via WebSocket
+        db_alert = await alert_store.create_alert(db, alert_create)
+
+        # Broadcast via WebSocket (include id for AI auto-translation)
         await broadcast_alert({
+            'id': db_alert.id,
             'array_id': alert_create.array_id,
             'observer_name': alert_create.observer_name,
             'level': alert_create.level.value,

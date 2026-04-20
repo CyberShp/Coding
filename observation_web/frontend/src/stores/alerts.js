@@ -15,6 +15,56 @@ export const useAlertStore = defineStore('alerts', () => {
   const ws = ref(null)
   const wsConnected = ref(false)
 
+  // AI auto-translation
+  const aiAvailable = ref(false)
+  const aiTranslations = ref(new Map())  // alert_id → interpretation string
+  let aiStatusChecked = false
+  let aiFetchQueue = []
+  let aiFetching = false
+
+  async function checkAIAvailability() {
+    if (aiStatusChecked) return
+    aiStatusChecked = true
+    try {
+      const { data } = await api.checkAIStatus()
+      aiAvailable.value = !!data?.available
+    } catch {
+      aiAvailable.value = false
+    }
+  }
+
+  async function autoTranslateAlert(alert) {
+    if (!aiAvailable.value) return
+    if (!alert?.id) return
+    if (aiTranslations.value.has(alert.id)) return
+    // Only auto-translate alarm_type observer alerts
+    if (alert.observer_name !== 'alarm_type') return
+    aiFetchQueue.push(alert.id)
+    drainAIQueue()
+  }
+
+  async function drainAIQueue() {
+    if (aiFetching || aiFetchQueue.length === 0) return
+    aiFetching = true
+    while (aiFetchQueue.length > 0) {
+      const alertId = aiFetchQueue.shift()
+      if (aiTranslations.value.has(alertId)) continue
+      try {
+        const { data } = await api.getAIInterpretation(alertId)
+        if (data?.interpretation) {
+          const m = new Map(aiTranslations.value)
+          m.set(alertId, data.interpretation)
+          aiTranslations.value = m
+        }
+      } catch { /* AI unavailable for this alert, skip */ }
+    }
+    aiFetching = false
+  }
+
+  function getAITranslation(alertId) {
+    return aiTranslations.value.get(alertId) || null
+  }
+
   // Critical event banner state
   const criticalEvents = ref([])  // unacknowledged critical events
 
@@ -56,6 +106,11 @@ export const useAlertStore = defineStore('alerts', () => {
     try {
       const response = await api.getAlerts(params)
       alerts.value = response.data
+      // Auto-translate alarm_type alerts when AI is available
+      checkAIAvailability().then(() => {
+        const items = Array.isArray(response.data) ? response.data : (response.data?.items || [])
+        for (const a of items) autoTranslateAlert(a)
+      })
       return response.data
     } finally {
       loading.value = false
@@ -66,6 +121,10 @@ export const useAlertStore = defineStore('alerts', () => {
     try {
       const response = await api.getRecentAlerts(20, options)
       recentAlerts.value = response.data
+      // Auto-translate alarm_type alerts
+      checkAIAvailability().then(() => {
+        for (const a of (response.data || [])) autoTranslateAlert(a)
+      })
     } catch (error) {
       if (error?.name === 'CanceledError' || error?.code === 'ERR_CANCELED') return
       console.error('Failed to fetch recent alerts:', error)
@@ -126,6 +185,9 @@ export const useAlertStore = defineStore('alerts', () => {
   const RECENT_ALERTS_MAX = 50
 
   function handleNewAlert(data) {
+    // Auto-translate alarm_type alerts via AI
+    autoTranslateAlert(data)
+
     // Add to recent list
     recentAlerts.value.unshift(data)
     // Keep only alerts within last 2 hours, cap at 50
@@ -271,6 +333,8 @@ export const useAlertStore = defineStore('alerts', () => {
     loading,
     wsConnected,
     criticalEvents,
+    aiAvailable,
+    aiTranslations,
     // Getters
     recentCount,
     hasCriticalEvents,
@@ -286,5 +350,8 @@ export const useAlertStore = defineStore('alerts', () => {
     clearAllSuppressions,
     suppressedObservers,
     suppressedList,
+    getAITranslation,
+    checkAIAvailability,
+    autoTranslateAlert,
   }
 })

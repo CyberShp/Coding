@@ -5,6 +5,7 @@ Manages scheduled tasks for periodic query execution.
 """
 
 import asyncio
+import json
 import logging
 from datetime import datetime
 from typing import Any, Dict, List, Optional
@@ -161,45 +162,53 @@ class TaskScheduler:
                 ssh_pool = get_ssh_pool()
                 outputs = []
                 errors = []
-                
+
+                # Resolve commands once before iterating arrays
+                commands_to_run: List[str] = []
+                if task.command:
+                    commands_to_run = [task.command]
+                elif task.query_template_id:
+                    from ..models.query import QueryTemplateModel
+                    tmpl_result = await db.execute(
+                        select(QueryTemplateModel).where(
+                            QueryTemplateModel.id == task.query_template_id
+                        )
+                    )
+                    template = tmpl_result.scalar()
+                    if template and template.commands:
+                        try:
+                            commands_to_run = json.loads(template.commands)
+                        except (ValueError, TypeError):
+                            commands_to_run = []
+
                 array_ids = task.array_ids or []
                 if not array_ids:
                     # If no specific arrays, run on all connected
                     for array_id, conn in ssh_pool._connections.items():
                         if conn.is_connected():
                             array_ids.append(array_id)
-                
+
                 for array_id in array_ids:
                     conn = ssh_pool.get_connection(array_id)
                     if not conn or not conn.is_connected():
                         errors.append(f"{array_id}: Not connected")
                         continue
-                    
+
+                    if not commands_to_run:
+                        errors.append(f"{array_id}: No command defined")
+                        continue
+
                     try:
-                        # Execute command
-                        command = task.command
-                        if not command:
-                            # If using query template, fetch and use it
-                            from ..models.query import QueryTemplateModel
-                            if task.query_template_id:
-                                tmpl_result = await db.execute(
-                                    select(QueryTemplateModel).where(
-                                        QueryTemplateModel.id == task.query_template_id
-                                    )
-                                )
-                                template = tmpl_result.scalar()
-                                if template:
-                                    command = template.command
-                        
-                        if command:
-                            output, error = conn.execute_command(command)
-                            if output:
-                                outputs.append(f"[{array_id}]\n{output}")
-                            if error:
-                                errors.append(f"[{array_id}] {error}")
-                        else:
-                            errors.append(f"{array_id}: No command defined")
-                            
+                        for cmd in commands_to_run:
+                            exit_code, stdout, stderr = await conn.execute_async(cmd)
+                            if stdout:
+                                outputs.append(f"[{array_id}]\n{stdout}")
+                            if exit_code != 0:
+                                err_msg = stderr.strip() if stderr else f"exit code {exit_code}"
+                                errors.append(f"[{array_id}] {cmd}: {err_msg}")
+                            elif stderr:
+                                # exit_code=0 but stderr has content (warning, not failure)
+                                errors.append(f"[{array_id}] {stderr}")
                     except Exception as e:
                         errors.append(f"{array_id}: {str(e)}")
                 

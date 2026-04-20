@@ -134,6 +134,7 @@
 import { ArrowRight, ArrowDown, Check } from '@element-plus/icons-vue'
 import { translateAlert, getObserverName, LEVEL_LABELS, LEVEL_TAG_TYPES } from '@/utils/alertTranslator'
 import { useAlertFolding } from '@/composables/useAlertFolding'
+import { useAlertStore } from '@/stores/alerts'
 import { toRef, computed } from 'vue'
 
 const props = defineProps({
@@ -249,6 +250,12 @@ function getObserverLabel(name) {
 }
 
 function getSummary(row) {
+  // Prefer AI translation for alarm_type alerts when available
+  if (row.observer_name === 'alarm_type' && row.id) {
+    const alertStore = useAlertStore()
+    const aiText = alertStore.getAITranslation(row.id)
+    if (aiText) return aiText
+  }
   const result = translateAlert(row)
   return result.summary || row.message
 }
