@@ -346,6 +346,7 @@ export const useAlertStore = defineStore('alerts', () => {
   function disconnectWebSocket() {
     cleanupTimers()
     intentionalDisconnect = true  // Prevent auto-reconnect
+    wsConnected.value = false     // Sync: don't wait for async onclose
     if (ws.value) {
       ws.value.close()
       ws.value = null

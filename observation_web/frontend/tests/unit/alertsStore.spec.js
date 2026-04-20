@@ -122,7 +122,8 @@ describe('alertsStore (real store)', () => {
       expect(store.wsConnected).toBe(true)
 
       store.disconnectWebSocket()
-      // wsConnected may still be true until onclose fires, but no reconnect should happen
+      // wsConnected must be false immediately after disconnect (sync, not waiting for onclose)
+      expect(store.wsConnected).toBe(false)
       // Advance timers — no new WebSocket should be created
       vi.advanceTimersByTime(120000)
       // Only the original socket was created, no reconnect
