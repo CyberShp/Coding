@@ -1141,6 +1141,7 @@ async def list_array_statuses(
                 obs_dict[obs_name] = {
                     'status': obs_status_val,
                     'message': msg[:100],
+                    'last_active_ts': datetime.now().isoformat(),
                 }
 
         issues = status_obj.active_issues
@@ -1850,13 +1851,14 @@ async def get_array_status(
     if not obs_dict:
         from ..models.alert import AlertModel
         stmt = (
-            select(AlertModel.observer_name, AlertModel.level, AlertModel.message)
+            select(AlertModel.observer_name, AlertModel.level, AlertModel.message, AlertModel.timestamp)
             .where(AlertModel.array_id == array_id)
             .order_by(AlertModel.timestamp.desc())
         )
         alert_rows = await db.execute(stmt)
         _level_rank = {'critical': 4, 'error': 3, 'warning': 2, 'info': 1}
         _obs_best = {}
+        _obs_last_ts = {}  # track most recent timestamp per observer
         for row in alert_rows.all():
             obs_name = row.observer_name
             level = row.level
@@ -1864,6 +1866,8 @@ async def get_array_status(
             prev = _obs_best.get(obs_name)
             if prev is None or rank > prev[0]:
                 _obs_best[obs_name] = (rank, level, row.message or '')
+            if obs_name not in _obs_last_ts and row.timestamp:
+                _obs_last_ts[obs_name] = row.timestamp.isoformat() if hasattr(row.timestamp, 'isoformat') else str(row.timestamp)
         for obs_name, (rank, level, msg) in _obs_best.items():
             obs_status_val = 'ok'
             if level in ('error', 'critical'):
@@ -1873,6 +1877,7 @@ async def get_array_status(
             obs_dict[obs_name] = {
                 'status': obs_status_val,
                 'message': msg[:100],
+                'last_active_ts': _obs_last_ts.get(obs_name, ''),
             }
 
     # Derive active_issues from DB if cache is empty
@@ -2330,12 +2335,14 @@ async def refresh_array(
                     observer = alert.get('observer_name', '')
                     level = alert.get('level', 'info')
                     message = alert.get('message', '')
-                    
+                    alert_ts = alert.get('timestamp', datetime.now().isoformat())
+
                     if observer:
                         if level in ('error', 'critical'):
                             status_obj.observer_status[observer] = {
                                 'status': 'error',
                                 'message': message[:100],
+                                'last_active_ts': alert_ts,
                             }
                         elif level == 'warning':
                             if observer not in status_obj.observer_status or \
@@ -2343,7 +2350,18 @@ async def refresh_array(
                                 status_obj.observer_status[observer] = {
                                     'status': 'warning',
                                     'message': message[:100],
+                                    'last_active_ts': alert_ts,
                                 }
+                        else:
+                            # info/ok level — still update last_active_ts
+                            if observer not in status_obj.observer_status:
+                                status_obj.observer_status[observer] = {
+                                    'status': 'ok',
+                                    'message': '',
+                                    'last_active_ts': alert_ts,
+                                }
+                            else:
+                                status_obj.observer_status[observer]['last_active_ts'] = alert_ts
 
                 # Update active issues from parsed alerts (chronological order)
                 for alert in parsed_alerts:

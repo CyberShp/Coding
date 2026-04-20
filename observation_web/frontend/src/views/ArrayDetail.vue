@@ -67,6 +67,25 @@
             />
           </el-select>
         </div>
+        <!-- F203: Collection Heartbeat Indicator -->
+        <div class="heartbeat-badge" :class="heartbeatState">
+          <span class="heartbeat-dot"></span>
+          <span class="heartbeat-text">{{ heartbeatLabel }}</span>
+        </div>
+      </div>
+
+      <!-- F204: Observer Activity Map -->
+      <div v-if="observerMapEntries.length > 0" class="observer-map">
+        <el-tooltip
+          v-for="obs in observerMapEntries"
+          :key="obs.name"
+          :content="obs.tooltip"
+          placement="top"
+        >
+          <span class="obs-dot" :class="obs.dotClass">
+            <span class="obs-label">{{ obs.shortName }}</span>
+          </span>
+        </el-tooltip>
       </div>
 
       <!-- ════════════════════════════════════════════════
@@ -514,6 +533,73 @@ const dataFreshnessClass = computed(() => {
   if (ageMs < 5 * 60 * 1000) return 'freshness-fresh'
   if (ageMs < 30 * 60 * 1000) return 'freshness-ok'
   return 'freshness-stale'
+})
+
+// ───── F203: Collection Heartbeat ─────
+const heartbeatAgeMs = ref(0)
+let heartbeatTimer = null
+
+function updateHeartbeatAge() {
+  if (!array.value?.last_refresh) {
+    heartbeatAgeMs.value = Infinity
+    return
+  }
+  heartbeatAgeMs.value = Date.now() - new Date(array.value.last_refresh).getTime()
+}
+
+const heartbeatState = computed(() => {
+  const interval = (array.value?.collect_interval_s || 60) * 1000
+  const age = heartbeatAgeMs.value
+  if (age === Infinity) return 'hb-interrupted'
+  if (age < interval * 2) return 'hb-active'
+  if (age < interval * 5) return 'hb-delayed'
+  return 'hb-interrupted'
+})
+
+const heartbeatLabel = computed(() => {
+  const age = heartbeatAgeMs.value
+  if (age === Infinity) return '未采集'
+  if (age < 60000) return `${Math.round(age / 1000)}s`
+  if (age < 3600000) return `${Math.round(age / 60000)}m`
+  return `${Math.round(age / 3600000)}h`
+})
+
+// ───── F204: Observer Activity Map ─────
+const OBSERVER_SHORT_NAMES = {
+  alarm_type: 'Alarm',
+  disk_smart: 'SMART',
+  rebuild_status: 'Rebuild',
+  bbu_status: 'BBU',
+  fan_temp: 'Fan',
+  pcie_error: 'PCIe',
+  controller_status: 'Ctrl',
+  enclosure_status: 'Encl',
+  pool_status: 'Pool',
+  card_info: 'Card',
+}
+
+const observerMapEntries = computed(() => {
+  const obsStatus = array.value?.observer_status || {}
+  return Object.entries(obsStatus).map(([name, info]) => {
+    const lastTs = info.last_active_ts ? new Date(info.last_active_ts) : null
+    const ageMs = lastTs ? Date.now() - lastTs.getTime() : Infinity
+    const isAlerting = info.status === 'error' || info.status === 'critical'
+    let dotClass = 'obs-gray'  // >1h or unknown
+    if (isAlerting) dotClass = 'obs-red'
+    else if (ageMs < 3600000) dotClass = 'obs-green'
+
+    const ageText = lastTs
+      ? (ageMs < 60000 ? `${Math.round(ageMs/1000)}s ago` : ageMs < 3600000 ? `${Math.round(ageMs/60000)}m ago` : `${Math.round(ageMs/3600000)}h ago`)
+      : '无数据'
+    const tooltip = `${name}: ${info.status || 'unknown'} (${ageText})`
+
+    return {
+      name,
+      shortName: OBSERVER_SHORT_NAMES[name] || name.slice(0, 6),
+      dotClass,
+      tooltip,
+    }
+  })
 })
 
 // ───── Zone 3: Time window filter ─────
@@ -968,6 +1054,9 @@ onMounted(() => {
   loadTags()
   loadArray()
   refreshTimer = setInterval(silentRefresh, 30000)
+  // F203: heartbeat age ticker (update every second)
+  updateHeartbeatAge()
+  heartbeatTimer = setInterval(updateHeartbeatAge, 1000)
   // Connect status WebSocket — real-time updates without manual refresh
   arrayStore.connectStatusWebSocket()
 })
@@ -980,6 +1069,10 @@ onUnmounted(() => {
   if (refreshTimer) {
     clearInterval(refreshTimer)
     refreshTimer = null
+  }
+  if (heartbeatTimer) {
+    clearInterval(heartbeatTimer)
+    heartbeatTimer = null
   }
   arrayStore.disconnectStatusWebSocket()
 })
@@ -1125,6 +1218,69 @@ watch(
 .freshness-fresh { color: #67c23a; }
 .freshness-ok    { color: #e6a23c; }
 .freshness-stale { color: #f56c6c; }
+
+/* ───── F203: Heartbeat Badge ───── */
+.heartbeat-badge {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 10px;
+  border-radius: 12px;
+  font-size: 11px;
+  font-weight: 500;
+  margin-left: 8px;
+  white-space: nowrap;
+}
+.heartbeat-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  display: inline-block;
+}
+.hb-active { background: #f0fdf4; color: #16a34a; }
+.hb-active .heartbeat-dot { background: #16a34a; animation: hb-pulse 2s infinite; }
+.hb-delayed { background: #fffbeb; color: #d97706; }
+.hb-delayed .heartbeat-dot { background: #d97706; }
+.hb-interrupted { background: #fef2f2; color: #dc2626; }
+.hb-interrupted .heartbeat-dot { background: #dc2626; }
+
+@keyframes hb-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.5; transform: scale(0.7); }
+}
+
+/* ───── F204: Observer Activity Map ───── */
+.observer-map {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 16px;
+  flex-wrap: wrap;
+  border-bottom: 1px solid #f0f0f0;
+}
+.obs-dot {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  cursor: default;
+  transition: all 0.2s;
+}
+.obs-dot:hover { transform: scale(1.05); }
+.obs-label { font-weight: 500; }
+.obs-green { background: #f0fdf4; color: #16a34a; }
+.obs-green::before { content: ''; width: 5px; height: 5px; border-radius: 50%; background: #16a34a; display: inline-block; }
+.obs-gray { background: #f5f5f5; color: #8c8c8c; }
+.obs-gray::before { content: ''; width: 5px; height: 5px; border-radius: 50%; background: #8c8c8c; display: inline-block; }
+.obs-red { background: #fef2f2; color: #dc2626; }
+.obs-red::before { content: ''; width: 5px; height: 5px; border-radius: 50%; background: #dc2626; display: inline-block; animation: obs-blink 1s infinite; }
+
+@keyframes obs-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
 
 .watcher-tag {
   font-size: 11px;

@@ -173,12 +173,13 @@ class ArrayStatus(BaseModel):
     health_source: str = "none"
     has_saved_password: bool = False
     last_refresh: Optional[datetime] = None
+    collect_interval_s: int = 60  # Expected collection interval in seconds
     tag_id: Optional[int] = None
     tag_name: Optional[str] = None
     tag_color: Optional[str] = None
     tag_l1_name: Optional[str] = None
     tag_l2_name: Optional[str] = None
-    observer_status: Dict[str, Dict[str, str]] = {}
+    observer_status: Dict[str, Dict[str, Any]] = {}  # {observer: {status, message, last_active_ts?}}
     active_issues: List[Dict[str, Any]] = []
     recent_alerts: List[Dict[str, Any]] = []
     recent_alert_summary: Dict[str, int] = {}
