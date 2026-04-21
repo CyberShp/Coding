@@ -81,7 +81,7 @@ async def list_alerts(
             "array_name": name_map.get(a.array_id, a.array_id),
             "observer_name": a.observer_name,
             "level": a.level,
-            "message": a.message[:200] if len(a.message) > 200 else a.message,
+            "message": a.message,
             "timestamp": a.timestamp.isoformat(),
             "created_at": a.created_at.isoformat() if a.created_at else None,
             "is_acked": getattr(a, 'is_acked', False),
