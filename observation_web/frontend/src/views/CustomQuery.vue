@@ -330,7 +330,7 @@ async function executeNlQuery() {
   nlResult.value = null
   nlError.value = ''
   try {
-    const response = await api.post('/query/nl', { question: nlQuestion.value })
+    const response = await api.nlQuery(nlQuestion.value)
     nlResult.value = response.data
   } catch (error) {
     nlError.value = error.response?.data?.detail || '查询失败'

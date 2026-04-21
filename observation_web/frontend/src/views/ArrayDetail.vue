@@ -253,7 +253,7 @@
 
           <!-- List mode (original) -->
           <transition name="fade" mode="out-in">
-            <div v-if="!streamMode" :key="eventTimeWindow" class="event-stream-body">
+            <div v-if="!streamMode && !causalMode" :key="eventTimeWindow" class="event-stream-body">
               <FoldedAlertList
                 :alerts="filteredAlerts"
                 :show-array-id="false"
@@ -710,8 +710,8 @@ async function loadCausalData() {
   causalLoading.value = true
   try {
     const hours = TIME_WINDOW_HOURS[eventTimeWindow.value] || 24
-    const res = await api.get('/alerts/causal', {
-      params: { array_id: array.value.array_id, hours },
+    const res = await api.getCausalAlerts({
+      array_id: array.value.array_id, hours,
     })
     causalTrees.value = res.data.causal_trees || []
     causalTotalAlerts.value = res.data.total_alerts || 0

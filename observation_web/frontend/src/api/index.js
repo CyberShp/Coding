@@ -159,6 +159,8 @@ export default {
   getAlertStats: (hours = 24, options = {}) => http.get('/alerts/stats', { params: { hours }, ...options }),
   getAlertSummary: (hours = 2, options = {}) => http.get('/alerts/summary', { params: { hours }, ...options }),
   getAggregatedAlerts: (params) => http.get('/alerts/aggregated', { params }),
+  getCausalAlerts: (params) => http.get('/alerts/causal', { params }),
+  getCausalRules: (params) => http.get('/alerts/causal/rules', { params }),
   exportAlerts: (params) => http.get('/alerts/export', { params, responseType: 'blob' }),
 
   // Alert Acknowledgement
@@ -220,6 +222,7 @@ export default {
   getQueryTemplates: () => http.get('/query/templates'),
   createQueryTemplate: (data) => http.post('/query/templates', data),
   deleteQueryTemplate: (id) => http.delete(`/query/templates/${id}`),
+  nlQuery: (question) => http.post('/query/nl', { question }),
 
   // System Alerts
   getSystemAlerts: (params) => http.get('/system-alerts', { params }),

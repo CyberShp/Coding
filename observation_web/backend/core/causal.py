@@ -183,36 +183,38 @@ async def get_causal_rules(
     return result.scalars().all()
 
 
-def build_causal_dag(
-    alerts: List[dict],
-    rules: List[CausalRuleModel],
+def _parse_alert_ts(alert: dict) -> Optional[datetime]:
+    """Parse timestamp from alert dict."""
+    ts = alert.get("timestamp", "")
+    if isinstance(ts, datetime):
+        return ts
+    if isinstance(ts, str):
+        try:
+            return datetime.fromisoformat(ts.replace("Z", ""))
+        except (ValueError, TypeError):
+            return None
+    return None
+
+
+def _build_episode_dag(
+    episode_alerts: List[dict],
+    rules: List,
 ) -> List[dict]:
     """
-    Given a set of concurrent alerts and learned causal rules,
-    build a DAG and return a tree-structured result.
-
-    Each alert gets a 'causal_role' annotation:
-      - 'root': no known antecedent in this alert set
-      - 'consequence': has a known antecedent in this alert set
-      - 'isolated': no causal edges match
-
-    Returns list of root nodes, each with nested 'consequences'.
+    Build a causal DAG for a single episode (a set of temporally
+    co-occurring alerts). Returns annotated tree nodes.
     """
-    if not alerts:
-        return []
-
-    # Build lookup: observer_name → list of alerts
+    # Build lookup: observer_name → list of alerts in this episode
     obs_alerts: Dict[str, List[dict]] = defaultdict(list)
-    for a in alerts:
+    for a in episode_alerts:
         obs_alerts[a.get("observer_name", "")].append(a)
 
-    # Active observers in this alert set
     active_obs: Set[str] = set(obs_alerts.keys())
 
-    # Build edge map from rules (only edges where both ends are active)
-    edges: Dict[str, Set[str]] = defaultdict(set)   # antecedent → {consequents}
+    # Build edge map from rules (only where both ends are active in this episode)
+    edges: Dict[str, Set[str]] = defaultdict(set)
     has_antecedent: Set[str] = set()
-    rule_map: Dict[Tuple[str, str], CausalRuleModel] = {}
+    rule_map: Dict[Tuple[str, str], object] = {}
 
     for r in rules:
         if r.antecedent in active_obs and r.consequent in active_obs:
@@ -220,13 +222,12 @@ def build_causal_dag(
             has_antecedent.add(r.consequent)
             rule_map[(r.antecedent, r.consequent)] = r
 
-    # Root observers: in active set but not a consequent of anything
     root_obs = active_obs - has_antecedent
 
-    # If no edges matched, everything is isolated
+    # No edges → everything isolated
     if not edges:
         result = []
-        for a in alerts:
+        for a in episode_alerts:
             node = dict(a)
             node["causal_role"] = "isolated"
             node["consequences"] = []
@@ -237,15 +238,13 @@ def build_causal_dag(
     used_obs: Set[str] = set()
 
     def _build_subtree(obs: str) -> List[dict]:
-        """Build consequence subtree for an observer."""
         if obs in used_obs:
             return []
         used_obs.add(obs)
         subtrees = []
         for child_obs in sorted(edges.get(obs, set())):
             rule = rule_map.get((obs, child_obs))
-            child_alerts = obs_alerts.get(child_obs, [])
-            for ca in child_alerts:
+            for ca in obs_alerts.get(child_obs, []):
                 node = dict(ca)
                 node["causal_role"] = "consequence"
                 node["causal_edge"] = {
@@ -259,7 +258,6 @@ def build_causal_dag(
         return subtrees
 
     result = []
-    # Add root nodes
     for obs in sorted(root_obs):
         for ra in obs_alerts.get(obs, []):
             node = dict(ra)
@@ -267,12 +265,54 @@ def build_causal_dag(
             node["consequences"] = _build_subtree(obs)
             result.append(node)
 
-    # Any observer not covered (cycle or isolated)
+    # Uncovered observers (cycle or isolated)
     for obs in active_obs - used_obs:
         for a in obs_alerts.get(obs, []):
             node = dict(a)
             node["causal_role"] = "isolated"
             node["consequences"] = []
             result.append(node)
+
+    return result
+
+
+def build_causal_dag(
+    alerts: List[dict],
+    rules: List,
+) -> List[dict]:
+    """
+    Split alerts into temporal episodes, then build a causal DAG
+    per episode using learned rules.
+
+    Each alert gets a 'causal_role' annotation:
+      - 'root': no known antecedent in this episode
+      - 'consequence': has a known antecedent in this episode
+      - 'isolated': no causal edges match
+
+    Returns flat list of annotated tree nodes (roots with nested consequences).
+    """
+    if not alerts:
+        return []
+
+    # Sort alerts by timestamp for episode detection
+    timed = []
+    for a in alerts:
+        ts = _parse_alert_ts(a)
+        if ts:
+            timed.append((ts, a))
+    timed.sort(key=lambda x: x[0])
+
+    if not timed:
+        return [dict(a, causal_role="isolated", consequences=[]) for a in alerts]
+
+    # Split into episodes using the same gap threshold as mining
+    episodes = _split_episodes(timed, gap_sec=EPISODE_GAP_SEC)
+
+    # Build a DAG per episode, collect all results
+    result = []
+    for ep in episodes:
+        ep_alerts = [a for _, a in ep]
+        ep_trees = _build_episode_dag(ep_alerts, rules)
+        result.extend(ep_trees)
 
     return result
