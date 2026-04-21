@@ -298,6 +298,17 @@ def _extract_table_refs(sql: str) -> set:
     return tables
 
 
+def _strip_string_literals(sql: str) -> str:
+    """
+    Replace all single- and double-quoted string literals with empty
+    placeholders so keyword scanning doesn't match content inside strings.
+    e.g. WHERE message LIKE '%drop%' → WHERE message LIKE ''
+    """
+    result = re.sub(r"'[^']*'", "''", sql)
+    result = re.sub(r'"[^"]*"', '""', result)
+    return result
+
+
 def _validate_nl_sql(sql: str) -> Optional[str]:
     """
     Validate LLM-generated SQL. Returns error message or None if OK.
@@ -311,30 +322,34 @@ def _validate_nl_sql(sql: str) -> Optional[str]:
     """
     normalized = sql.strip().rstrip(";").lower()
 
+    # Strip string literals for keyword scanning to avoid false positives
+    # like WHERE message LIKE '%drop%' being flagged as DROP
+    stripped = _strip_string_literals(normalized)
+
     # Must be a SELECT
     if not normalized.startswith("select"):
         return "只允许 SELECT 查询"
 
-    # Check for forbidden keywords
+    # Check for forbidden keywords (on stripped text)
     for word in _NL_FORBIDDEN:
-        if re.search(rf'\b{word}\b', normalized):
+        if re.search(rf'\b{word}\b', stripped):
             return f"禁止使用 {word.upper()} 语句"
 
     # Block subqueries — only one SELECT allowed (no nested SELECT)
-    select_count = len(re.findall(r'\bselect\b', normalized))
+    select_count = len(re.findall(r'\bselect\b', stripped))
     if select_count > 1:
         return "禁止使用子查询 — 只允许单层 SELECT"
 
     # Block set operations (UNION/INTERSECT/EXCEPT)
     for word in _NL_FORBIDDEN_STRUCTURAL:
-        if re.search(rf'\b{word}\b', normalized):
+        if re.search(rf'\b{word}\b', stripped):
             return f"禁止使用 {word.upper()} — 只允许单层 SELECT"
 
     # Block SELECT * and table.* — forces explicit column naming
     if re.search(r'\bselect\s+\*', normalized) or re.search(r'\w+\.\*', normalized):
         return "禁止使用 SELECT * — 请指定具体列名"
 
-    # Extract and validate ALL table references
+    # Extract and validate ALL table references (use normalized — FROM/JOIN won't have string content)
     tables = _extract_table_refs(normalized)
     if not tables:
         return "无法识别查询的表"
@@ -342,9 +357,9 @@ def _validate_nl_sql(sql: str) -> Optional[str]:
     if disallowed:
         return f"禁止查询的表: {', '.join(sorted(disallowed))}"
 
-    # Block sensitive column references
+    # Block sensitive column references (on stripped text)
     for col in _NL_BLOCKED_COLUMNS:
-        if re.search(rf'\b{col}\b', normalized):
+        if re.search(rf'\b{col}\b', stripped):
             return f"禁止访问敏感字段: {col}"
 
     return None
