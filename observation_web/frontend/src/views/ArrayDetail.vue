@@ -271,6 +271,9 @@
               <span class="stream-level-dot" :class="`dot-${alert.level}`"></span>
               <span class="stream-observer">{{ getObserverName(alert.observer_name) }}</span>
               <span class="stream-message">{{ alert.message }}</span>
+              <span v-if="getStreamLatencyMs(alert) >= 5000" class="stream-latency" :class="getStreamLatencyMs(alert) >= 15000 ? 'latency-slow' : 'latency-normal'">
+                {{ getStreamLatencyMs(alert) >= 15000 ? '⚠' : '⏱' }} {{ formatStreamLatency(alert) }}
+              </span>
             </div>
             <div ref="streamBottomRef"></div>
           </div>
@@ -740,6 +743,19 @@ function formatStreamTime(ts) {
   const d = new Date(ts)
   if (isNaN(d.getTime())) return '--:--:--'
   return d.toLocaleTimeString('zh-CN', { hour12: false })
+}
+
+// F206: Latency helpers for stream mode
+function getStreamLatencyMs(alert) {
+  if (!alert.created_at || !alert.timestamp) return 0
+  const ms = new Date(alert.created_at).getTime() - new Date(alert.timestamp).getTime()
+  return (isNaN(ms) || ms < 0) ? 0 : ms
+}
+
+function formatStreamLatency(alert) {
+  const ms = getStreamLatencyMs(alert)
+  if (ms < 1000) return `${ms}ms`
+  return `${(ms / 1000).toFixed(1)}s`
 }
 
 // ───── Zone 4: Local interpretation for selected alert ─────
@@ -1850,5 +1866,24 @@ watch(
   text-overflow: ellipsis;
   white-space: nowrap;
   color: #303133;
+}
+
+.stream-latency {
+  flex-shrink: 0;
+  font-size: 10px;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  padding: 1px 5px;
+  border-radius: 6px;
+  white-space: nowrap;
+}
+
+.stream-latency.latency-normal {
+  background: #f5f5f5;
+  color: #8c8c8c;
+}
+
+.stream-latency.latency-slow {
+  background: #fff7e6;
+  color: #d46b08;
 }
 </style>

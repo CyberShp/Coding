@@ -98,6 +98,29 @@ function getCardInfoFieldIdentity(item) {
 }
 
 /**
+ * F207: Extract a short summary showing the changing numeric value across items.
+ * E.g. "Rebuilding 12% complete" → "Rebuilding 58% complete" yields "12% → 58%"
+ */
+function _extractProgressSummary(items) {
+  if (items.length < 2) return null
+  const first = items[items.length - 1]?.message || ''  // oldest (items are newest-first)
+  const last = items[0]?.message || ''                    // newest
+  const firstNums = first.match(/\d+\.?\d*/g) || []
+  const lastNums = last.match(/\d+\.?\d*/g) || []
+  // Find the first numeric position that differs
+  for (let i = 0; i < Math.min(firstNums.length, lastNums.length); i++) {
+    if (firstNums[i] !== lastNums[i]) {
+      // Check if there's a % or unit suffix near this number in the message
+      const numRegex = new RegExp(lastNums[i].replace('.', '\\.') + '\\s*(%|s|ms|MB|GB|KB)')
+      const unitMatch = last.match(numRegex)
+      const unit = unitMatch ? unitMatch[1] : ''
+      return `${firstNums[i]}${unit} → ${lastNums[i]}${unit}`
+    }
+  }
+  return `${items.length} 变化`
+}
+
+/**
  * @param {import('vue').Ref<Array>} alerts  – reactive alert array
  * @returns {{ foldedAlerts: import('vue').ComputedRef<Array>, toggleExpand: (key: string) => void }}
  */
@@ -137,8 +160,9 @@ export function useAlertFolding(alerts) {
         const g = map.get(key)
         g.items.push(alert)
         g.count++
-        // Track latest time and worst level
+        // Track latest/earliest time and worst level
         if (alert.timestamp > g.latestTime) g.latestTime = alert.timestamp
+        if (alert.timestamp < g.earliestTime) g.earliestTime = alert.timestamp
         if ((LEVEL_RANK[alert.level] || 0) > (LEVEL_RANK[g.worstLevel] || 0)) g.worstLevel = alert.level
       } else {
         const group = {
@@ -148,6 +172,7 @@ export function useAlertFolding(alerts) {
           arrayName: alert.array_name || alert.array_id,
           summaryMsg: getTranslatedSummary(alert),
           latestTime: alert.timestamp,
+          earliestTime: alert.timestamp,
           worstLevel: alert.level,
           count: 1,
           items: [alert],
@@ -157,10 +182,18 @@ export function useAlertFolding(alerts) {
       }
     }
 
-    // Attach reactive expanded flag derived from the Set
-    // (reading expandedKeys.has() inside computed creates a reactive dependency)
+    // Attach reactive expanded flag + F207 progress detection
     for (const g of groups) {
       g.expanded = expandedKeys.has(g.key)
+      if (g.count > 1) {
+        const msgs = g.items.map(i => i.message || '')
+        g.isProgress = !msgs.every(m => m === msgs[0])
+        if (g.isProgress) {
+          g.progressSummary = _extractProgressSummary(g.items)
+        }
+      } else {
+        g.isProgress = false
+      }
     }
 
     return groups

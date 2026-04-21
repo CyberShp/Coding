@@ -15,6 +15,9 @@
           <span v-if="showArrayId" class="fold-array">{{ group.items[0].array_name || group.items[0].array_id }}</span>
           <span class="fold-obs">{{ getObserverLabel(group.items[0].observer_name) }}</span>
           <span class="fold-msg">{{ getSummary(group.items[0]) }}</span>
+          <span v-if="getLatencyMs(group.items[0]) >= 5000" class="latency-badge" :class="getLatencyClass(group.items[0])">
+            {{ getLatencyMs(group.items[0]) >= 15000 ? '⚠' : '⏱' }} {{ formatLatency(group.items[0]) }}
+          </span>
           <el-dropdown v-if="group.items[0].is_acked" trigger="click" @command="(cmd) => handleAckedAction(group.items[0], cmd)">
             <el-tag type="success" size="small" effect="plain" class="ack-badge ack-action">已确认<el-icon class="el-icon--right"><ArrowDown /></el-icon></el-tag>
             <template #dropdown>
@@ -40,7 +43,7 @@
         </div>
       </div>
       <!-- Folded repeated alerts -->
-      <div v-else class="fold-item fold-group" :class="{ expanded: group.expanded }">
+      <div v-else class="fold-item fold-group" :class="{ expanded: group.expanded, 'is-progress': group.isProgress }">
         <div class="fold-row fold-header" @click="handleToggle(group)">
           <el-checkbox
             v-if="selectable"
@@ -54,8 +57,11 @@
           <span v-if="showArrayId" class="fold-array">{{ group.arrayName || group.arrayId }}</span>
           <span class="fold-obs">{{ getObserverLabel(group.observer) }}</span>
           <span class="fold-msg">{{ group.summaryMsg }}</span>
-          <el-tag type="warning" size="small" effect="plain" round>
+          <el-tag v-if="!group.isProgress" type="warning" size="small" effect="plain" round>
             &times; {{ group.count }}
+          </el-tag>
+          <el-tag v-else type="primary" size="small" effect="plain" round class="progress-tag">
+            {{ group.progressSummary || `${group.count} 变化` }}
           </el-tag>
           <el-dropdown v-if="isGroupAllAcked(group)" trigger="click" @command="(cmd) => handleAckedGroupAction(group, cmd)">
             <el-tag type="success" size="small" effect="plain" class="ack-badge ack-action">全部已确认<el-icon class="el-icon--right"><ArrowDown /></el-icon></el-tag>
@@ -99,6 +105,9 @@
               <span class="fold-time">{{ formatDateTime(item.timestamp) }}</span>
               <el-tag :type="getLevelType(item.level)" size="small">{{ getLevelText(item.level) }}</el-tag>
               <span class="fold-msg">{{ getSummary(item) }}</span>
+              <span v-if="getLatencyMs(item) >= 5000" class="latency-badge" :class="getLatencyClass(item)">
+                {{ getLatencyMs(item) >= 15000 ? '⚠' : '⏱' }} {{ formatLatency(item) }}
+              </span>
               <el-dropdown v-if="item.is_acked" trigger="click" @command="(cmd) => handleAckedAction(item, cmd)">
                 <el-tag type="success" size="small" effect="plain" class="ack-badge ack-action">已确认<el-icon class="el-icon--right"><ArrowDown /></el-icon></el-tag>
                 <template #dropdown>
@@ -263,6 +272,24 @@ function getSummary(row) {
 function formatDateTime(timestamp) {
   if (!timestamp) return '-'
   return new Date(timestamp).toLocaleString('zh-CN')
+}
+
+// F206: Alert arrival latency
+function getLatencyMs(alert) {
+  if (!alert.created_at || !alert.timestamp) return 0
+  const ms = new Date(alert.created_at).getTime() - new Date(alert.timestamp).getTime()
+  return (isNaN(ms) || ms < 0) ? 0 : ms
+}
+
+function getLatencyClass(alert) {
+  const ms = getLatencyMs(alert)
+  return ms >= 15000 ? 'latency-slow' : 'latency-normal'
+}
+
+function formatLatency(alert) {
+  const ms = getLatencyMs(alert)
+  if (ms < 1000) return `${ms}ms`
+  return `${(ms / 1000).toFixed(1)}s`
 }
 </script>
 
@@ -463,5 +490,35 @@ function formatDateTime(timestamp) {
 .compact .fold-child .fold-time {
   width: 55px;
   font-size: 11px;
+}
+
+/* F206: Latency badge */
+.latency-badge {
+  flex-shrink: 0;
+  font-size: 11px;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  padding: 1px 6px;
+  border-radius: 8px;
+  white-space: nowrap;
+}
+
+/* F207: Progress group distinction */
+.fold-item.fold-group.is-progress {
+  border-left-color: var(--el-color-primary);
+}
+
+.progress-tag {
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  font-size: 11px;
+}
+
+.latency-normal {
+  background: #f5f5f5;
+  color: #8c8c8c;
+}
+
+.latency-slow {
+  background: #fff7e6;
+  color: #d46b08;
 }
 </style>
