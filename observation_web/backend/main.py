@@ -294,6 +294,18 @@ async def lifespan(app: FastAPI):
     # F202: Run baseline computation immediately on startup (don't wait 6h)
     asyncio.create_task(compute_baselines())
 
+    # F200: Register causal rule mining job (runs every 6 hours, after baseline)
+    from .core.causal import mine_causal_rules
+    scheduler.scheduler.add_job(
+        mine_causal_rules,
+        trigger=IntervalTrigger(hours=6),
+        id="causal_mining",
+        name="Causal Rule Mining",
+        replace_existing=True,
+    )
+    logger.info("Causal rule mining job registered (every 6h)")
+    asyncio.create_task(mine_causal_rules())
+
     # Start alert sync (periodic SSH pull of alerts from connected arrays)
     start_alert_sync()
     

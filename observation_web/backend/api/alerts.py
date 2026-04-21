@@ -228,6 +228,107 @@ async def get_aggregated_alerts(
     return result
 
 
+@router.get("/causal")
+async def get_causal_alerts(
+    array_id: str = Query(..., description="Array ID (required)"),
+    hours: int = Query(2, ge=1, le=168, description="Time window in hours"),
+    limit: int = Query(200, ge=1, le=1000),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    F200: Get alerts with causal DAG annotation.
+    Returns tree-structured alerts with root causes and consequences.
+    """
+    from ..core.causal import get_causal_rules, build_causal_dag
+    from ..models.array import ArrayModel
+
+    store = get_alert_store()
+    start_time = datetime.now() - timedelta(hours=hours)
+
+    alerts = await store.get_alerts(
+        db, array_id=array_id, start_time=start_time, limit=limit,
+    )
+
+    # Array name lookup
+    arr_result = await db.execute(
+        select(ArrayModel.array_id, ArrayModel.name)
+        .where(ArrayModel.array_id == array_id)
+    )
+    row = arr_result.first()
+    array_name = row.name if row else array_id
+
+    # Convert to dicts
+    import json as _json
+    alert_dicts = []
+    for a in alerts:
+        d = {
+            'id': a.id,
+            'array_id': a.array_id,
+            'array_name': array_name,
+            'observer_name': a.observer_name,
+            'level': a.level,
+            'message': a.message,
+            'timestamp': a.timestamp.isoformat() if a.timestamp else '',
+            'created_at': a.created_at.isoformat() if a.created_at else None,
+            'is_acked': getattr(a, 'is_acked', False),
+        }
+        try:
+            d['details'] = _json.loads(a.details) if isinstance(a.details, str) else (a.details or {})
+        except Exception:
+            d['details'] = {}
+        alert_dicts.append(d)
+
+    # Fetch learned causal rules and build DAG
+    rules = await get_causal_rules(db, array_id)
+    dag = build_causal_dag(alert_dicts, rules)
+
+    return {
+        "array_id": array_id,
+        "array_name": array_name,
+        "hours": hours,
+        "total_alerts": len(alert_dicts),
+        "causal_trees": dag,
+        "rules_count": len(rules),
+    }
+
+
+@router.get("/causal/rules")
+async def get_causal_rules_api(
+    array_id: Optional[str] = Query(None, description="Filter by array ID"),
+    min_confidence: float = Query(0.0, ge=0.0, le=1.0),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    F200: Get learned causal rules (observer→observer edges).
+    Useful for inspecting what the system has learned.
+    """
+    from ..models.causal import CausalRuleModel
+
+    query = select(CausalRuleModel)
+    if array_id:
+        query = query.where(CausalRuleModel.array_id == array_id)
+    if min_confidence > 0:
+        query = query.where(CausalRuleModel.confidence >= min_confidence)
+    query = query.order_by(CausalRuleModel.confidence.desc()).limit(500)
+
+    result = await db.execute(query)
+    rules = result.scalars().all()
+
+    return [
+        {
+            "id": r.id,
+            "array_id": r.array_id,
+            "antecedent": r.antecedent,
+            "consequent": r.consequent,
+            "co_occurrence_count": r.co_occurrence_count,
+            "avg_lag_seconds": r.avg_lag_seconds,
+            "confidence": r.confidence,
+            "last_seen_at": r.last_seen_at.isoformat() if r.last_seen_at else None,
+        }
+        for r in rules
+    ]
+
+
 @router.get("/summary")
 async def get_alert_summary(
     hours: int = Query(2, ge=1, le=168, description="Time range in hours (default 2)"),

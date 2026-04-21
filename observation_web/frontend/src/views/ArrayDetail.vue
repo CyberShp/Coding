@@ -210,9 +210,20 @@
                     :type="streamMode ? 'primary' : 'default'"
                     size="small"
                     circle
-                    @click="streamMode = !streamMode"
+                    @click="streamMode = !streamMode; causalMode = false"
                   >
                     <el-icon><VideoPlay v-if="!streamMode" /><List v-else /></el-icon>
+                  </el-button>
+                </el-tooltip>
+                <!-- F200: Causal DAG toggle -->
+                <el-tooltip content="因果分析视图" placement="top">
+                  <el-button
+                    :type="causalMode ? 'primary' : 'default'"
+                    size="small"
+                    circle
+                    @click="causalMode = !causalMode; if (causalMode) { streamMode = false; loadCausalData() }"
+                  >
+                    <el-icon><Share /></el-icon>
                   </el-button>
                 </el-tooltip>
                 <template v-if="!streamMode">
@@ -276,6 +287,17 @@
               </span>
             </div>
             <div ref="streamBottomRef"></div>
+          </div>
+
+          <!-- F200: Causal DAG view -->
+          <div v-if="causalMode && !streamMode" class="causal-view-body">
+            <CausalAlertTree
+              :trees="causalTrees"
+              :total-alerts="causalTotalAlerts"
+              :rules-count="causalRulesCount"
+              :loading="causalLoading"
+              @select="openAlertDrawer"
+            />
           </div>
         </el-card>
 
@@ -471,7 +493,7 @@
 import { ref, reactive, computed, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { Refresh, ArrowRight, CircleCheck, Check, User, MagicStick, Loading, VideoPlay, List } from '@element-plus/icons-vue'
+import { Refresh, ArrowRight, CircleCheck, Check, User, MagicStick, Loading, VideoPlay, List, Share } from '@element-plus/icons-vue'
 import { useArrayStore } from '../stores/arrays'
 import { useAlertStore } from '../stores/alerts'
 import api from '../api'
@@ -481,6 +503,7 @@ import EventTimeline from '../components/EventTimeline.vue'
 import SnapshotDiff from '../components/SnapshotDiff.vue'
 import AlertDetailDrawer from '@/components/AlertDetailDrawer.vue'
 import FoldedAlertList from '@/components/FoldedAlertList.vue'
+import CausalAlertTree from '@/components/CausalAlertTree.vue'
 import { translateAlert, getObserverName as getObserverLabel, LEVEL_LABELS, LEVEL_TAG_TYPES } from '@/utils/alertTranslator'
 
 const route = useRoute()
@@ -659,6 +682,7 @@ const TIME_WINDOW_MS = {
   '7d': 7 * 24 * 3600000,
   '21d': 21 * 24 * 3600000,
 }
+const TIME_WINDOW_HOURS = { '1h': 1, '6h': 6, '24h': 24, '72h': 72, '7d': 168, '21d': 504 }
 
 const filteredAlerts = computed(() => {
   const cutoff = Date.now() - (TIME_WINDOW_MS[eventTimeWindow.value] || TIME_WINDOW_MS['24h'])
@@ -669,7 +693,35 @@ const filteredAlerts = computed(() => {
 })
 
 function onTimeWindowChange() {
-  // Time window change just re-filters existing data via computed
+  // Time window change re-filters existing data via computed
+  // F200: Also refresh causal data if in causal mode
+  if (causalMode.value) loadCausalData()
+}
+
+// ───── F200: Causal DAG Mode ─────
+const causalMode = ref(false)
+const causalLoading = ref(false)
+const causalTrees = ref([])
+const causalTotalAlerts = ref(0)
+const causalRulesCount = ref(0)
+
+async function loadCausalData() {
+  if (!array.value) return
+  causalLoading.value = true
+  try {
+    const hours = TIME_WINDOW_HOURS[eventTimeWindow.value] || 24
+    const res = await api.get('/alerts/causal', {
+      params: { array_id: array.value.array_id, hours },
+    })
+    causalTrees.value = res.data.causal_trees || []
+    causalTotalAlerts.value = res.data.total_alerts || 0
+    causalRulesCount.value = res.data.rules_count || 0
+  } catch (e) {
+    console.error('Failed to load causal data:', e)
+    causalTrees.value = []
+  } finally {
+    causalLoading.value = false
+  }
 }
 
 // ───── F205: Live Alert Stream Mode ─────

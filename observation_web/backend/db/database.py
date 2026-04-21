@@ -89,7 +89,7 @@ def init_db():
 
 async def create_tables():
     """Create all tables. Schema migration (if needed) runs separately before init_db."""
-    from ..models import array, alert, query, lifecycle, scheduler, traffic, task_session, snapshot, tag, user_session, user_preference, array_lock, alert_rule, audit_log, issue, monitor_template, observer_config, ai_interpretation, card_inventory, alerts_v2, expected_window, observer_snapshot, agent_heartbeat, card_presence, viewer_profile, system_config, enrollment, baseline  # noqa: F401
+    from ..models import array, alert, query, lifecycle, scheduler, traffic, task_session, snapshot, tag, user_session, user_preference, array_lock, alert_rule, audit_log, issue, monitor_template, observer_config, ai_interpretation, card_inventory, alerts_v2, expected_window, observer_snapshot, agent_heartbeat, card_presence, viewer_profile, system_config, enrollment, baseline, causal  # noqa: F401
 
     async with _async_engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
