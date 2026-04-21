@@ -204,21 +204,45 @@
             <div class="card-header">
               <span class="zone-title">最近事件流</span>
               <div class="header-meta">
-                <el-radio-group v-model="eventTimeWindow" size="small" @change="onTimeWindowChange">
-                  <el-radio-button label="1h">1h</el-radio-button>
-                  <el-radio-button label="6h">6h</el-radio-button>
-                  <el-radio-button label="24h">24h</el-radio-button>
-                  <el-radio-button label="72h">72h</el-radio-button>
-                  <el-radio-button label="7d">7d</el-radio-button>
-                  <el-radio-button label="21d">21d</el-radio-button>
-                </el-radio-group>
+                <!-- F205: Stream/List mode toggle -->
+                <el-tooltip :content="streamMode ? '切换到列表模式' : '切换到实时流模式'" placement="top">
+                  <el-button
+                    :type="streamMode ? 'primary' : 'default'"
+                    size="small"
+                    circle
+                    @click="streamMode = !streamMode"
+                  >
+                    <el-icon><VideoPlay v-if="!streamMode" /><List v-else /></el-icon>
+                  </el-button>
+                </el-tooltip>
+                <template v-if="!streamMode">
+                  <el-radio-group v-model="eventTimeWindow" size="small" @change="onTimeWindowChange">
+                    <el-radio-button label="1h">1h</el-radio-button>
+                    <el-radio-button label="6h">6h</el-radio-button>
+                    <el-radio-button label="24h">24h</el-radio-button>
+                    <el-radio-button label="72h">72h</el-radio-button>
+                    <el-radio-button label="7d">7d</el-radio-button>
+                    <el-radio-button label="21d">21d</el-radio-button>
+                  </el-radio-group>
+                </template>
+                <template v-if="streamMode">
+                  <el-button
+                    :type="streamPaused ? 'warning' : 'default'"
+                    size="small"
+                    @click="streamPaused = !streamPaused"
+                  >
+                    {{ streamPaused ? `▶ 继续 (${streamPendingCount} 条等待)` : '⏸ 暂停' }}
+                  </el-button>
+                  <el-tag type="success" size="small" effect="dark">LIVE</el-tag>
+                </template>
                 <el-button size="small" text @click="$router.push('/alerts')">查看全部</el-button>
               </div>
             </div>
           </template>
 
+          <!-- List mode (original) -->
           <transition name="fade" mode="out-in">
-            <div :key="eventTimeWindow" class="event-stream-body">
+            <div v-if="!streamMode" :key="eventTimeWindow" class="event-stream-body">
               <FoldedAlertList
                 :alerts="filteredAlerts"
                 :show-array-id="false"
@@ -230,6 +254,26 @@
               />
             </div>
           </transition>
+
+          <!-- F205: Live stream mode -->
+          <div v-if="streamMode" class="live-stream-container" ref="streamContainerRef">
+            <div v-if="streamAlerts.length === 0" class="stream-empty">
+              等待实时告警...
+            </div>
+            <div
+              v-for="alert in streamAlerts"
+              :key="alert._streamKey"
+              class="stream-alert-row"
+              :class="`stream-level-${alert.level}`"
+              @click="openAlertDrawer(alert)"
+            >
+              <span class="stream-time">{{ formatStreamTime(alert.timestamp) }}</span>
+              <span class="stream-level-dot" :class="`dot-${alert.level}`"></span>
+              <span class="stream-observer">{{ getObserverName(alert.observer_name) }}</span>
+              <span class="stream-message">{{ alert.message }}</span>
+            </div>
+            <div ref="streamBottomRef"></div>
+          </div>
         </el-card>
 
         <!-- Zone 5: 观察点状态 (Observer Status) -->
@@ -421,10 +465,10 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, watch, onMounted, onUnmounted } from 'vue'
+import { ref, reactive, computed, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { Refresh, ArrowRight, CircleCheck, Check, User, MagicStick, Loading } from '@element-plus/icons-vue'
+import { Refresh, ArrowRight, CircleCheck, Check, User, MagicStick, Loading, VideoPlay, List } from '@element-plus/icons-vue'
 import { useArrayStore } from '../stores/arrays'
 import { useAlertStore } from '../stores/alerts'
 import api from '../api'
@@ -623,6 +667,79 @@ const filteredAlerts = computed(() => {
 
 function onTimeWindowChange() {
   // Time window change just re-filters existing data via computed
+}
+
+// ───── F205: Live Alert Stream Mode ─────
+const streamMode = ref(false)
+const streamPaused = ref(false)
+const streamContainerRef = ref(null)
+const streamBottomRef = ref(null)
+
+const _streamItems = ref([])
+const _streamPending = ref([])
+let _streamKeyCounter = 0
+const STREAM_MAX_ITEMS = 200
+
+const streamAlerts = computed(() => _streamItems.value)
+const streamPendingCount = computed(() => _streamPending.value.length)
+
+function _pushStreamAlert(alert) {
+  const item = { ...alert, _streamKey: `s${++_streamKeyCounter}` }
+  if (streamPaused.value) {
+    _streamPending.value.push(item)
+  } else {
+    _streamItems.value.push(item)
+    if (_streamItems.value.length > STREAM_MAX_ITEMS) {
+      _streamItems.value = _streamItems.value.slice(-STREAM_MAX_ITEMS)
+    }
+  }
+}
+
+// Flush pending alerts when unpausing
+watch(streamPaused, (paused) => {
+  if (!paused && _streamPending.value.length > 0) {
+    _streamItems.value.push(..._streamPending.value)
+    _streamPending.value = []
+    if (_streamItems.value.length > STREAM_MAX_ITEMS) {
+      _streamItems.value = _streamItems.value.slice(-STREAM_MAX_ITEMS)
+    }
+  }
+})
+
+// Seed stream on enter; clear on leave
+watch(streamMode, (active) => {
+  if (active) {
+    _streamKeyCounter = 0
+    const seeded = [...recentAlerts.value]
+      .reverse()
+      .map(a => ({ ...a, _streamKey: `s${++_streamKeyCounter}` }))
+    _streamItems.value = seeded
+    _streamPending.value = []
+    nextTick(() => {
+      streamBottomRef.value?.scrollIntoView({ behavior: 'instant' })
+    })
+  } else {
+    _streamItems.value = []
+    _streamPending.value = []
+  }
+})
+
+// Auto-scroll to bottom when new stream items arrive
+watch(
+  () => _streamItems.value.length,
+  () => {
+    if (streamPaused.value) return
+    nextTick(() => {
+      streamBottomRef.value?.scrollIntoView({ behavior: 'smooth' })
+    })
+  }
+)
+
+function formatStreamTime(ts) {
+  if (!ts) return '--:--:--'
+  const d = new Date(ts)
+  if (isNaN(d.getTime())) return '--:--:--'
+  return d.toLocaleTimeString('zh-CN', { hour12: false })
 }
 
 // ───── Zone 4: Local interpretation for selected alert ─────
@@ -1046,6 +1163,8 @@ watch(
     seenAlertKeys.add(key)
     recentAlerts.value.unshift(latest)
     if (recentAlerts.value.length > 20) recentAlerts.value.pop()
+    // F205: push to live stream if active
+    if (streamMode.value) _pushStreamAlert(latest)
   },
   { deep: true }
 )
@@ -1643,5 +1762,93 @@ watch(
 
 .log-viewer-wrapper {
   height: 500px;
+}
+
+/* ───── F205: Live Alert Stream ───── */
+.live-stream-container {
+  max-height: 480px;
+  overflow-y: auto;
+  padding: 8px 0;
+}
+
+.stream-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 40px 0;
+  color: #909399;
+  font-size: 13px;
+}
+
+.stream-alert-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border-bottom: 1px solid #f5f5f5;
+  cursor: pointer;
+  transition: background 0.15s;
+  font-size: 13px;
+}
+
+.stream-alert-row:hover {
+  background: #f5f7fa;
+}
+
+.stream-level-critical,
+.stream-level-error {
+  border-left: 3px solid #f56c6c;
+}
+
+.stream-level-warning {
+  border-left: 3px solid #e6a23c;
+}
+
+.stream-level-info {
+  border-left: 3px solid #909399;
+}
+
+.stream-level-recovery {
+  border-left: 3px solid #67c23a;
+}
+
+.stream-time {
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  font-size: 11px;
+  color: #909399;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.stream-level-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.stream-level-dot.dot-critical,
+.stream-level-dot.dot-error { background: #f56c6c; }
+.stream-level-dot.dot-warning { background: #e6a23c; }
+.stream-level-dot.dot-info { background: #909399; }
+.stream-level-dot.dot-recovery { background: #67c23a; }
+
+.stream-observer {
+  font-size: 11px;
+  font-weight: 500;
+  color: #606266;
+  white-space: nowrap;
+  flex-shrink: 0;
+  max-width: 80px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.stream-message {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #303133;
 }
 </style>
