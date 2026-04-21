@@ -103,6 +103,19 @@ export default {
   getObserverConfigs: () => http.get('/admin/observer-configs'),
   updateObserverConfig: (name, data) => http.put(`/admin/observer-configs/${name}`, data),
 
+  // Observer template builder (P3)
+  generateObserverTemplate: (description) => http.post('/observer-templates/generate', { description }),
+  testExecuteTemplate: (arrayId, template) => http.post('/observer-templates/test-execute', {
+    array_id: arrayId,
+    command: template.command,
+    command_type: template.command_type || 'shell',
+    timeout: template.timeout || 30,
+    strategy: template.strategy || 'lines',
+    strategy_config: template.strategy_config || {},
+    match_condition: template.match_condition || 'found',
+    match_threshold: template.match_threshold || null,
+  }),
+
   getAuthMe: () => http.get('/auth/me'),
   logout: () => http.post('/auth/logout'),
 

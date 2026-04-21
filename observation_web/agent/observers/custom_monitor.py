@@ -1,27 +1,22 @@
 """
-Custom monitor observer.
+Custom monitor observer — v2.
 
-Executes user-defined commands and matches output (regex/jsonpath/contains/exit_code).
+Execution: user-defined shell/curl commands.
+Extraction: 6 strategies (pipe/kv/json/table/lines/diff) via ExtractionEngine.
+Backward compat: v1 configs (match_type/match_expression) auto-convert to v2 strategy.
 Deployed via admin monitor templates -> config.json custom_monitors.
 """
 
-import json
 import logging
 import re
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 from ..core.base import BaseObserver, ObserverResult, AlertLevel
+from ..core.extraction import ExtractionEngine, ExtractionResult
 from ..utils.helpers import run_command
 
 logger = logging.getLogger(__name__)
-
-# Optional jsonpath_ng for JSONPath matching
-try:
-    from jsonpath_ng import parse as jsonpath_parse
-    HAS_JSONPATH = True
-except ImportError:
-    HAS_JSONPATH = False
 
 
 def _level_from_str(s: str) -> AlertLevel:
@@ -30,15 +25,38 @@ def _level_from_str(s: str) -> AlertLevel:
     return m.get((s or "").lower(), AlertLevel.WARNING)
 
 
+def _v1_to_v2_strategy(match_type: str, match_expression: str) -> Tuple[str, Dict]:
+    """Auto-convert v1 match_type/match_expression to v2 strategy + strategy_config."""
+    if match_type == "regex":
+        return "lines", {"pattern": match_expression, "mode": "first"}
+    if match_type == "jsonpath":
+        return "json", {"path": match_expression}
+    if match_type == "contains":
+        return "lines", {"pattern": re.escape(match_expression), "mode": "count"}
+    if match_type == "exit_code":
+        # exit_code is handled outside extraction engine
+        return "exit_code", {}
+    return "lines", {"pattern": match_expression or ".", "mode": "first"}
+
+
 class CustomMonitorObserver(BaseObserver):
     """
-    Custom monitor: run command, match output, optionally alert.
+    Custom monitor — v2.
 
     Config (from custom_monitors item):
     - command, command_type (shell/curl), interval, timeout
-    - match_type: regex | jsonpath | contains | exit_code
-    - match_expression, match_condition (found/not_found/gt/lt/eq/ne), match_threshold
+
+    v2 schema:
+    - strategy: pipe | kv | json | table | lines | diff | exit_code
+    - strategy_config: dict of strategy-specific options
+    - consecutive_threshold: int, default 1 (alert after N consecutive triggers)
+    - match_condition: found | not_found | gt | lt | eq | ne  (for numeric compare)
+    - match_threshold: numeric threshold for gt/lt/eq/ne
     - alert_level, alert_message_template, cooldown
+
+    v1 compat (auto-converted):
+    - match_type → strategy
+    - match_expression → strategy_config
     """
 
     def __init__(self, name: str, config: Dict[str, Any]):
@@ -46,75 +64,79 @@ class CustomMonitorObserver(BaseObserver):
         self.command = config.get("command", "")
         self.command_type = config.get("command_type", "shell")
         self.timeout = config.get("timeout", 30)
-        self.match_type = config.get("match_type", "regex")
-        self.match_expression = config.get("match_expression", "")
-        self.match_condition = config.get("match_condition", "found")
-        self.match_threshold = config.get("match_threshold")
+
+        # v2 strategy resolution (with v1 backward compat)
+        if "strategy" in config:
+            self.strategy: str = config["strategy"]
+            self.strategy_config: Dict = config.get("strategy_config") or {}
+        else:
+            # v1 → v2 auto-convert
+            mt = config.get("match_type", "regex")
+            me = config.get("match_expression", "")
+            self.strategy, self.strategy_config = _v1_to_v2_strategy(mt, me)
+
+        # Condition evaluation
+        self.match_condition: str = config.get("match_condition", "found")
+        self.match_threshold: Optional[str] = config.get("match_threshold")
+
+        # Alert settings
         self.alert_level = _level_from_str(config.get("alert_level", "warning"))
         self.alert_message_template = config.get("alert_message_template", "") or "{value}"
         self.cooldown = config.get("cooldown", 300)
+
+        # Consecutive threshold — alert only after N consecutive hits
+        self.consecutive_threshold: int = max(1, int(config.get("consecutive_threshold", 1)))
+        self._consecutive_count: int = 0
+
+        # Stateful extraction engine (owns diff-strategy previous-value store)
+        self._engine = ExtractionEngine()
         self._last_alert_time: Optional[float] = None
 
-    def _run_command(self) -> tuple:
-        """Run command, return (output_str, exit_code, error)."""
+    # ── Command execution ──────────────────────────────────────────────────
+
+    def _run_command(self) -> Tuple[str, int, str]:
+        """Run command, return (stdout, exit_code, stderr)."""
         cmd = self.command.strip()
         if not cmd:
             return "", -1, "Empty command"
+        ret, stdout, stderr = run_command(cmd, timeout=self.timeout, shell=True)
+        return stdout or "", ret, stderr or ""
 
-        if self.command_type == "curl":
-            ret, stdout, stderr = run_command(cmd, timeout=self.timeout, shell=True)
-            return stdout or "", ret, stderr or ""
-        else:
-            ret, stdout, stderr = run_command(cmd, timeout=self.timeout, shell=True)
-            return stdout or "", ret, stderr or ""
+    # ── Condition evaluation ───────────────────────────────────────────────
 
-    def _extract_value(self, output: str) -> Optional[Any]:
-        """Extract value based on match_type."""
-        if self.match_type == "regex":
-            if not self.match_expression:
-                return None
-            m = re.search(self.match_expression, output, re.DOTALL)
-            return m.group(0) if m else None
-        if self.match_type == "jsonpath":
-            if not HAS_JSONPATH or not self.match_expression:
-                return None
-            try:
-                data = json.loads(output)
-                expr = jsonpath_parse(self.match_expression)
-                matches = [m.value for m in expr.find(data)]
-                return matches[0] if matches else None
-            except (json.JSONDecodeError, Exception) as e:
-                logger.debug("JSONPath parse error: %s", e)
-                return None
-        if self.match_type == "contains":
-            if self.match_expression in output:
-                return self.match_expression
-            return None
-        if self.match_type == "exit_code":
-            return "exit_code"  # Handled separately
-        return None
-
-    def _check_condition(self, value: Any, exit_code: int) -> bool:
-        """Check if condition is met (should alert)."""
+    def _check_condition(self, result: ExtractionResult, exit_code: int) -> bool:
+        """Return True if the extraction result should trigger an alert."""
         cond = self.match_condition
-        if self.match_type == "exit_code":
+
+        # exit_code strategy handled separately
+        if self.strategy == "exit_code":
             thresh = self.match_threshold
             try:
                 expected = int(thresh) if thresh is not None else 0
             except (ValueError, TypeError):
                 expected = 0
-            if cond == "eq":
-                return exit_code == expected
-            if cond == "ne":
-                return exit_code != expected
-            return False
+            return exit_code == expected if cond == "eq" else (
+                exit_code != expected if cond == "ne" else False
+            )
+
+        # diff strategy: use "triggered" from metadata
+        if self.strategy == "diff":
+            return result.metadata.get("triggered", False)
+
+        # lines + count mode: value is an integer count
+        value = result.value
 
         if cond == "found":
+            # For lines/count: count > 0; otherwise: value is not None
+            if isinstance(value, int):
+                return value > 0
             return value is not None
         if cond == "not_found":
+            if isinstance(value, int):
+                return value == 0
             return value is None
 
-        # gt/lt/eq/ne for numeric comparison
+        # gt/lt/eq/ne — numeric comparison
         thresh = self.match_threshold
         if thresh is None:
             return False
@@ -123,58 +145,70 @@ class CustomMonitorObserver(BaseObserver):
             t = float(thresh)
         except (ValueError, TypeError):
             return False
-        if cond == "gt":
-            return v > t
-        if cond == "lt":
-            return v < t
-        if cond == "eq":
-            return v == t
-        if cond == "ne":
-            return v != t
-        return False
+        return {"gt": v > t, "lt": v < t, "eq": v == t, "ne": v != t}.get(cond, False)
 
-    def _render_message(self, value: Any, match_content: str, exit_code: int) -> str:
-        """Render alert message from template."""
+    # ── Message rendering ──────────────────────────────────────────────────
+
+    def _render_message(self, result: ExtractionResult, exit_code: int) -> str:
         tpl = self.alert_message_template or "{value}"
-        return tpl.replace("{value}", str(value or "")).replace(
-            "{command}", self.command
-        ).replace("{match}", str(match_content or "")).replace(
-            "{exit_code}", str(exit_code)
+        value = result.value
+        old = result.metadata.get("previous", "")
+        new = result.metadata.get("current", "")
+        return (
+            tpl
+            .replace("{value}", str(value or ""))
+            .replace("{command}", self.command)
+            .replace("{exit_code}", str(exit_code))
+            .replace("{old}", str(old or ""))
+            .replace("{new}", str(new or ""))
         )
 
+    # ── Public check ──────────────────────────────────────────────────────
+
     def check(self) -> ObserverResult:
-        """Execute check."""
         if not self.command:
             return self.create_result(has_alert=False, message="No command configured")
 
         output, exit_code, stderr = self._run_command()
-        value = self._extract_value(output) if self.match_type != "exit_code" else None
 
-        if self.match_type == "exit_code":
-            should_alert = self._check_condition(None, exit_code)
-            match_content = str(exit_code)
+        # Extract value
+        if self.strategy == "exit_code":
+            result = ExtractionResult(success=True, value=exit_code, raw_output=output[:500])
         else:
-            should_alert = self._check_condition(value, exit_code)
-            match_content = str(value) if value is not None else ""
+            result = self._engine.extract(self.strategy, output, self.strategy_config, state_key=self.name)
 
-        if not should_alert:
+        should_alert = self._check_condition(result, exit_code)
+
+        if should_alert:
+            self._consecutive_count += 1
+        else:
+            self._consecutive_count = 0
+
+        if not should_alert or self._consecutive_count < self.consecutive_threshold:
             return self.create_result(
                 has_alert=False,
                 message=f"Custom monitor {self.name} OK",
-                details={"command": self.command[:80], "output_preview": (output or "")[:200]},
+                details={
+                    "command": self.command[:80],
+                    "strategy": self.strategy,
+                    "value": str(result.value)[:200] if result.value is not None else None,
+                    "consecutive": self._consecutive_count,
+                },
             )
 
-        # Cooldown
+        # Cooldown guard
         now = time.time()
         if self._last_alert_time and (now - self._last_alert_time) < self.cooldown:
+            remaining = int(self.cooldown - (now - self._last_alert_time))
             return self.create_result(
                 has_alert=False,
-                message=f"Custom monitor {self.name} (cooldown)",
-                details={"cooldown_remaining": int(self.cooldown - (now - self._last_alert_time))},
+                message=f"Custom monitor {self.name} (cooldown {remaining}s)",
+                details={"cooldown_remaining": remaining},
             )
         self._last_alert_time = now
+        self._consecutive_count = 0  # reset after alert fires
 
-        msg = self._render_message(value, match_content, exit_code)
+        msg = self._render_message(result, exit_code)
         if not msg.strip():
             msg = f"Custom monitor {self.name}: condition {self.match_condition} met"
 
@@ -184,10 +218,38 @@ class CustomMonitorObserver(BaseObserver):
             message=msg,
             details={
                 "command": self.command,
-                "match_type": self.match_type,
-                "match_expression": self.match_expression[:100],
-                "value": str(value)[:200] if value is not None else None,
+                "strategy": self.strategy,
+                "value": str(result.value)[:200] if result.value is not None else None,
                 "exit_code": exit_code,
-                "output_preview": (output or "")[:500],
+                "output_preview": output[:500],
+                "extraction_metadata": result.metadata,
             },
         )
+
+    # ── Test execution (P3-4 API support) ─────────────────────────────────
+
+    def test_execute(self) -> Dict[str, Any]:
+        """
+        Run the command and extract the value without firing an alert.
+        Returns a serializable dict for the test-execute API response.
+        """
+        if not self.command:
+            return {"success": False, "error": "No command configured", "raw_output": ""}
+
+        output, exit_code, stderr = self._run_command()
+
+        if self.strategy == "exit_code":
+            result = ExtractionResult(success=True, value=exit_code, raw_output=output[:500])
+        else:
+            result = self._engine.extract(self.strategy, output, self.strategy_config, state_key=self.name)
+
+        return {
+            "success": result.success,
+            "value": result.value,
+            "raw_output": output[:2000],
+            "stderr": stderr[:500] if stderr else "",
+            "exit_code": exit_code,
+            "strategy": self.strategy,
+            "extraction_metadata": result.metadata,
+            "error": result.error,
+        }

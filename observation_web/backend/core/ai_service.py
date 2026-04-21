@@ -202,6 +202,164 @@ def _build_nl_query_prompt(question: str) -> str:
 SQL："""
 
 
+# ── P3-3: NL → Observer Template ──────────────────────────────────────────
+
+OBSERVER_KNOWLEDGE_BASE = """
+# 已有内置观察点（不要重复实现这些能力，自定义模板针对其他指标）
+| 观察点名 | 说明 | 典型命令 |
+|---------|------|---------|
+| error_code | 端口误码计数 | - |
+| link_status | 端口链路状态 | - |
+| alarm_type | 系统告警事件 | - |
+| cpu_usage | CPU 占用 | top/mpstat |
+| memory_leak | 内存泄漏 | free -m |
+| disk_smart | 磁盘 S.M.A.R.T. | smartctl |
+| fan_temp | 风扇温度 | - |
+| pcie_error | PCIe 错误 | - |
+| rebuild_status | RAID 重建 | - |
+| bbu_status | 电池状态 | - |
+
+# 6种提取策略
+| strategy | 用途 | strategy_config示例 |
+|----------|------|-------------------|
+| pipe | 管道式文本处理 grep+split+index | {"steps": [{"grep":"Mem:"}, {"split":null}, {"index":2}]} |
+| kv | key=value 或 key: value 格式 | {"key": "rx_crc_errors", "numeric": true} |
+| json | JSONPath 提取 | {"path": "$.status"} |
+| table | 表头列名提取 | {"column": "Use%", "row": 0} |
+| lines | 按行匹配+计数 | {"pattern": "error", "mode": "count"} |
+| diff | 检测值是否变化 | {"alert_on": "value_changed"} |
+
+match_condition (触发报警的条件):
+- found: 提取到值（count>0 for lines/count）
+- not_found: 未提取到值
+- gt/lt/eq/ne + match_threshold: 数值比较，例如 "gt" + "90" 表示超过90
+
+alert_level: info | warning | error | critical
+"""
+
+OBSERVER_TEMPLATE_SCHEMA = """
+{
+  "name": "monitor_xxx",           // 英文下划线，简短唯一
+  "command": "shell command here", // 在目标阵列执行的命令
+  "command_type": "shell",         // "shell" 或 "curl"
+  "interval": 60,                  // 检查间隔秒数 [5-3600]
+  "timeout": 30,                   // 命令超时秒数 [5-120]
+  "strategy": "lines",             // 提取策略，见上表
+  "strategy_config": {},           // 策略参数
+  "match_condition": "found",      // 触发条件
+  "match_threshold": null,         // 数值阈值（仅 gt/lt/eq/ne 时填写）
+  "consecutive_threshold": 1,      // 连续触发N次才报警
+  "alert_level": "warning",        // 告警级别
+  "alert_message_template": "...", // 消息模板：可用 {value} {command} {old} {new}
+  "cooldown": 300                  // 同一条件再次报警的冷却时间（秒）
+}
+"""
+
+
+def _build_nl_template_prompt(description: str) -> str:
+    return f"""你是存储阵列测试监控系统的告警模板设计专家。用户用自然语言描述想要监控什么，你需要生成一个 JSON 格式的自定义观察点模板。
+
+{OBSERVER_KNOWLEDGE_BASE}
+
+# 输出格式（严格 JSON，不要 markdown 代码块）
+{OBSERVER_TEMPLATE_SCHEMA}
+
+# 规则
+1. 只返回一个合法的 JSON 对象，不加任何解释或前缀
+2. command 要在 Linux bash 环境可运行，优先使用标准工具（cat/ip/ethtool/free/df/dmesg/systemctl）
+3. 禁止使用 rm/mkfs/dd/shutdown/reboot 等破坏性命令
+4. interval 默认 60，高频指标（如链路状态）可缩短至 10-30
+5. 选择最合适的 strategy，配好 strategy_config
+6. alert_message_template 要包含足够信息帮助排查，使用 {{value}}/{{old}}/{{new}} 占位符
+
+用户需求：{description}
+
+JSON:"""
+
+
+async def nl_to_observer_template(description: str) -> Optional[dict]:
+    """
+    P3-3: Convert natural language description to observer template config dict.
+    Returns None on failure (AI unavailable or bad output).
+    Never raises.
+    """
+    config = get_config()
+    if not config.ai.enabled:
+        logger.debug("AI disabled, cannot generate observer template")
+        return None
+
+    prompt = _build_nl_template_prompt(description)
+    headers = {"Content-Type": "application/json"}
+    if config.ai.api_key:
+        headers["Authorization"] = f"Bearer {config.ai.api_key}"
+
+    body = {
+        "model": config.ai.model,
+        "messages": [{"role": "user", "content": prompt}],
+        "max_tokens": 600,
+        "temperature": 0.2,
+    }
+
+    try:
+        async with httpx.AsyncClient(
+            timeout=config.ai.timeout, **_get_httpx_client_kwargs()
+        ) as client:
+            resp = await client.post(config.ai.api_url, json=body, headers=headers)
+            resp.raise_for_status()
+            data = resp.json()
+
+        choices = data.get("choices", [])
+        if not choices:
+            return None
+
+        raw = choices[0].get("message", {}).get("content", "").strip()
+
+        # Strip markdown code fences if present
+        if raw.startswith("```"):
+            lines = raw.split("\n")
+            raw = "\n".join(l for l in lines if not l.startswith("```")).strip()
+
+        template = json.loads(raw)
+        _validate_observer_template(template)
+        return template
+
+    except json.JSONDecodeError as e:
+        logger.warning("nl_to_observer_template: JSON parse failed: %s", e)
+        return None
+    except ValueError as e:
+        logger.warning("nl_to_observer_template: validation failed: %s", e)
+        return None
+    except Exception as e:
+        logger.warning("nl_to_observer_template: %s", e)
+        return None
+
+
+def _validate_observer_template(cfg: dict) -> None:
+    """Validate generated template. Raises ValueError on any violation."""
+    required = {"name", "command", "strategy", "alert_level"}
+    missing = required - cfg.keys()
+    if missing:
+        raise ValueError(f"Missing required fields: {missing}")
+
+    valid_strategies = {"pipe", "kv", "json", "table", "lines", "diff", "exit_code"}
+    if cfg.get("strategy") not in valid_strategies:
+        raise ValueError(f"Invalid strategy: {cfg.get('strategy')!r}")
+
+    valid_levels = {"info", "warning", "error", "critical"}
+    if cfg.get("alert_level") not in valid_levels:
+        raise ValueError(f"Invalid alert_level: {cfg.get('alert_level')!r}")
+
+    interval = cfg.get("interval", 60)
+    if not (5 <= int(interval) <= 3600):
+        raise ValueError(f"interval must be 5-3600, got {interval}")
+
+    # Block dangerous commands
+    cmd = cfg.get("command", "")
+    dangerous = re.compile(r"\b(rm\s+-[rf]|mkfs|dd\s+if|shutdown|reboot|format|fdisk)\b")
+    if dangerous.search(cmd):
+        raise ValueError(f"Dangerous command pattern detected: {cmd[:80]}")
+
+
 async def nl_to_sql(question: str) -> Optional[str]:
     """
     F201: Translate natural language question to SQL query.
