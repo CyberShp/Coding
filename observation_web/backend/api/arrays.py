@@ -2206,7 +2206,7 @@ async def refresh_array(
     # Check agent status — wrap with timeout to prevent stale SSH hangs
     config = get_config()
     deployer = AgentDeployer(conn, config)
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     try:
         status_obj.agent_deployed = await asyncio.wait_for(
             loop.run_in_executor(None, deployer.check_deployed), timeout=10
@@ -2504,7 +2504,7 @@ async def deploy_agent(
 
     config = get_config()
     deployer = AgentDeployer(conn, config)
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     try:
         result = await asyncio.wait_for(loop.run_in_executor(None, deployer.deploy), timeout=120)
     except asyncio.TimeoutError:
@@ -2555,7 +2555,7 @@ async def start_agent(
 
     config = get_config()
     deployer = AgentDeployer(conn, config)
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     try:
         result = await asyncio.wait_for(loop.run_in_executor(None, deployer.start_agent), timeout=60)
     except asyncio.TimeoutError:
@@ -2596,7 +2596,7 @@ async def stop_agent(
 
     config = get_config()
     deployer = AgentDeployer(conn, config)
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     try:
         result = await asyncio.wait_for(loop.run_in_executor(None, deployer.stop_agent), timeout=30)
     except asyncio.TimeoutError:
@@ -2637,7 +2637,7 @@ async def restart_agent(
 
     config = get_config()
     deployer = AgentDeployer(conn, config)
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     try:
         result = await asyncio.wait_for(loop.run_in_executor(None, deployer.restart_agent), timeout=60)
     except asyncio.TimeoutError:
@@ -2985,7 +2985,7 @@ async def update_agent_config(
         # Optionally restart agent (non-blocking)
         if restart_agent_flag:
             deployer = AgentDeployer(conn, config)
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             try:
                 restart_result = await asyncio.wait_for(
                     loop.run_in_executor(None, deployer.restart_agent), timeout=60

@@ -309,7 +309,7 @@ class SSHConnection:
         Use this from async code to avoid blocking the event loop.
         Wraps with asyncio.wait_for to prevent thread pool stalls.
         """
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         # Add extra buffer (2x) for asyncio timeout to allow the SSH-level timeout to fire first
         async_timeout = timeout * 2
         try:

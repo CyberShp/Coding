@@ -3,6 +3,7 @@ Custom query API endpoints.
 """
 
 import asyncio
+import json
 import logging
 from datetime import datetime
 from typing import Dict, List, Optional
@@ -144,7 +145,6 @@ async def list_templates(
     # Add user templates from database
     result = await db.execute(select(QueryTemplateModel))
     for t in result.scalars().all():
-        import json
         templates.append(QueryTemplateResponse(
             id=t.id,
             name=t.name,
@@ -172,8 +172,6 @@ async def create_template(
     db: AsyncSession = Depends(get_db),
 ):
     """Create a new query template"""
-    import json
-    
     db_template = QueryTemplateModel(
         name=template.name,
         description=template.description,

@@ -69,7 +69,7 @@ async def _idle_connection_cleaner():
                         store = get_traffic_store()
                         await store.cleanup_expired(session)
             except Exception as e:
-                logger.debug(f"Traffic cleanup error: {e}")
+                logger.warning(f"Traffic cleanup error: {e}")
 
             # Every cycle: cleanup expired alert acknowledgements
             try:
@@ -89,7 +89,7 @@ async def _idle_connection_cleaner():
                             await session.commit()
                             logger.info(f"Cleaned up {result.rowcount} expired alert acknowledgements")
             except Exception as e:
-                logger.debug(f"Expired ack cleanup error: {e}")
+                logger.warning(f"Expired ack cleanup error: {e}")
         except asyncio.CancelledError:
             break
         except Exception as e:
@@ -117,7 +117,7 @@ async def _health_checker():
                         continue
 
                     reachable = await asyncio.wait_for(
-                        asyncio.get_event_loop().run_in_executor(None, tcp_probe, conn.host, conn.port, 2.0),
+                        asyncio.get_running_loop().run_in_executor(None, tcp_probe, conn.host, conn.port, 2.0),
                         timeout=3,
                     )
                     if not reachable:
@@ -127,7 +127,7 @@ async def _health_checker():
                         continue
 
                     alive = await asyncio.wait_for(
-                        asyncio.get_event_loop().run_in_executor(None, conn.check_alive),
+                        asyncio.get_running_loop().run_in_executor(None, conn.check_alive),
                         timeout=3,
                     )
                     status_obj.state = conn.state
@@ -138,7 +138,7 @@ async def _health_checker():
                     if check_count % 10 == 0 and status_obj.agent_running:
                         deployer = AgentDeployer(conn, config)
                         still_running = await asyncio.wait_for(
-                            asyncio.get_event_loop().run_in_executor(None, deployer.check_running),
+                            asyncio.get_running_loop().run_in_executor(None, deployer.check_running),
                             timeout=10,
                         )
                         if not still_running:
@@ -150,7 +150,7 @@ async def _health_checker():
                             )
                             if config.remote.auto_redeploy:
                                 if await asyncio.wait_for(
-                                    asyncio.get_event_loop().run_in_executor(None, deployer.check_deployed),
+                                    asyncio.get_running_loop().run_in_executor(None, deployer.check_deployed),
                                     timeout=10,
                                 ):
                                     ready = await asyncio.wait_for(
@@ -161,12 +161,12 @@ async def _health_checker():
                                         result = {"ok": True, "message": "Agent became ready after SSH recovery"}
                                     else:
                                         result = await asyncio.wait_for(
-                                            asyncio.get_event_loop().run_in_executor(None, deployer.start_agent),
+                                            asyncio.get_running_loop().run_in_executor(None, deployer.start_agent),
                                             timeout=60,
                                         )
                                 else:
                                     result = await asyncio.wait_for(
-                                        asyncio.get_event_loop().run_in_executor(None, deployer.deploy),
+                                        asyncio.get_running_loop().run_in_executor(None, deployer.deploy),
                                         timeout=120,
                                     )
                                 if result.get("ok"):
@@ -178,7 +178,7 @@ async def _health_checker():
                                         {"array_id": array_id, "host": status_obj.host},
                                     )
                 except Exception as e:
-                    logger.debug(f"Agent health check failed for {array_id}: {e}")
+                    logger.warning(f"Agent health check failed for {array_id}: {e}")
         except asyncio.CancelledError:
             break
         except Exception as e:
@@ -223,7 +223,7 @@ async def _auto_reconnect_saved_arrays():
                 )
                 return conn.connect(), conn
 
-            ok, conn = await asyncio.get_event_loop().run_in_executor(None, _do_connect)
+            ok, conn = await asyncio.get_running_loop().run_in_executor(None, _do_connect)
             status_obj = _get_array_status(array.array_id)
             status_obj.state = conn.state
             status_obj.last_refresh = datetime.now()

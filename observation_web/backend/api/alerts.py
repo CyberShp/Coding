@@ -4,6 +4,7 @@ Alert management API endpoints.
 
 import csv
 import io
+import json as _json
 import logging
 from datetime import datetime, timedelta
 from typing import List, Optional
@@ -56,7 +57,6 @@ async def list_alerts(
         offset=offset,
     )
 
-    import json as _json
     from ..models.array import ArrayModel
     from ..core.baseline import _extract_metrics, check_baseline_status, get_baseline
 
@@ -135,9 +135,8 @@ async def get_recent_alerts(
         offset=0,
     )
     
-    import json as _json
     from ..models.array import ArrayModel
-    
+
     # Build array_id -> name lookup
     arr_result = await db.execute(select(ArrayModel.array_id, ArrayModel.name))
     name_map = {row.array_id: row.name for row in arr_result.all()}
@@ -218,7 +217,6 @@ async def get_aggregated_alerts(
             'is_acked': getattr(a, 'is_acked', False),
         }
         try:
-            import json as _json
             d['details'] = _json.loads(a.details) if isinstance(a.details, str) else (a.details or {})
         except Exception:
             d['details'] = {}
@@ -258,7 +256,6 @@ async def get_causal_alerts(
     array_name = row.name if row else array_id
 
     # Convert to dicts
-    import json as _json
     alert_dicts = []
     for a in alerts:
         d = {

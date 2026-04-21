@@ -116,7 +116,7 @@ class UserSessionMiddleware:
         try:
             task.result()
         except Exception as e:
-            logger.debug(f"Failed to update user session: {e}")
+            logger.warning(f"Failed to update user session: {e}")
 
     async def _update_session(self, ip: str, current_page: str):
         """
@@ -167,7 +167,7 @@ class UserSessionMiddleware:
                 await session.commit()
 
         except Exception as e:
-            logger.debug(f"Failed to update user session: {e}")
+            logger.warning(f"Failed to update user session: {e}")
 
 
 # Store for tracking which page each user is viewing (for presence)
