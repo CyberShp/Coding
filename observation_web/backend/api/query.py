@@ -257,14 +257,41 @@ _NL_MAX_ROWS = 200
 
 def _extract_table_refs(sql: str) -> set:
     """
-    Extract table names from FROM and JOIN clauses.
-    Handles: FROM table, FROM table alias, JOIN table alias ON ...
+    Extract table names from FROM/JOIN clauses including comma-separated
+    old-style joins: FROM table1 a, table2 b, table3 c
     """
     normalized = re.sub(r'\s+', ' ', sql.strip().lower())
     tables = set()
-    # Match FROM <table> and JOIN <table> (with optional alias)
-    for m in re.finditer(r'\b(?:from|join)\s+(\w+)', normalized):
+
+    # Step 1: Extract FROM clause content (between FROM and WHERE/GROUP/ORDER/HAVING/LIMIT/JOIN or end)
+    from_match = re.search(
+        r'\bfrom\s+(.*?)(?:\b(?:where|group|order|having|limit|union)\b|$)',
+        normalized,
+    )
+    if from_match:
+        from_clause = from_match.group(1)
+        # Split by JOIN first to handle mixed syntax: FROM a, b JOIN c
+        parts = re.split(r'\bjoin\b', from_clause)
+        # First part is the comma-separated FROM list
+        for item in parts[0].split(','):
+            item = item.strip()
+            if item:
+                # First word is the table name (rest is alias/ON clause)
+                table = item.split()[0].strip()
+                if table and re.match(r'^\w+$', table):
+                    tables.add(table)
+        # Remaining parts are JOIN targets
+        for part in parts[1:]:
+            part = part.strip()
+            if part:
+                table = part.split()[0].strip()
+                if table and re.match(r'^\w+$', table):
+                    tables.add(table)
+
+    # Step 2: Also catch any standalone JOIN (handles subselects, multiple JOINs)
+    for m in re.finditer(r'\bjoin\s+(\w+)', normalized):
         tables.add(m.group(1))
+
     return tables
 
 
@@ -275,8 +302,9 @@ def _validate_nl_sql(sql: str) -> Optional[str]:
     Security layers:
     1. Must be SELECT only
     2. No forbidden keywords (INSERT/UPDATE/DELETE/DROP/etc)
-    3. All referenced tables must be in whitelist (parsed from FROM/JOIN)
-    4. No sensitive column names anywhere in query
+    3. No wildcard SELECT (*, table.*) — must name columns explicitly
+    4. All referenced tables must be in whitelist (parsed from FROM/JOIN)
+    5. No sensitive column names anywhere in query
     """
     normalized = sql.strip().rstrip(";").lower()
 
@@ -288,6 +316,10 @@ def _validate_nl_sql(sql: str) -> Optional[str]:
     for word in _NL_FORBIDDEN:
         if re.search(rf'\b{word}\b', normalized):
             return f"禁止使用 {word.upper()} 语句"
+
+    # Block SELECT * and table.* — forces explicit column naming
+    if re.search(r'\bselect\s+\*', normalized) or re.search(r'\w+\.\*', normalized):
+        return "禁止使用 SELECT * — 请指定具体列名"
 
     # Extract and validate ALL table references
     tables = _extract_table_refs(normalized)

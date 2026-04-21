@@ -190,9 +190,11 @@ def _build_nl_query_prompt(question: str) -> str:
 规则：
 1. 只生成 SELECT 语句，禁止 INSERT/UPDATE/DELETE/DROP/ALTER
 2. 必须使用上面列出的表和列，不要编造不存在的列
-3. 时间过滤用 datetime() 函数，如 WHERE timestamp >= datetime('now', '-3 days')
-4. 结果限制 LIMIT 100（除非用户明确要求更多）
-5. 中文时间表达转换：最近三天 = -3 days, 上周 = -7 days, 本月 = start of month
+3. 禁止使用 SELECT * — 必须显式列出需要的列名
+4. 禁止查询 saved_password, key_path, api_key, password 等敏感列
+5. 时间过滤用 datetime() 函数，如 WHERE timestamp >= datetime('now', '-3 days')
+6. 结果限制 LIMIT 100（除非用户明确要求更多，上限 200）
+7. 中文时间表达转换：最近三天 = -3 days, 上周 = -7 days, 本月 = start of month
 6. 只返回 SQL 语句，不要解释，不要 markdown 代码块
 
 用户问题：{question}
