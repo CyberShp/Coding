@@ -300,13 +300,15 @@ def _extract_table_refs(sql: str) -> set:
 
 def _strip_string_literals(sql: str) -> str:
     """
-    Replace all single- and double-quoted string literals with empty
-    placeholders so keyword scanning doesn't match content inside strings.
+    Replace single-quoted string literals with empty placeholders so
+    keyword scanning doesn't match content inside strings.
     e.g. WHERE message LIKE '%drop%' → WHERE message LIKE ''
+
+    Only strips single quotes. Double quotes in SQLite are identifier
+    quoting (column/table names), NOT string literals — they must be
+    preserved so the column blacklist can catch SELECT "saved_password".
     """
-    result = re.sub(r"'[^']*'", "''", sql)
-    result = re.sub(r'"[^"]*"', '""', result)
-    return result
+    return re.sub(r"'[^']*'", "''", sql)
 
 
 def _validate_nl_sql(sql: str) -> Optional[str]:

@@ -18,8 +18,10 @@ def test_strip_single_quoted():
     assert _strip_string_literals("where msg like '%drop%'") == "where msg like ''"
 
 
-def test_strip_double_quoted():
-    assert _strip_string_literals('where msg = "delete me"') == 'where msg = ""'
+def test_strip_preserves_double_quoted_identifiers():
+    """Double quotes are SQLite identifier quoting — must NOT be stripped."""
+    sql = 'select "saved_password" from arrays'
+    assert _strip_string_literals(sql) == sql  # unchanged
 
 
 def test_strip_multiple_literals():
@@ -129,6 +131,22 @@ def test_comma_join_disallowed_table_blocked():
 def test_column_blacklist_real():
     """Real column reference (not inside string) must be blocked."""
     sql = "SELECT id, saved_password FROM alerts"
+    err = _validate_nl_sql(sql)
+    assert err is not None
+    assert "saved_password" in err
+
+
+def test_column_blacklist_double_quoted_identifier():
+    """Double-quoted column name is a SQLite identifier — must be blocked."""
+    sql = 'SELECT "saved_password" FROM arrays LIMIT 1'
+    err = _validate_nl_sql(sql)
+    assert err is not None
+    assert "saved_password" in err
+
+
+def test_column_blacklist_qualified_double_quoted():
+    """table."col" identifier quoting — must still be blocked."""
+    sql = 'SELECT a."saved_password" FROM arrays a LIMIT 1'
     err = _validate_nl_sql(sql)
     assert err is not None
     assert "saved_password" in err
