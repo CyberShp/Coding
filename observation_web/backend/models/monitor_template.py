@@ -35,6 +35,7 @@ class MonitorTemplateModel(Base):
     alert_level = Column(String(16), default="warning")
     alert_message_template = Column(Text, default="")
     cooldown = Column(Integer, default=300)
+    consecutive_threshold = Column(Integer, default=1)
 
     # 管理
     is_enabled = Column(Boolean, default=True)

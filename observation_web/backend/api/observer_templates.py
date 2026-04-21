@@ -10,16 +10,20 @@ import logging
 import re
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from ..core.ai_service import nl_to_observer_template, is_ai_available
 from ..core.ssh_pool import get_ssh_pool
+from .auth import require_admin
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/observer-templates", tags=["observer-templates"])
 
 VALID_STRATEGIES = {"pipe", "kv", "json", "table", "lines", "diff", "exit_code"}
+
+# Commands blocked in test-execute (mirrors ai_service._validate_observer_template)
+_DANGEROUS_CMD_RE = re.compile(r"\b(rm\s+-[rf]|mkfs|dd\s+if|shutdown|reboot|format|fdisk)\b")
 
 
 # ---------------------------------------------------------------------------
@@ -46,7 +50,10 @@ class TestExecuteRequest(BaseModel):
 # ---------------------------------------------------------------------------
 
 @router.post("/generate")
-async def generate_observer_template(body: GenerateRequest):
+async def generate_observer_template(
+    body: GenerateRequest,
+    _payload: dict = Depends(require_admin),
+):
     """AI-assisted NL → observer template config."""
     if not body.description or not body.description.strip():
         raise HTTPException(status_code=400, detail="description is required")
@@ -62,7 +69,10 @@ async def generate_observer_template(body: GenerateRequest):
 
 
 @router.post("/test-execute")
-async def test_execute_template(body: TestExecuteRequest):
+async def test_execute_template(
+    body: TestExecuteRequest,
+    _payload: dict = Depends(require_admin),
+):
     """
     Run the command on a connected array and apply lightweight extraction.
     Returns raw output + extracted value so the user can validate the template.
@@ -79,6 +89,8 @@ async def test_execute_template(body: TestExecuteRequest):
     cmd = body.command.strip()
     if not cmd:
         raise HTTPException(status_code=400, detail="command is required")
+    if _DANGEROUS_CMD_RE.search(cmd):
+        raise HTTPException(status_code=400, detail="Command contains disallowed pattern")
 
     try:
         ret_code, stdout, stderr = conn.execute(cmd, timeout=body.timeout)
@@ -198,9 +210,15 @@ def _eval_condition(cond: str, value: Any, threshold: Optional[str], strategy: s
         return exit_code == expected if cond == "eq" else (exit_code != expected if cond == "ne" else False)
 
     if cond == "found":
-        return value > 0 if isinstance(value, int) else value is not None
+        # lines strategy returns an int count; treat count>0 as "found"
+        # all other strategies: any non-None value (including 0) = found
+        if strategy == "lines" and isinstance(value, int):
+            return value > 0
+        return value is not None
     if cond == "not_found":
-        return value == 0 if isinstance(value, int) else value is None
+        if strategy == "lines" and isinstance(value, int):
+            return value == 0
+        return value is None
 
     if threshold is None:
         return False

@@ -7,6 +7,7 @@ Backward compat: v1 configs (match_type/match_expression) auto-convert to v2 str
 Deployed via admin monitor templates -> config.json custom_monitors.
 """
 
+import json
 import logging
 import re
 import time
@@ -25,8 +26,26 @@ def _level_from_str(s: str) -> AlertLevel:
     return m.get((s or "").lower(), AlertLevel.WARNING)
 
 
+_V2_STRATEGIES = {"pipe", "kv", "json", "table", "lines", "diff", "exit_code"}
+
+
 def _v1_to_v2_strategy(match_type: str, match_expression: str) -> Tuple[str, Dict]:
-    """Auto-convert v1 match_type/match_expression to v2 strategy + strategy_config."""
+    """Auto-convert v1 match_type/match_expression to v2 strategy + strategy_config.
+
+    If match_type is already a v2 strategy name (saved by the Phase 3 template
+    builder), decode match_expression as JSON strategy_config and pass through.
+    """
+    # v2 passthrough: template builder stores strategy name in match_type
+    if match_type in _V2_STRATEGIES:
+        try:
+            cfg = json.loads(match_expression) if match_expression else {}
+            if not isinstance(cfg, dict):
+                cfg = {}
+        except (json.JSONDecodeError, TypeError, ValueError):
+            cfg = {}
+        return match_type, cfg
+
+    # v1 legacy mappings
     if match_type == "regex":
         return "lines", {"pattern": match_expression, "mode": "first"}
     if match_type == "jsonpath":
@@ -127,12 +146,13 @@ class CustomMonitorObserver(BaseObserver):
         value = result.value
 
         if cond == "found":
-            # For lines/count: count > 0; otherwise: value is not None
-            if isinstance(value, int):
+            # lines strategy returns an int count; treat count>0 as "found"
+            # all other strategies: any non-None value (including 0) = found
+            if self.strategy == "lines" and isinstance(value, int):
                 return value > 0
             return value is not None
         if cond == "not_found":
-            if isinstance(value, int):
+            if self.strategy == "lines" and isinstance(value, int):
                 return value == 0
             return value is None
 

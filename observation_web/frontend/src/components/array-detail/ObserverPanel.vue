@@ -272,6 +272,7 @@ async function handleSave() {
       alert_level: template.value.alert_level || 'warning',
       alert_message_template: template.value.alert_message_template || '',
       cooldown: template.value.cooldown || 300,
+      consecutive_threshold: template.value.consecutive_threshold || 1,
       is_enabled: true,
     })
     saveSuccess.value = true

@@ -44,6 +44,7 @@ class MonitorTemplateCreate(BaseModel):
     alert_level: str = "warning"
     alert_message_template: str = ""
     cooldown: int = 300
+    consecutive_threshold: int = 1
     is_enabled: bool = True
 
 
@@ -86,6 +87,7 @@ def _template_to_agent_config(t: MonitorTemplateModel) -> Dict[str, Any]:
         "alert_level": t.alert_level or "warning",
         "alert_message_template": t.alert_message_template or "",
         "cooldown": t.cooldown or 300,
+        "consecutive_threshold": t.consecutive_threshold if t.consecutive_threshold is not None else 1,
     }
 
 
@@ -106,6 +108,7 @@ def _model_to_dict(m: MonitorTemplateModel) -> dict:
         "alert_level": m.alert_level or "warning",
         "alert_message_template": m.alert_message_template or "",
         "cooldown": m.cooldown or 300,
+        "consecutive_threshold": m.consecutive_threshold if m.consecutive_threshold is not None else 1,
         "is_enabled": m.is_enabled if m.is_enabled is not None else True,
         "is_builtin": m.is_builtin or False,
         "created_by": m.created_by or "",
@@ -155,6 +158,7 @@ async def create_template(
         alert_level=body.alert_level,
         alert_message_template=body.alert_message_template,
         cooldown=body.cooldown,
+        consecutive_threshold=body.consecutive_threshold,
         is_enabled=body.is_enabled,
         is_builtin=False,
         created_by=created_by,

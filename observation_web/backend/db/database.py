@@ -94,6 +94,9 @@ async def create_tables():
     async with _async_engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
+    # Incremental column migrations for existing deployments
+    await _apply_column_migrations()
+
     # Startup diagnostic: verify all expected tables exist
     async with _async_engine.begin() as conn:
         def _check_tables(sync_conn):
@@ -109,6 +112,23 @@ async def create_tables():
                 logger.info("All %d tables verified", len(expected))
 
         await conn.run_sync(_check_tables)
+
+
+async def _apply_column_migrations():
+    """Add columns that didn't exist in earlier schema versions."""
+    async with _async_engine.begin() as conn:
+        def _migrate(sync_conn):
+            # Phase 3: consecutive_threshold on monitor_templates
+            cols = {row[1] for row in sync_conn.execute(
+                text("PRAGMA table_info(monitor_templates)")
+            )}
+            if "consecutive_threshold" not in cols:
+                sync_conn.execute(text(
+                    "ALTER TABLE monitor_templates ADD COLUMN consecutive_threshold INTEGER DEFAULT 1"
+                ))
+                logger.info("Migration: added monitor_templates.consecutive_threshold")
+
+        await conn.run_sync(_migrate)
 
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
