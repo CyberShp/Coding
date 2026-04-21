@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/alerts", tags=["alerts"])
 
 
-@router.get("", response_model=List[AlertResponse])
+@router.get("")
 async def list_alerts(
     array_id: Optional[str] = Query(None, description="Filter by array ID"),
     observer_name: Optional[str] = Query(None, description="Filter by observer"),
@@ -33,7 +33,7 @@ async def list_alerts(
 ):
     """
     Get alerts with filters.
-    
+
     Supports filtering by:
     - array_id: Filter by specific array
     - observer_name: Filter by observer type
@@ -41,11 +41,11 @@ async def list_alerts(
     - hours: Time range (default 24 hours)
     """
     store = get_alert_store()
-    
+
     start_time = None
     if hours:
         start_time = datetime.now() - timedelta(hours=hours)
-    
+
     alerts = await store.get_alerts(
         db,
         array_id=array_id,
@@ -56,18 +56,57 @@ async def list_alerts(
         offset=offset,
     )
 
-    # Populate array_name from DB
+    import json as _json
+    from ..models.array import ArrayModel
+    from ..core.baseline import _extract_metrics, check_baseline_status, get_baseline
+
+    # Build array_id -> name lookup
     if alerts:
-        from ..models.array import ArrayModel
         arr_ids = list({a.array_id for a in alerts})
         arr_result = await db.execute(
             select(ArrayModel.array_id, ArrayModel.name).where(ArrayModel.array_id.in_(arr_ids))
         )
         name_map = {row.array_id: row.name for row in arr_result.all()}
-        for a in alerts:
-            a.array_name = name_map.get(a.array_id, a.array_id)
+    else:
+        name_map = {}
 
-    return alerts
+    # F202: Batch-fetch baselines
+    baseline_cache = {}
+
+    result = []
+    for a in alerts:
+        item = {
+            "id": a.id,
+            "array_id": a.array_id,
+            "array_name": name_map.get(a.array_id, a.array_id),
+            "observer_name": a.observer_name,
+            "level": a.level,
+            "message": a.message[:200] if len(a.message) > 200 else a.message,
+            "timestamp": a.timestamp.isoformat(),
+            "created_at": a.created_at.isoformat() if a.created_at else None,
+            "is_acked": getattr(a, 'is_acked', False),
+            "is_expected": getattr(a, 'is_expected', 0),
+            "matched_rule_id": getattr(a, 'matched_rule_id', None),
+            "task_id": getattr(a, 'task_id', None),
+        }
+        if a.details:
+            try:
+                item["details"] = _json.loads(a.details) if isinstance(a.details, str) else a.details
+            except (ValueError, TypeError):
+                item["details"] = {}
+        else:
+            item["details"] = {}
+
+        # F202: Annotate with baseline status
+        bl_key = (a.array_id, a.observer_name)
+        if bl_key not in baseline_cache:
+            baseline_cache[bl_key] = await get_baseline(db, a.array_id, a.observer_name)
+        baselines = baseline_cache[bl_key]
+        metrics = _extract_metrics(a.observer_name, a.details)
+        item["baseline_status"] = check_baseline_status(metrics, baselines)
+
+        result.append(item)
+    return result
 
 
 @router.get("/stats", response_model=AlertStats)

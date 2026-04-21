@@ -291,6 +291,9 @@ async def lifespan(app: FastAPI):
     )
     logger.info("Baseline computation job registered (every 6h)")
 
+    # F202: Run baseline computation immediately on startup (don't wait 6h)
+    asyncio.create_task(compute_baselines())
+
     # Start alert sync (periodic SSH pull of alerts from connected arrays)
     start_alert_sync()
     

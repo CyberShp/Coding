@@ -179,9 +179,12 @@ def check_baseline_status(metrics: Dict[str, float], baselines: Dict[str, dict])
     """
     Compare alert metrics against baselines.
     Returns 'anomalous' if any metric exceeds baseline + 3σ, else 'normal'.
-    If no baseline data exists, returns 'no_baseline'.
+    If no baseline data exists or no metrics overlap with baselines, returns 'no_baseline'.
     """
     if not baselines:
+        return "no_baseline"
+
+    if not metrics or not (metrics.keys() & baselines.keys()):
         return "no_baseline"
 
     for key, val in metrics.items():
