@@ -211,16 +211,31 @@ def _build_episode_dag(
 
     active_obs: Set[str] = set(obs_alerts.keys())
 
-    # Build edge map from rules (only where both ends are active in this episode)
+    # Compute earliest timestamp per observer in this episode
+    obs_earliest: Dict[str, datetime] = {}
+    for obs, alerts_list in obs_alerts.items():
+        earliest = None
+        for a in alerts_list:
+            ts = _parse_alert_ts(a)
+            if ts and (earliest is None or ts < earliest):
+                earliest = ts
+        if earliest:
+            obs_earliest[obs] = earliest
+
+    # Build edge map from rules — only accept edge if the antecedent's
+    # earliest occurrence in THIS episode is before the consequent's earliest
     edges: Dict[str, Set[str]] = defaultdict(set)
     has_antecedent: Set[str] = set()
     rule_map: Dict[Tuple[str, str], object] = {}
 
     for r in rules:
         if r.antecedent in active_obs and r.consequent in active_obs:
-            edges[r.antecedent].add(r.consequent)
-            has_antecedent.add(r.consequent)
-            rule_map[(r.antecedent, r.consequent)] = r
+            ant_ts = obs_earliest.get(r.antecedent)
+            con_ts = obs_earliest.get(r.consequent)
+            if ant_ts and con_ts and ant_ts < con_ts:
+                edges[r.antecedent].add(r.consequent)
+                has_antecedent.add(r.consequent)
+                rule_map[(r.antecedent, r.consequent)] = r
 
     root_obs = active_obs - has_antecedent
 
