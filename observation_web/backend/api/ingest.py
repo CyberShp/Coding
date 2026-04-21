@@ -180,6 +180,7 @@ async def _handle_alert(payload: IngestPayload, source_ip: str, db: AsyncSession
             'level': alert_create.level.value,
             'message': alert_create.message,
             'timestamp': alert_create.timestamp.isoformat(),
+            'created_at': db_alert.created_at.isoformat() if db_alert.created_at else None,
             'source': 'push',
             'source_ip': source_ip,
         })

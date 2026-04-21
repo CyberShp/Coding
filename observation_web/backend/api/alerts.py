@@ -113,6 +113,7 @@ async def get_recent_alerts(
             "level": a.level,
             "message": a.message[:200] if len(a.message) > 200 else a.message,
             "timestamp": a.timestamp.isoformat(),
+            "created_at": a.created_at.isoformat() if a.created_at else None,
             "is_acked": getattr(a, 'is_acked', False),
         }
         # Include parsed details for frontend translator
@@ -161,6 +162,7 @@ async def get_aggregated_alerts(
             'level': a.level,
             'message': a.message,
             'timestamp': a.timestamp.isoformat() if a.timestamp else '',
+            'created_at': a.created_at.isoformat() if a.created_at else None,
             'is_acked': getattr(a, 'is_acked', False),
         }
         try:

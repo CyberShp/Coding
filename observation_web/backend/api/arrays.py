@@ -291,6 +291,7 @@ async def sync_array_alerts(
                         'level': db_alert.level,
                         'message': db_alert.message,
                         'timestamp': db_alert.timestamp.isoformat() if db_alert.timestamp else None,
+                        'created_at': db_alert.created_at.isoformat() if db_alert.created_at else None,
                     })
 
     await _update_sync_position(db, array_id, total_lines, last_pos)
@@ -2328,8 +2329,9 @@ async def refresh_array(
                             'level': db_alert.level,
                             'message': db_alert.message,
                             'timestamp': db_alert.timestamp.isoformat() if db_alert.timestamp else None,
+                            'created_at': db_alert.created_at.isoformat() if db_alert.created_at else None,
                         })
-                
+
                 # Update observer status from recent alerts
                 for alert in parsed_alerts[-50:]:
                     observer = alert.get('observer_name', '')

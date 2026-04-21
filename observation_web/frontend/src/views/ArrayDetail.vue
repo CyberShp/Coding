@@ -943,12 +943,34 @@ async function fetchAISummary() {
   }
 }
 
+// ───── Alert dedup keys (shared by WS watcher + loadRecentAlerts) ─────
+const seenAlertKeys = new Set()
+
+function _alertKey(a) {
+  return a.id || `${a.timestamp}_${a.observer_name}_${(a.message || '').slice(0, 50)}`
+}
+
 // ───── Data loading ─────
 async function loadRecentAlerts(signal = undefined) {
   if (!array.value?.array_id) return
   try {
     const res = await api.getAlerts({ array_id: array.value.array_id, limit: 20 }, { signal })
-    recentAlerts.value = res.data.items || res.data || []
+    const newAlerts = res.data.items || res.data || []
+    recentAlerts.value = newAlerts
+    // F205: push unseen alerts to stream (handles silent refresh / reconnect catch-up)
+    if (streamMode.value) {
+      const unseen = []
+      for (const alert of newAlerts) {
+        const key = _alertKey(alert)
+        if (!seenAlertKeys.has(key)) {
+          seenAlertKeys.add(key)
+          unseen.push(alert)
+        }
+      }
+      for (let i = unseen.length - 1; i >= 0; i--) {
+        _pushStreamAlert(unseen[i])
+      }
+    }
   } catch (error) {
     if (error?.name === 'CanceledError' || error?.code === 'ERR_CANCELED') return
     console.error('Failed to load alerts:', error)
@@ -1167,20 +1189,31 @@ async function silentRefresh() {
 }
 
 // ───── WebSocket watcher ─────
-const seenAlertKeys = new Set()
 watch(
   () => alertStore.recentAlerts,
   (newList) => {
-    const latest = newList[0]
-    if (!latest || !array.value?.array_id) return
-    if (latest.array_id !== array.value.array_id) return
-    const key = latest.id || `${latest.timestamp}_${latest.observer_name}_${(latest.message || '').slice(0, 50)}`
-    if (seenAlertKeys.has(key)) return
-    seenAlertKeys.add(key)
-    recentAlerts.value.unshift(latest)
-    if (recentAlerts.value.length > 20) recentAlerts.value.pop()
-    // F205: push to live stream if active
-    if (streamMode.value) _pushStreamAlert(latest)
+    if (!array.value?.array_id) return
+    const arrayId = array.value.array_id
+    // Consume ALL unseen alerts for this array (handles batch refill on reconnect)
+    const newItems = []
+    for (const alert of newList) {
+      if (alert.array_id !== arrayId) continue
+      const key = _alertKey(alert)
+      if (seenAlertKeys.has(key)) continue
+      seenAlertKeys.add(key)
+      newItems.push(alert)
+    }
+    if (newItems.length === 0) return
+    recentAlerts.value.unshift(...newItems)
+    if (recentAlerts.value.length > 50) {
+      recentAlerts.value = recentAlerts.value.slice(0, 50)
+    }
+    // F205: push to live stream (oldest first for chronological order)
+    if (streamMode.value) {
+      for (let i = newItems.length - 1; i >= 0; i--) {
+        _pushStreamAlert(newItems[i])
+      }
+    }
   },
   { deep: true }
 )
