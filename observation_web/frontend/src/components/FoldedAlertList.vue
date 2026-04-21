@@ -2,7 +2,7 @@
   <div class="folded-alerts" :class="{ compact }">
     <template v-for="(group, gIdx) in foldedAlerts" :key="gIdx">
       <!-- Single alert (no fold) -->
-      <div v-if="group.count === 1" class="fold-item" :class="{ 'is-acked': group.items[0].is_acked }" @click="handleRowClick(group.items[0])">
+      <div v-if="group.count === 1" class="fold-item" :class="{ 'is-acked': group.items[0].is_acked, 'is-baseline-normal': group.items[0].baseline_status === 'normal' }" @click="handleRowClick(group.items[0])">
         <div class="fold-row">
           <el-checkbox
             v-if="selectable"
@@ -18,6 +18,8 @@
           <span v-if="getLatencyMs(group.items[0]) >= 5000" class="latency-badge" :class="getLatencyClass(group.items[0])">
             {{ getLatencyMs(group.items[0]) >= 15000 ? '⚠' : '⏱' }} {{ formatLatency(group.items[0]) }}
           </span>
+          <el-tag v-if="group.items[0].baseline_status === 'normal'" type="info" size="small" effect="plain" class="baseline-tag">基线内</el-tag>
+          <el-tag v-else-if="group.items[0].baseline_status === 'anomalous'" type="danger" size="small" effect="plain" class="baseline-tag">超基线</el-tag>
           <el-dropdown v-if="group.items[0].is_acked" trigger="click" @command="(cmd) => handleAckedAction(group.items[0], cmd)">
             <el-tag type="success" size="small" effect="plain" class="ack-badge ack-action">已确认<el-icon class="el-icon--right"><ArrowDown /></el-icon></el-tag>
             <template #dropdown>
@@ -108,6 +110,8 @@
               <span v-if="getLatencyMs(item) >= 5000" class="latency-badge" :class="getLatencyClass(item)">
                 {{ getLatencyMs(item) >= 15000 ? '⚠' : '⏱' }} {{ formatLatency(item) }}
               </span>
+              <el-tag v-if="item.baseline_status === 'normal'" type="info" size="small" effect="plain" class="baseline-tag">基线内</el-tag>
+              <el-tag v-else-if="item.baseline_status === 'anomalous'" type="danger" size="small" effect="plain" class="baseline-tag">超基线</el-tag>
               <el-dropdown v-if="item.is_acked" trigger="click" @command="(cmd) => handleAckedAction(item, cmd)">
                 <el-tag type="success" size="small" effect="plain" class="ack-badge ack-action">已确认<el-icon class="el-icon--right"><ArrowDown /></el-icon></el-tag>
                 <template #dropdown>
@@ -520,5 +524,19 @@ function formatLatency(alert) {
 .latency-slow {
   background: #fff7e6;
   color: #d46b08;
+}
+
+/* F202: Baseline tag + dim */
+.baseline-tag {
+  flex-shrink: 0;
+  font-size: 10px;
+}
+
+.is-baseline-normal {
+  opacity: 0.55;
+}
+
+.is-baseline-normal:hover {
+  opacity: 0.85;
 }
 </style>

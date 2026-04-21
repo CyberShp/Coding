@@ -279,6 +279,18 @@ async def lifespan(app: FastAPI):
     logger.info("Idle connection cleaner started")
     logger.info("Health checker started")
 
+    # F202: Register baseline computation job (runs every 6 hours)
+    from .core.baseline import compute_baselines
+    from apscheduler.triggers.interval import IntervalTrigger
+    scheduler.scheduler.add_job(
+        compute_baselines,
+        trigger=IntervalTrigger(hours=6),
+        id="baseline_computation",
+        name="Adaptive Baseline Computation",
+        replace_existing=True,
+    )
+    logger.info("Baseline computation job registered (every 6h)")
+
     # Start alert sync (periodic SSH pull of alerts from connected arrays)
     start_alert_sync()
     

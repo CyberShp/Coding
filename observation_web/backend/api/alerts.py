@@ -103,6 +103,10 @@ async def get_recent_alerts(
     arr_result = await db.execute(select(ArrayModel.array_id, ArrayModel.name))
     name_map = {row.array_id: row.name for row in arr_result.all()}
     
+    # F202: Batch-fetch baselines for all (array_id, observer_name) pairs
+    from ..core.baseline import _extract_metrics, check_baseline_status, get_baseline
+    baseline_cache = {}  # (array_id, observer_name) -> baselines dict
+
     result = []
     for a in alerts:
         item = {
@@ -124,6 +128,15 @@ async def get_recent_alerts(
                 item["details"] = {}
         else:
             item["details"] = {}
+
+        # F202: Annotate with baseline status
+        bl_key = (a.array_id, a.observer_name)
+        if bl_key not in baseline_cache:
+            baseline_cache[bl_key] = await get_baseline(db, a.array_id, a.observer_name)
+        baselines = baseline_cache[bl_key]
+        metrics = _extract_metrics(a.observer_name, a.details)
+        item["baseline_status"] = check_baseline_status(metrics, baselines)
+
         result.append(item)
     return result
 
