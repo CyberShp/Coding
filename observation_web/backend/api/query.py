@@ -251,6 +251,9 @@ _NL_BLOCKED_COLUMNS = {
 # Statement-level forbidden keywords
 _NL_FORBIDDEN = {"insert", "update", "delete", "drop", "alter", "create", "replace", "attach", "detach", "pragma"}
 
+# Structural keywords that enable bypass via nested queries
+_NL_FORBIDDEN_STRUCTURAL = {"union", "intersect", "except"}
+
 # Max rows returned by any NL query
 _NL_MAX_ROWS = 200
 
@@ -316,6 +319,16 @@ def _validate_nl_sql(sql: str) -> Optional[str]:
     for word in _NL_FORBIDDEN:
         if re.search(rf'\b{word}\b', normalized):
             return f"禁止使用 {word.upper()} 语句"
+
+    # Block subqueries — only one SELECT allowed (no nested SELECT)
+    select_count = len(re.findall(r'\bselect\b', normalized))
+    if select_count > 1:
+        return "禁止使用子查询 — 只允许单层 SELECT"
+
+    # Block set operations (UNION/INTERSECT/EXCEPT)
+    for word in _NL_FORBIDDEN_STRUCTURAL:
+        if re.search(rf'\b{word}\b', normalized):
+            return f"禁止使用 {word.upper()} — 只允许单层 SELECT"
 
     # Block SELECT * and table.* — forces explicit column naming
     if re.search(r'\bselect\s+\*', normalized) or re.search(r'\w+\.\*', normalized):
