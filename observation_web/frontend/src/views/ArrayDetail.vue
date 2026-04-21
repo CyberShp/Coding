@@ -718,6 +718,10 @@ watch(streamMode, (active) => {
       .map(a => ({ ...a, _streamKey: `s${++_streamKeyCounter}` }))
     _streamItems.value = seeded
     _streamPending.value = []
+    // Register seed alerts so refresh/reconnect won't duplicate them
+    for (const a of recentAlerts.value) {
+      seenAlertKeys.add(_alertKey(a))
+    }
     nextTick(() => {
       streamBottomRef.value?.scrollIntoView({ behavior: 'instant' })
     })
