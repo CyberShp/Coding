@@ -3,6 +3,62 @@
     <el-row :gutter="20">
       <!-- Query Builder -->
       <el-col :span="14">
+        <!-- F201: Natural Language Query -->
+        <el-card class="nl-card">
+          <template #header>
+            <div class="card-header">
+              <span>自然语言查询</span>
+              <el-tag type="info" size="small" effect="plain">AI</el-tag>
+            </div>
+          </template>
+          <div class="nl-input-row">
+            <el-input
+              v-model="nlQuestion"
+              placeholder="用自然语言提问，如：最近三天哪些阵列有 rebuild 告警？"
+              @keyup.enter="executeNlQuery"
+              clearable
+            >
+              <template #prepend>提问</template>
+            </el-input>
+            <el-button type="primary" @click="executeNlQuery" :loading="nlLoading" :disabled="!nlQuestion.trim()">
+              查询
+            </el-button>
+          </div>
+          <div v-if="nlResult" class="nl-result">
+            <div class="nl-sql-row">
+              <el-tag size="small" effect="plain">SQL</el-tag>
+              <code class="nl-sql">{{ nlResult.sql }}</code>
+            </div>
+            <el-table :data="nlResult.data" stripe size="small" max-height="400" class="nl-table">
+              <el-table-column
+                v-for="col in nlResult.columns"
+                :key="col"
+                :prop="col"
+                :label="col"
+                show-overflow-tooltip
+                min-width="120"
+              />
+            </el-table>
+            <div class="nl-footer">
+              <span>{{ nlResult.row_count }} 条结果</span>
+            </div>
+          </div>
+          <div v-if="nlError" class="nl-error">
+            <el-alert :title="nlError" type="error" :closable="false" show-icon />
+          </div>
+          <div class="nl-examples">
+            <span class="nl-examples-label">示例：</span>
+            <el-tag
+              v-for="ex in nlExamples"
+              :key="ex"
+              size="small"
+              effect="plain"
+              class="nl-example-tag"
+              @click="nlQuestion = ex"
+            >{{ ex }}</el-tag>
+          </div>
+        </el-card>
+
         <el-card>
           <template #header>
             <div class="card-header">
@@ -255,6 +311,33 @@ import { useArrayStore } from '../stores/arrays'
 import api from '../api'
 
 const arrayStore = useArrayStore()
+
+// ───── F201: Natural Language Query ─────
+const nlQuestion = ref('')
+const nlLoading = ref(false)
+const nlResult = ref(null)
+const nlError = ref('')
+const nlExamples = [
+  '最近三天哪些阵列有 rebuild 告警？',
+  '上周 error 级别的告警有多少条？',
+  '哪个观察点产生的告警最多？',
+  'arr_001 最近 24 小时的告警趋势',
+]
+
+async function executeNlQuery() {
+  if (!nlQuestion.value.trim()) return
+  nlLoading.value = true
+  nlResult.value = null
+  nlError.value = ''
+  try {
+    const response = await api.post('/query/nl', { question: nlQuestion.value })
+    nlResult.value = response.data
+  } catch (error) {
+    nlError.value = error.response?.data?.detail || '查询失败'
+  } finally {
+    nlLoading.value = false
+  }
+}
 
 const executing = ref(false)
 const templates = ref([])
@@ -534,5 +617,62 @@ onMounted(async () => {
   margin-left: 12px;
   font-size: 12px;
   color: #67c23a;
+}
+
+/* F201: Natural Language Query */
+.nl-card {
+  margin-bottom: 20px;
+}
+.nl-input-row {
+  display: flex;
+  gap: 8px;
+}
+.nl-result {
+  margin-top: 16px;
+}
+.nl-sql-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding: 8px 12px;
+  background: var(--el-fill-color-lighter, #fafafa);
+  border-radius: 4px;
+}
+.nl-sql {
+  font-family: monospace;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  word-break: break-all;
+}
+.nl-table {
+  margin-bottom: 8px;
+}
+.nl-footer {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  text-align: right;
+  padding-top: 4px;
+}
+.nl-error {
+  margin-top: 12px;
+}
+.nl-examples {
+  margin-top: 12px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.nl-examples-label {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+.nl-example-tag {
+  cursor: pointer;
+}
+.nl-example-tag:hover {
+  color: var(--el-color-primary);
+  border-color: var(--el-color-primary);
 }
 </style>

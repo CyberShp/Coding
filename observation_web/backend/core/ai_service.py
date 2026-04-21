@@ -146,3 +146,103 @@ def is_ai_available() -> bool:
     """Check if AI service is configured and enabled."""
     config = get_config()
     return bool(config.ai.enabled and config.ai.api_url)
+
+
+# ── F201: Natural Language Query ──────────────────────────────
+
+NL_QUERY_SCHEMA = """
+可查询的表和列：
+
+alerts 表（告警记录）:
+  id INTEGER, array_id TEXT, observer_name TEXT, level TEXT,
+  message TEXT, details TEXT(JSON), timestamp DATETIME,
+  created_at DATETIME, is_expected INTEGER, task_id INTEGER
+
+arrays 表（存储阵列）:
+  array_id TEXT, name TEXT, host TEXT, port INTEGER,
+  enrollment_status TEXT, env_type TEXT, owner_team TEXT, site TEXT
+
+task_sessions 表（测试任务会话）:
+  id INTEGER, name TEXT, task_type TEXT, status TEXT,
+  started_at DATETIME, ended_at DATETIME, created_at DATETIME
+
+baseline_stats 表（自适应基线统计）:
+  id INTEGER, array_id TEXT, observer_name TEXT, metric_key TEXT,
+  median_value REAL, stddev_value REAL, sample_count INTEGER
+
+causal_rules 表（因果规则）:
+  id INTEGER, array_id TEXT, antecedent TEXT, consequent TEXT,
+  co_occurrence_count INTEGER, avg_lag_seconds REAL, confidence REAL
+
+常用 observer_name 值: error_code, link_status, alarm_type, cpu_usage,
+  memory_leak, card_info, disk_smart, port_fec, port_speed, port_traffic
+
+常用 level 值: info, warning, error, critical
+"""
+
+
+def _build_nl_query_prompt(question: str) -> str:
+    """Build prompt for NL→SQL translation."""
+    return f"""你是存储阵列测试监控平台的 SQL 助手。用户用自然语言提问，你需要生成一条 SQLite SELECT 查询。
+
+{NL_QUERY_SCHEMA}
+
+规则：
+1. 只生成 SELECT 语句，禁止 INSERT/UPDATE/DELETE/DROP/ALTER
+2. 必须使用上面列出的表和列，不要编造不存在的列
+3. 时间过滤用 datetime() 函数，如 WHERE timestamp >= datetime('now', '-3 days')
+4. 结果限制 LIMIT 100（除非用户明确要求更多）
+5. 中文时间表达转换：最近三天 = -3 days, 上周 = -7 days, 本月 = start of month
+6. 只返回 SQL 语句，不要解释，不要 markdown 代码块
+
+用户问题：{question}
+
+SQL："""
+
+
+async def nl_to_sql(question: str) -> Optional[str]:
+    """
+    F201: Translate natural language question to SQL query.
+    Returns the SQL string or None on failure.
+    """
+    config = get_config()
+    if not config.ai.enabled:
+        return None
+
+    prompt = _build_nl_query_prompt(question)
+
+    headers = {"Content-Type": "application/json"}
+    if config.ai.api_key:
+        headers["Authorization"] = f"Bearer {config.ai.api_key}"
+
+    body = {
+        "model": config.ai.model,
+        "messages": [{"role": "user", "content": prompt}],
+        "max_tokens": 500,
+        "temperature": 0.1,
+    }
+
+    try:
+        async with httpx.AsyncClient(
+            timeout=config.ai.timeout, **_get_httpx_client_kwargs()
+        ) as client:
+            resp = await client.post(config.ai.api_url, json=body, headers=headers)
+            resp.raise_for_status()
+            data = resp.json()
+
+        choices = data.get("choices", [])
+        if not choices:
+            return None
+
+        sql = choices[0].get("message", {}).get("content", "").strip()
+        # Strip markdown code blocks if LLM wraps them
+        if sql.startswith("```"):
+            lines = sql.split("\n")
+            sql = "\n".join(
+                l for l in lines if not l.startswith("```")
+            ).strip()
+
+        return sql if sql else None
+    except Exception as e:
+        logger.warning("NL→SQL translation failed: %s", e)
+        return None

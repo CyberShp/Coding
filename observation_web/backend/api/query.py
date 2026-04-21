@@ -233,3 +233,86 @@ async def delete_template(
     await db.commit()
     
     return {"status": "deleted"}
+
+
+# ── F201: Natural Language Query ─────────────────────────────
+
+# Allowed tables/columns for NL query (whitelist)
+_NL_ALLOWED_TABLES = {"alerts", "arrays", "task_sessions", "baseline_stats", "causal_rules"}
+
+# Words that must NOT appear in generated SQL
+_NL_FORBIDDEN = {"insert", "update", "delete", "drop", "alter", "create", "replace", "attach", "detach", "pragma"}
+
+
+def _validate_nl_sql(sql: str) -> Optional[str]:
+    """
+    Validate LLM-generated SQL. Returns error message or None if OK.
+    Only SELECT queries against whitelisted tables are allowed.
+    """
+    normalized = sql.strip().rstrip(";").lower()
+
+    # Must be a SELECT
+    if not normalized.startswith("select"):
+        return "只允许 SELECT 查询"
+
+    # Check for forbidden keywords
+    for word in _NL_FORBIDDEN:
+        # Match whole word boundaries
+        import re
+        if re.search(rf'\b{word}\b', normalized):
+            return f"禁止使用 {word.upper()} 语句"
+
+    # Ensure at least one allowed table is referenced
+    has_table = any(t in normalized for t in _NL_ALLOWED_TABLES)
+    if not has_table:
+        return "查询必须引用已知表"
+
+    return None
+
+
+@router.post("/nl")
+async def natural_language_query(
+    question: str = Body(..., embed=True, min_length=2, max_length=500),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    F201: Natural Language Query.
+    Translates a natural language question to SQL, executes it read-only,
+    and returns structured results.
+    """
+    from ..core.ai_service import nl_to_sql, is_ai_available
+    from sqlalchemy import text
+
+    if not is_ai_available():
+        raise HTTPException(status_code=503, detail="AI 服务未启用，无法使用自然语言查询")
+
+    # Step 1: Translate NL → SQL
+    sql = await nl_to_sql(question)
+    if not sql:
+        raise HTTPException(status_code=422, detail="无法理解该问题，请尝试更具体的表述")
+
+    # Step 2: Validate generated SQL
+    error = _validate_nl_sql(sql)
+    if error:
+        logger.warning("NL query validation failed: %s — SQL: %s", error, sql)
+        raise HTTPException(status_code=400, detail=f"生成的查询不安全: {error}")
+
+    # Step 3: Execute read-only
+    try:
+        result = await db.execute(text(sql))
+        rows = result.fetchall()
+        columns = list(result.keys()) if rows else []
+
+        # Convert to list of dicts
+        data = [dict(zip(columns, row)) for row in rows]
+
+        return {
+            "question": question,
+            "sql": sql,
+            "columns": columns,
+            "data": data,
+            "row_count": len(data),
+        }
+    except Exception as e:
+        logger.warning("NL query execution failed: %s — SQL: %s", e, sql)
+        raise HTTPException(status_code=400, detail=f"查询执行失败: {str(e)}")
