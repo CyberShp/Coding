@@ -23,7 +23,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _scheduler: Optional[AsyncIOScheduler] = None
-_sync_interval_seconds = 60
+_sync_interval_seconds = 20
 _max_concurrent = 5
 
 
@@ -46,8 +46,19 @@ async def _sync_one_array(array_id: str, semaphore: asyncio.Semaphore) -> Tuple[
                     try:
                         issues = await _derive_active_issues_from_db(db, array_id)
                         _array_status_cache[array_id].active_issues = issues
+                        # Broadcast so ArrayDetail pages pick up new issues without manual refresh
+                        from ..api.websocket import broadcast_status_update
+                        status_obj = _array_status_cache[array_id]
+                        await broadcast_status_update(array_id, {
+                            "array_id": array_id,
+                            "state": status_obj.state.value,
+                            "agent_running": status_obj.agent_running,
+                            "agent_deployed": status_obj.agent_deployed,
+                            "active_issues": issues,
+                            "event": "alert_sync",
+                        })
                     except Exception as e:
-                        logger.debug("Failed to refresh active issues for %s: %s", array_id, e)
+                        logger.warning("Failed to refresh active issues for %s: %s", array_id, e)
 
                 return (array_id, count)
         except Exception as e:

@@ -283,7 +283,10 @@ async def sync_array_alerts(
             if new_alerts:
                 new_alerts_count, created_db_alerts = await alert_store.create_alerts_batch(db, new_alerts)
                 await _auto_ack_new_alerts(db, array_id, created_db_alerts)
-                for db_alert in created_db_alerts[-10:]:
+                alerts_to_broadcast = created_db_alerts[-50:]
+                if len(created_db_alerts) > 50:
+                    logger.warning("Alert burst for %s: %d new alerts, broadcasting last 50", array_id, len(created_db_alerts))
+                for db_alert in alerts_to_broadcast:
                     await broadcast_alert({
                         'id': db_alert.id,
                         'array_id': db_alert.array_id,
@@ -2320,8 +2323,11 @@ async def refresh_array(
                     new_alerts_count, created_db_alerts = await alert_store.create_alerts_batch(db, new_alerts)
                     await _auto_ack_new_alerts(db, array_id, created_db_alerts)
                     sys_info("arrays", f"Synced {new_alerts_count} new alerts for {array_id}")
-                    
-                    for db_alert in created_db_alerts[-10:]:
+
+                    alerts_to_broadcast = created_db_alerts[-50:]
+                    if len(created_db_alerts) > 50:
+                        logger.warning("Alert burst for %s: %d new alerts, broadcasting last 50", array_id, len(created_db_alerts))
+                    for db_alert in alerts_to_broadcast:
                         await broadcast_alert({
                             'id': db_alert.id,
                             'array_id': db_alert.array_id,
@@ -2534,6 +2540,14 @@ async def deploy_agent(
     status_obj.agent_deployed = await _run_blocking(deployer.check_deployed, 10)
     status_obj.agent_running = await _run_blocking(deployer.check_running, 10)
     sys_info("arrays", f"Agent deployed for array {array_id}", {"array_id": array_id})
+    from .websocket import broadcast_status_update
+    await broadcast_status_update(array_id, {
+        "array_id": array_id,
+        "state": status_obj.state.value,
+        "agent_deployed": status_obj.agent_deployed,
+        "agent_running": status_obj.agent_running,
+        "event": "agent_deployed",
+    })
 
     return result
 
@@ -2575,6 +2589,14 @@ async def start_agent(
     status_obj.agent_running = await _run_blocking(deployer.check_running, 10)
     status_obj.agent_deployed = await _run_blocking(deployer.check_deployed, 10)
     sys_info("arrays", f"Agent started for array {array_id}", {"array_id": array_id})
+    from .websocket import broadcast_status_update
+    await broadcast_status_update(array_id, {
+        "array_id": array_id,
+        "state": status_obj.state.value,
+        "agent_deployed": status_obj.agent_deployed,
+        "agent_running": status_obj.agent_running,
+        "event": "agent_started",
+    })
 
     return result
 
@@ -2616,6 +2638,14 @@ async def stop_agent(
     status_obj.agent_running = await _run_blocking(deployer.check_running, 10)
     status_obj.agent_deployed = await _run_blocking(deployer.check_deployed, 10)
     sys_info("arrays", f"Agent stopped for array {array_id}", {"array_id": array_id})
+    from .websocket import broadcast_status_update
+    await broadcast_status_update(array_id, {
+        "array_id": array_id,
+        "state": status_obj.state.value,
+        "agent_deployed": status_obj.agent_deployed,
+        "agent_running": status_obj.agent_running,
+        "event": "agent_stopped",
+    })
 
     return result
 
@@ -2657,6 +2687,14 @@ async def restart_agent(
     status_obj.agent_running = await _run_blocking(deployer.check_running, 10)
     status_obj.agent_deployed = await _run_blocking(deployer.check_deployed, 10)
     sys_info("arrays", f"Agent restarted for array {array_id}", {"array_id": array_id})
+    from .websocket import broadcast_status_update
+    await broadcast_status_update(array_id, {
+        "array_id": array_id,
+        "state": status_obj.state.value,
+        "agent_deployed": status_obj.agent_deployed,
+        "agent_running": status_obj.agent_running,
+        "event": "agent_restarted",
+    })
 
     return result
 

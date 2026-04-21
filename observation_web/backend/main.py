@@ -51,6 +51,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Tracks the previous health state per array so we only broadcast on change
+_prev_health_state: dict = {}
+
 
 async def _idle_connection_cleaner():
     """Background task to clean up idle SSH connections and expired DB records."""
@@ -101,6 +104,7 @@ async def _health_checker():
     from .core.agent_deployer import AgentDeployer
     from .core.ssh_pool import tcp_probe
     from .api.arrays import _array_status_cache
+    from .api.websocket import broadcast_status_update
 
     check_count = 0
     while True:
@@ -112,6 +116,7 @@ async def _health_checker():
 
             for array_id, status_obj in list(_array_status_cache.items()):
                 try:
+                    prev = _prev_health_state.get(array_id, {})
                     conn = ssh_pool.get_connection(array_id)
                     if not conn:
                         continue
@@ -124,6 +129,16 @@ async def _health_checker():
                         conn._mark_disconnected()
                         status_obj.state = conn.state
                         logger.info("Health check: %s (%s) unreachable, marked disconnected", array_id, status_obj.host)
+                        curr = {"state": status_obj.state.value, "agent_running": status_obj.agent_running}
+                        if curr != prev:
+                            _prev_health_state[array_id] = curr
+                            await broadcast_status_update(array_id, {
+                                "array_id": array_id,
+                                "state": status_obj.state.value,
+                                "agent_running": status_obj.agent_running,
+                                "agent_deployed": status_obj.agent_deployed,
+                                "event": "health_check",
+                            })
                         continue
 
                     alive = await asyncio.wait_for(
@@ -132,6 +147,16 @@ async def _health_checker():
                     )
                     status_obj.state = conn.state
                     if not alive:
+                        curr = {"state": status_obj.state.value, "agent_running": status_obj.agent_running}
+                        if curr != prev:
+                            _prev_health_state[array_id] = curr
+                            await broadcast_status_update(array_id, {
+                                "array_id": array_id,
+                                "state": status_obj.state.value,
+                                "agent_running": status_obj.agent_running,
+                                "agent_deployed": status_obj.agent_deployed,
+                                "event": "health_check",
+                            })
                         continue
 
                     # Run heavier agent health checks every 10 cycles (~5 min)
@@ -177,6 +202,17 @@ async def _health_checker():
                                         f"Agent auto-redeployed on {array_id}",
                                         {"array_id": array_id, "host": status_obj.host},
                                     )
+
+                    curr = {"state": status_obj.state.value, "agent_running": status_obj.agent_running}
+                    if curr != prev:
+                        _prev_health_state[array_id] = curr
+                        await broadcast_status_update(array_id, {
+                            "array_id": array_id,
+                            "state": status_obj.state.value,
+                            "agent_running": status_obj.agent_running,
+                            "agent_deployed": status_obj.agent_deployed,
+                            "event": "health_check",
+                        })
                 except Exception as e:
                     logger.warning(f"Agent health check failed for {array_id}: {e}")
         except asyncio.CancelledError:
