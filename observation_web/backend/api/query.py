@@ -237,17 +237,46 @@ async def delete_template(
 
 # ── F201: Natural Language Query ─────────────────────────────
 
-# Allowed tables/columns for NL query (whitelist)
+import re
+
+# Strict table whitelist — only these tables may appear in FROM/JOIN
 _NL_ALLOWED_TABLES = {"alerts", "arrays", "task_sessions", "baseline_stats", "causal_rules"}
 
-# Words that must NOT appear in generated SQL
+# Column blacklist — sensitive columns that must never appear in SQL
+_NL_BLOCKED_COLUMNS = {
+    "saved_password", "key_path", "api_key", "password",
+    "token", "secret", "credential",
+}
+
+# Statement-level forbidden keywords
 _NL_FORBIDDEN = {"insert", "update", "delete", "drop", "alter", "create", "replace", "attach", "detach", "pragma"}
+
+# Max rows returned by any NL query
+_NL_MAX_ROWS = 200
+
+
+def _extract_table_refs(sql: str) -> set:
+    """
+    Extract table names from FROM and JOIN clauses.
+    Handles: FROM table, FROM table alias, JOIN table alias ON ...
+    """
+    normalized = re.sub(r'\s+', ' ', sql.strip().lower())
+    tables = set()
+    # Match FROM <table> and JOIN <table> (with optional alias)
+    for m in re.finditer(r'\b(?:from|join)\s+(\w+)', normalized):
+        tables.add(m.group(1))
+    return tables
 
 
 def _validate_nl_sql(sql: str) -> Optional[str]:
     """
     Validate LLM-generated SQL. Returns error message or None if OK.
-    Only SELECT queries against whitelisted tables are allowed.
+
+    Security layers:
+    1. Must be SELECT only
+    2. No forbidden keywords (INSERT/UPDATE/DELETE/DROP/etc)
+    3. All referenced tables must be in whitelist (parsed from FROM/JOIN)
+    4. No sensitive column names anywhere in query
     """
     normalized = sql.strip().rstrip(";").lower()
 
@@ -257,17 +286,39 @@ def _validate_nl_sql(sql: str) -> Optional[str]:
 
     # Check for forbidden keywords
     for word in _NL_FORBIDDEN:
-        # Match whole word boundaries
-        import re
         if re.search(rf'\b{word}\b', normalized):
             return f"禁止使用 {word.upper()} 语句"
 
-    # Ensure at least one allowed table is referenced
-    has_table = any(t in normalized for t in _NL_ALLOWED_TABLES)
-    if not has_table:
-        return "查询必须引用已知表"
+    # Extract and validate ALL table references
+    tables = _extract_table_refs(normalized)
+    if not tables:
+        return "无法识别查询的表"
+    disallowed = tables - _NL_ALLOWED_TABLES
+    if disallowed:
+        return f"禁止查询的表: {', '.join(sorted(disallowed))}"
+
+    # Block sensitive column references
+    for col in _NL_BLOCKED_COLUMNS:
+        if re.search(rf'\b{col}\b', normalized):
+            return f"禁止访问敏感字段: {col}"
 
     return None
+
+
+def _enforce_limit(sql: str) -> str:
+    """
+    Ensure SQL has a LIMIT clause. If missing, append one.
+    If present but > _NL_MAX_ROWS, cap it.
+    """
+    normalized = sql.strip().rstrip(";").lower()
+    limit_match = re.search(r'\blimit\s+(\d+)', normalized)
+    if not limit_match:
+        return sql.rstrip().rstrip(";") + f" LIMIT {_NL_MAX_ROWS}"
+    limit_val = int(limit_match.group(1))
+    if limit_val > _NL_MAX_ROWS:
+        # Replace the limit value
+        return sql[:limit_match.start(1)] + str(_NL_MAX_ROWS) + sql[limit_match.end(1):]
+    return sql
 
 
 @router.post("/nl")
@@ -297,7 +348,10 @@ async def natural_language_query(
         logger.warning("NL query validation failed: %s — SQL: %s", error, sql)
         raise HTTPException(status_code=400, detail=f"生成的查询不安全: {error}")
 
-    # Step 3: Execute read-only
+    # Step 3: Enforce LIMIT cap
+    sql = _enforce_limit(sql)
+
+    # Step 4: Execute read-only
     try:
         result = await db.execute(text(sql))
         rows = result.fetchall()
