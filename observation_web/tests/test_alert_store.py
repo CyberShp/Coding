@@ -30,12 +30,12 @@ class TestAlertStore:
             )
             for i in range(5)
         ]
-        count = await store.create_alerts_batch(db_session, alerts)
+        count, _ = await store.create_alerts_batch(db_session, alerts)
         assert count == 5
 
     async def test_create_alerts_batch_empty(self, db_session):
         store = AlertStore()
-        count = await store.create_alerts_batch(db_session, [])
+        count, _ = await store.create_alerts_batch(db_session, [])
         assert count == 0
 
     async def test_get_alerts_with_filters(self, db_session):

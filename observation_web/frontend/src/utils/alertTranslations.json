@@ -1,0 +1,116 @@
+{
+  "observerNames": {
+    "error_code": "误码监测",
+    "link_status": "链路状态",
+    "port_fec": "FEC 模式",
+    "port_speed": "端口速率",
+    "port_traffic": "端口流量",
+    "card_recovery": "卡修复",
+    "card_info": "卡件信息",
+    "pcie_bandwidth": "PCIe 带宽",
+    "alarm_type": "告警事件",
+    "memory_leak": "内存监测",
+    "cpu_usage": "CPU 监测",
+    "cmd_response": "命令响应",
+    "sig_monitor": "SIG 信号",
+    "sensitive_info": "敏感信息",
+    "controller_state": "控制器状态",
+    "disk_state": "磁盘状态",
+    "process_crash": "进程崩溃",
+    "io_timeout": "IO 超时"
+  },
+  "levelLabels": {
+    "info": "信息",
+    "warning": "警告",
+    "error": "错误",
+    "critical": "严重"
+  },
+  "levelTagTypes": {
+    "info": "info",
+    "warning": "warning",
+    "error": "danger",
+    "critical": "danger"
+  },
+  "observerStrings": {
+    "error_code": {
+      "impact": "端口传输质量下降，可能导致 IO 错误或性能波动",
+      "suggestion": "检查光模块、线缆质量和对端设备状态",
+      "fallbackEvent": "误码监测事件",
+      "fallbackImpact": "端口可能存在传输异常",
+      "fallbackSuggestion": "检查端口物理连接"
+    },
+    "link_status": {
+      "impact": "端口状态发生变化，业务可能短暂波动",
+      "suggestion": "观察业务是否恢复正常",
+      "impactDown": "端口业务中断，依赖该端口的 IO 将受到影响",
+      "suggestionDown": "检查线缆连接，确认是否为计划操作（拔线/下电测试）",
+      "fallbackImpact": "端口状态变化可能影响业务",
+      "fallbackSuggestion": "检查端口物理连接"
+    },
+    "memory_leak": {
+      "impact": "系统可用内存减少，可能导致 OOM 或进程被杀",
+      "suggestion": "检查是否有内存泄漏进程，使用 top/htop 排查"
+    },
+    "cpu_usage": {
+      "impact": "系统响应变慢，IO 延迟可能增大",
+      "suggestion": "使用 top 检查高占用进程，确认是否为测试预期",
+      "impactNormal": "系统运行正常",
+      "suggestionNormal": ""
+    },
+    "card_recovery": {
+      "impact": "卡件发生过错误并自动修复，频繁修复可能预示硬件问题",
+      "suggestion": "关注修复频率，若持续增长需排查硬件健康"
+    },
+    "port_fec": {
+      "impact": "FEC 模式变化可能影响纠错能力和传输可靠性",
+      "suggestion": "确认是否为配置变更或对端设备协商导致"
+    },
+    "port_speed": {
+      "impact": "端口速率发生变化",
+      "suggestion": "确认速率变化是否符合预期",
+      "impactDegrade": "端口降速，业务带宽减半或更低，IO 性能下降",
+      "suggestionDegrade": "检查线缆/光模块质量，或确认是否为对端协商降速"
+    },
+    "pcie_bandwidth": {
+      "impact": "PCIe 通道宽度或速率下降，设备 IO 性能受限",
+      "suggestion": "检查卡件是否插紧、slot 是否有硬件问题，或重启后观察"
+    },
+    "card_info": {
+      "impact": "卡件状态异常，可能导致关联端口和业务不可用",
+      "suggestion": "检查卡件是否被下电、是否需要更换"
+    },
+    "cmd_response": {
+      "impact": "阵列命令处理延迟增大，可能系统负载过高或服务异常",
+      "suggestion": "检查阵列系统负载和服务进程状态"
+    },
+    "sig_monitor": {
+      "impact": "进程收到非预期信号，可能发生异常退出或 coredump",
+      "suggestion": "检查 /var/log/messages 和 coredump 文件，确认进程状态"
+    },
+    "sensitive_info": {
+      "impact": "日志中包含密码、密钥等敏感内容，可能造成安全风险",
+      "suggestion": "检查日志来源，修复相关代码或配置的敏感信息输出"
+    },
+    "controller_state": {
+      "impact": "控制器状态变化可能导致存储服务中断或降级",
+      "suggestion": "检查控制器状态，确认是否为升级/下电测试的预期行为"
+    },
+    "disk_state": {
+      "impact": "磁盘状态变化可能导致数据冗余降低或 RAID 降级",
+      "suggestion": "检查磁盘健康，若为离线/故障状态需尽快更换"
+    },
+    "process_crash": {
+      "impact": "关键进程崩溃可能导致服务中断，需要立即关注",
+      "suggestion": "检查 coredump 文件和系统日志，必要时重启服务"
+    },
+    "io_timeout": {
+      "impact": "IO 超时意味着存储访问中断，业务可能挂起",
+      "suggestion": "检查磁盘、控制器状态和链路连通性"
+    },
+    "alarm_type": {
+      "impactActive": "活跃告警未恢复，可能影响业务",
+      "impactDefault": "请关注告警内容",
+      "suggestion": "检查阵列告警日志，确认是否需要人工介入处理"
+    }
+  }
+}

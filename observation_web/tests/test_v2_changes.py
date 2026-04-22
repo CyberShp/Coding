@@ -263,14 +263,15 @@ class TestActiveIssuesRecoveryTracking:
         from backend.api.arrays import _update_active_issues, _recovery_timestamps
 
         status_obj = self._make_status()
-        # First: card A is not running → active issue created
+        # First: card A is not running → active issue created.
+        # card_info handler expects nested "fields" list per card alert.
         alert1 = {
             "observer_name": "card_info",
             "level": "error",
             "message": "card fault",
             "timestamp": "2025-01-15T10:00:00",
             "details": {
-                "alerts": [{"card": "CardA", "field": "status", "value": "NOT_RUNNING"}]
+                "alerts": [{"card": "CardA", "fields": [{"field": "status", "value": "NOT_RUNNING"}]}]
             },
         }
         _update_active_issues(status_obj, alert1)
@@ -301,14 +302,14 @@ class TestActiveIssuesRecoveryTracking:
         # Seed recovery
         _recovery_timestamps.setdefault("arr-001", {})["card_info:CardA:status"] = "2025-01-15T11:00:00"
 
-        # Card A relapses
+        # Card A relapses — use nested "fields" list format matching current handler
         alert = {
             "observer_name": "card_info",
             "level": "error",
             "message": "card fault again",
             "timestamp": "2025-01-15T12:00:00",
             "details": {
-                "alerts": [{"card": "CardA", "field": "status", "value": "NOT_RUNNING"}]
+                "alerts": [{"card": "CardA", "fields": [{"field": "status", "value": "NOT_RUNNING"}]}]
             },
         }
         _update_active_issues(status_obj, alert)
@@ -397,6 +398,11 @@ class TestAgentDeployerStagingUpload:
         mock_conn.host = "10.0.0.1"
         mock_conn.execute.return_value = (0, "", "")
         mock_conn.upload_file.return_value = (True, "")
+        # Set upload_content to None so _upload_package falls through to upload_file
+        # branch (which doesn't open the local file). Without this, MagicMock
+        # auto-creates a callable upload_content that triggers open() on a
+        # non-existent file.
+        mock_conn.upload_content = None
         config = AppConfig()
         config.remote.upload_staging_path = "/home/permitdir"
         deployer = AgentDeployer(mock_conn, config)
@@ -421,11 +427,11 @@ class TestAgentDeployerStagingUpload:
         _, staging_path = upload_calls[0][0]
         assert "/home/permitdir/" in staging_path
 
-        # Verify cp command from staging to deploy dir
+        # Verify mv command from staging to deploy dir
         execute_calls = [c[0][0] for c in mock_conn.execute.call_args_list]
-        cp_commands = [c for c in execute_calls if c.startswith("cp ")]
-        assert len(cp_commands) >= 1
-        assert "/home/permitdir/" in cp_commands[0]
+        mv_commands = [c for c in execute_calls if c.startswith("mv ")]
+        assert len(mv_commands) >= 1
+        assert "/home/permitdir/" in mv_commands[0]
 
     @patch.object(AgentDeployer, "_build_package", return_value="/tmp/test.tar.gz")
     @patch("pathlib.Path.exists", return_value=False)

@@ -40,6 +40,15 @@ httpLong.interceptors.request.use(
 
 // Response interceptor with better error handling
 const handleError = (error) => {
+  if (error.response?.status === 401) {
+    // Token expired or invalid — clear it and redirect to admin login if we had a token
+    const hadToken = !!localStorage.getItem('admin_token')
+    localStorage.removeItem('admin_token')
+    if (hadToken && !window.location.pathname.startsWith('/admin/login')) {
+      window.location.replace('/admin/login')
+    }
+    return Promise.reject(error)
+  }
   if (error.code === 'ECONNABORTED') {
     console.error('API Timeout:', error.config?.url)
     error.message = '请求超时，请重试'

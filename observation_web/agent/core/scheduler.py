@@ -17,17 +17,22 @@ from .updater import AgentUpdater
 logger = logging.getLogger(__name__)
 
 
+_BACKOFF_MAX_MULTIPLIER = 8   # cap: 8× base interval
+_FAILURE_LOG_THRESHOLD = 3   # escalate to ERROR after this many consecutive failures
+
+
 class Scheduler:
     """
     轻量级调度器
-    
+
     单线程轮询模式，按各观察点配置的间隔执行检查。
+    失败的观察点会应用指数退避，连续失败超过阈值时升级日志级别。
     """
-    
+
     def __init__(self, config: Dict[str, Any], reporter: Reporter):
         """
         初始化调度器
-        
+
         Args:
             config: 全局配置
             reporter: 告警器
@@ -40,9 +45,27 @@ class Scheduler:
         self._updater = AgentUpdater(config)
         self._next_update_check = time.time() + 60
         self._update_interval_seconds = int((config.get('global', {}) or {}).get('update_check_interval_seconds', 1800))
-        
+        # Per-observer consecutive failure counts for backoff tracking
+        self._observer_failures: Dict[str, int] = {}
+
         # 从配置加载并注册观察点
         self._load_observers()
+
+    def _record_failure(self, name: str, exc: Exception) -> float:
+        """Record an observer failure, log it, and return the backoff multiplier."""
+        count = self._observer_failures.get(name, 0) + 1
+        self._observer_failures[name] = count
+        if count >= _FAILURE_LOG_THRESHOLD:
+            logger.error("[%s] 连续失败 %d 次: %s", name, count, exc)
+        else:
+            logger.warning("[%s] 执行失败: %s", name, exc)
+        return min(2 ** count, _BACKOFF_MAX_MULTIPLIER)
+
+    def _record_success(self, name: str) -> None:
+        """Reset failure counter; log recovery if it had escalated."""
+        prev = self._observer_failures.pop(name, 0)
+        if prev >= _FAILURE_LOG_THRESHOLD:
+            logger.info("[%s] 恢复正常运行（此前连续失败 %d 次）", name, prev)
     
     def _load_observers(self):
         """从配置加载观察点"""
@@ -177,13 +200,17 @@ class Scheduler:
                     self._start_work_ready = bool((result.details or {}).get('started', not result.has_alert))
                     if result.has_alert:
                         self.reporter.report(result)
+                    self._record_success(observer.name)
                 except Exception as e:
                     self._start_work_ready = False
-                    logger.error(f"[{observer.name}] 执行失败: {e}")
+                    backoff = self._record_failure(observer.name, e)
+                    next_run = now + observer.get_interval() * backoff
+                    self._observers[i] = (observer, next_run)
+                    break
                 next_run = now + observer.get_interval()
                 self._observers[i] = (observer, next_run)
                 break
-            
+
             for i, (observer, next_run) in enumerate(self._observers):
                 if not observer.is_enabled():
                     continue
@@ -191,7 +218,7 @@ class Scheduler:
                     if next_run < next_wakeup:
                         next_wakeup = next_run
                     continue
-                
+
                 if now >= next_run:
                     if not self._start_work_ready:
                         # Array is not started, skip other observers in this cycle.
@@ -201,24 +228,28 @@ class Scheduler:
                             next_wakeup = next_run
                         continue
                     # 执行检查
+                    failed = False
                     try:
-                        # Pass reporter to observers that support metrics recording
                         try:
                             result = observer.check(reporter=self.reporter)
                         except TypeError:
-                            # Fallback for observers that don't accept reporter
                             result = observer.check()
-                        
+
                         if result.has_alert:
                             self.reporter.report(result)
-                        
+                        self._record_success(observer.name)
+
                     except Exception as e:
-                        logger.error(f"[{observer.name}] 执行失败: {e}")
-                    
-                    # 更新下次执行时间
-                    next_run = now + observer.get_interval()
-                    self._observers[i] = (observer, next_run)
-                
+                        backoff = self._record_failure(observer.name, e)
+                        next_run = now + observer.get_interval() * backoff
+                        self._observers[i] = (observer, next_run)
+                        failed = True
+
+                    if not failed:
+                        # 更新下次执行时间
+                        next_run = now + observer.get_interval()
+                        self._observers[i] = (observer, next_run)
+
                 # 计算最近的下次唤醒时间
                 if next_run < next_wakeup:
                     next_wakeup = next_run

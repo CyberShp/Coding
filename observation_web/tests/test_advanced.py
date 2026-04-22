@@ -286,7 +286,7 @@ class TestPerformance:
             for i in range(500)
         ]
         start = time.time()
-        count = await store.create_alerts_batch(db_session, alerts)
+        count, _ = await store.create_alerts_batch(db_session, alerts)
         elapsed = time.time() - start
         assert count == 500
         # BUG-MARKER: If this takes > 10s, batch insert needs optimization

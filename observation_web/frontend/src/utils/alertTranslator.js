@@ -3,33 +3,22 @@
  *
  * 每条告警翻译为三段式结构：事件 → 影响 → 建议
  * 同时保留结构化解析结果和原始文本，供详情面板使用。
+ *
+ * 静态字符串（observerNames、levelLabels、impact/suggestion）
+ * 均从 alertTranslations.json 加载，便于非代码方式维护。
  */
+import TRANSLATIONS from './alertTranslations.json'
 
-// 观察点中文名称映射
-export const OBSERVER_NAMES = {
-  // 端口级
-  error_code: '误码监测',
-  link_status: '链路状态',
-  port_fec: 'FEC 模式',
-  port_speed: '端口速率',
-  port_traffic: '端口流量',
-  // 卡件级
-  card_recovery: '卡修复',
-  card_info: '卡件信息',
-  pcie_bandwidth: 'PCIe 带宽',
-  // 系统级
-  alarm_type: '告警事件',
-  memory_leak: '内存监测',
-  cpu_usage: 'CPU 监测',
-  cmd_response: '命令响应',
-  sig_monitor: 'SIG 信号',
-  sensitive_info: '敏感信息',
-  // 新增观察点
-  controller_state: '控制器状态',
-  disk_state: '磁盘状态',
-  process_crash: '进程崩溃',
-  io_timeout: 'IO 超时',
-}
+// 观察点中文名称映射（从 JSON 加载）
+export const OBSERVER_NAMES = TRANSLATIONS.observerNames
+
+// 告警级别中文映射（从 JSON 加载）
+export const LEVEL_LABELS = TRANSLATIONS.levelLabels
+
+export const LEVEL_TAG_TYPES = TRANSLATIONS.levelTagTypes
+
+// 快捷访问：每个观察点的 impact / suggestion 字符串
+const T = TRANSLATIONS.observerStrings
 
 // 观察点分组（端口级 / 卡件级 / 系统级）
 export const OBSERVER_GROUPS = {
@@ -190,8 +179,8 @@ function translateAlarmType(alert) {
   }
   if (!event) event = fallbackParseAlarmMessage(original)
 
-  impact = activeAlarms.length > 0 ? `${activeAlarms.length} 个活跃告警未恢复，可能影响业务` : '请关注告警内容'
-  suggestion = '检查阵列告警日志，确认是否需要人工介入处理'
+  impact = activeAlarms.length > 0 ? `${activeAlarms.length} ${T.alarm_type.impactActive}` : T.alarm_type.impactDefault
+  suggestion = T.alarm_type.suggestion
 
   const firstEvent = newSends[0] || newResumes[0] || newEvts[0] || null
   const parsed = firstEvent ? {
@@ -304,12 +293,12 @@ function translateErrorCode(alert) {
       items.push(`${port}: ${errStrs}`)
     }
     event = `检测到误码增长：${items.join('；')}`
-    impact = '端口传输质量下降，可能导致 IO 错误或性能波动'
-    suggestion = '检查光模块、线缆质量和对端设备状态'
+    impact = T.error_code.impact
+    suggestion = T.error_code.suggestion
   } else {
     event = alert.message || '误码监测事件'
-    impact = '端口可能存在传输异常'
-    suggestion = '检查端口物理连接'
+    impact = T.error_code.fallbackImpact
+    suggestion = T.error_code.fallbackSuggestion
   }
   return makeResult({ event, impact, suggestion, original: alert.message || '', log_path: details.log_path || '' })
 }
@@ -325,16 +314,16 @@ function translateLinkStatus(alert) {
     event = `链路状态变化：${msgs.join('；')}`
     const hasDown = changes.some(c => /down/i.test(c.change || ''))
     if (hasDown) {
-      impact = '端口业务中断，依赖该端口的 IO 将受到影响'
-      suggestion = '检查线缆连接，确认是否为计划操作（拔线/下电测试）'
+      impact = T.link_status.impactDown
+      suggestion = T.link_status.suggestionDown
     } else {
-      impact = '端口状态发生变化，业务可能短暂波动'
-      suggestion = '观察业务是否恢复正常'
+      impact = T.link_status.impact
+      suggestion = T.link_status.suggestion
     }
   } else {
     event = alert.message || '链路状态变化'
-    impact = '端口状态变化可能影响业务'
-    suggestion = '检查端口物理连接'
+    impact = T.link_status.fallbackImpact
+    suggestion = T.link_status.fallbackSuggestion
   }
   return makeResult({ event, impact, suggestion, original: alert.message || '', log_path: details.log_path || '' })
 }
@@ -362,8 +351,8 @@ function translateMemoryLeak(alert) {
 
   return makeResult({
     event,
-    impact: '系统可用内存减少，可能导致 OOM 或进程被杀',
-    suggestion: '检查是否有内存泄漏进程，使用 top/htop 排查',
+    impact: T.memory_leak.impact,
+    suggestion: T.memory_leak.suggestion,
     original: alert.message || '',
   })
 }
@@ -380,8 +369,8 @@ function translateCpuUsage(alert) {
   if (isNormal) {
     return makeResult({
       event: pct != null ? `CPU 使用率恢复正常：${pct}%` : 'CPU 使用率正常',
-      impact: '系统运行正常',
-      suggestion: '',
+      impact: T.cpu_usage.impactNormal,
+      suggestion: T.cpu_usage.suggestionNormal,
       original: alert.message || '',
     })
   }
@@ -392,8 +381,8 @@ function translateCpuUsage(alert) {
 
   return makeResult({
     event,
-    impact: '系统响应变慢，IO 延迟可能增大',
-    suggestion: '使用 top 检查高占用进程，确认是否为测试预期',
+    impact: T.cpu_usage.impact,
+    suggestion: T.cpu_usage.suggestion,
     original: alert.message || '',
   })
 }
@@ -410,8 +399,8 @@ function translateCardRecovery(alert) {
   }
   return makeResult({
     event: `卡修复事件：总计 ${total} 次，本次新增 ${newCount} 次${evtDesc ? '（' + evtDesc + '）' : ''}`,
-    impact: '卡件发生过错误并自动修复，频繁修复可能预示硬件问题',
-    suggestion: '关注修复频率，若持续增长需排查硬件健康',
+    impact: T.card_recovery.impact,
+    suggestion: T.card_recovery.suggestion,
     original: alert.message || '',
     log_path: details.log_path || '',
   })
@@ -425,8 +414,8 @@ function translatePortFec(alert) {
     const msgs = changes.slice(0, 3).map(c => `${c.port}: ${c.old_fec} → ${c.new_fec}`)
     return makeResult({
       event: `FEC 模式变化：${msgs.join('；')}`,
-      impact: 'FEC 模式变化可能影响纠错能力和传输可靠性',
-      suggestion: '确认是否为配置变更或对端设备协商导致',
+      impact: T.port_fec.impact,
+      suggestion: T.port_fec.suggestion,
       parsed: { changes },
       original: alert.message || '',
     })
@@ -447,8 +436,8 @@ function translatePortSpeed(alert) {
     })
     return makeResult({
       event: `端口速率变化：${msgs.join('；')}`,
-      impact: hasDegrade ? '端口降速，业务带宽减半或更低，IO 性能下降' : '端口速率发生变化',
-      suggestion: hasDegrade ? '检查线缆/光模块质量，或确认是否为对端协商降速' : '确认速率变化是否符合预期',
+      impact: hasDegrade ? T.port_speed.impactDegrade : T.port_speed.impact,
+      suggestion: hasDegrade ? T.port_speed.suggestionDegrade : T.port_speed.suggestion,
       parsed: { changes },
       original: alert.message || '',
     })
@@ -463,8 +452,8 @@ function translatePcieBandwidth(alert) {
   if (downgrades.length > 0) {
     return makeResult({
       event: `PCIe 带宽降级：${downgrades.slice(0, 2).join('；')}`,
-      impact: 'PCIe 通道宽度或速率下降，设备 IO 性能受限',
-      suggestion: '检查卡件是否插紧、slot 是否有硬件问题，或重启后观察',
+      impact: T.pcie_bandwidth.impact,
+      suggestion: T.pcie_bandwidth.suggestion,
       parsed: { downgrades },
       original: alert.message || '',
     })
@@ -485,8 +474,8 @@ function translateCardInfo(alert) {
     })
     return makeResult({
       event: `${total} 张卡检查，${alerts.length} 项异常：${msgs.join('；')}`,
-      impact: '卡件状态异常，可能导致关联端口和业务不可用',
-      suggestion: '检查卡件是否被下电、是否需要更换',
+      impact: T.card_info.impact,
+      suggestion: T.card_info.suggestion,
       parsed: { alerts, total_cards: total },
       original: alert.message || '',
     })
@@ -514,8 +503,8 @@ function translateCmdResponse(alert) {
   const details = alert.details || {}
   return makeResult({
     event: alert.message || '命令响应超时',
-    impact: '阵列命令处理延迟增大，可能系统负载过高或服务异常',
-    suggestion: '检查阵列系统负载和服务进程状态',
+    impact: T.cmd_response.impact,
+    suggestion: T.cmd_response.suggestion,
     original: alert.message || '',
   })
 }
@@ -530,8 +519,8 @@ function translateSigMonitor(alert) {
   }
   return makeResult({
     event: desc,
-    impact: '进程收到非预期信号，可能发生异常退出或 coredump',
-    suggestion: '检查 /var/log/messages 和 coredump 文件，确认进程状态',
+    impact: T.sig_monitor.impact,
+    suggestion: T.sig_monitor.suggestion,
     original: alert.message || '',
     log_path: details.log_path || '',
   })
@@ -541,8 +530,8 @@ function translateSigMonitor(alert) {
 function translateSensitiveInfo(alert) {
   return makeResult({
     event: alert.message || '检测到敏感信息泄露',
-    impact: '日志中包含密码、密钥等敏感内容，可能造成安全风险',
-    suggestion: '检查日志来源，修复相关代码或配置的敏感信息输出',
+    impact: T.sensitive_info.impact,
+    suggestion: T.sensitive_info.suggestion,
     original: alert.message || '',
     log_path: alert.details?.log_path || '',
   })
@@ -559,8 +548,8 @@ function translateControllerState(alert) {
   }
   return makeResult({
     event: desc,
-    impact: '控制器状态变化可能导致存储服务中断或降级',
-    suggestion: '检查控制器状态，确认是否为升级/下电测试的预期行为',
+    impact: T.controller_state.impact,
+    suggestion: T.controller_state.suggestion,
     original: alert.message || '',
   })
 }
@@ -574,8 +563,8 @@ function translateDiskState(alert) {
   }
   return makeResult({
     event: desc,
-    impact: '磁盘状态变化可能导致数据冗余降低或 RAID 降级',
-    suggestion: '检查磁盘健康，若为离线/故障状态需尽快更换',
+    impact: T.disk_state.impact,
+    suggestion: T.disk_state.suggestion,
     original: alert.message || '',
   })
 }
@@ -589,8 +578,8 @@ function translateProcessCrash(alert) {
   }
   return makeResult({
     event: desc,
-    impact: '关键进程崩溃可能导致服务中断，需要立即关注',
-    suggestion: '检查 coredump 文件和系统日志，必要时重启服务',
+    impact: T.process_crash.impact,
+    suggestion: T.process_crash.suggestion,
     original: alert.message || '',
     log_path: details.log_path || '',
   })
@@ -605,8 +594,8 @@ function translateIoTimeout(alert) {
   }
   return makeResult({
     event: desc,
-    impact: 'IO 超时意味着存储访问中断，业务可能挂起',
-    suggestion: '检查磁盘、控制器状态和链路连通性',
+    impact: T.io_timeout.impact,
+    suggestion: T.io_timeout.suggestion,
     original: alert.message || '',
     log_path: details.log_path || '',
   })

@@ -162,71 +162,33 @@ class TestFeature7Import:
 
 
 class TestFeature10CardInventory:
-    """Feature 10: Card inventory CRUD + fuzzy search."""
-
-    @pytest.mark.asyncio
-    async def test_create_card(self, app_client):
-        """Should create card entry."""
-        response = await app_client.post(
-            "/api/card-inventory",
-            json={
-                "name": "Card-A",
-                "device_type": "controller",
-                "model": "ModelX",
-                "description": "Test card",
-            },
-        )
-        assert response.status_code == 201
-        data = response.json()
-        assert data["name"] == "Card-A"
-        assert data["model"] == "ModelX"
+    """Feature 10: Card inventory — sync-based model (no manual CRUD endpoints)."""
 
     @pytest.mark.asyncio
     async def test_list_cards_empty(self, app_client):
-        """Should return empty list when no cards."""
+        """Should return empty list when no cards have been synced."""
         response = await app_client.get("/api/card-inventory")
         assert response.status_code == 200
         assert response.json() == []
 
     @pytest.mark.asyncio
-    async def test_search_multi_keyword_and(self, app_client):
-        """Multi-keyword search should AND match."""
-        await app_client.post(
-            "/api/card-inventory",
-            json={"name": "Card Alpha Beta", "device_type": "controller", "model": "M1", "description": ""},
-        )
-        await app_client.post(
-            "/api/card-inventory",
-            json={"name": "Card Gamma", "device_type": "controller", "model": "M2", "description": ""},
-        )
-        response = await app_client.get("/api/card-inventory?q=Card+Alpha")
+    async def test_list_cards_with_filter(self, app_client):
+        """GET /api/card-inventory accepts optional q, device_type, model params without error."""
+        response = await app_client.get("/api/card-inventory", params={"q": "controller"})
         assert response.status_code == 200
-        cards = response.json()
-        assert len(cards) >= 1
-        assert any("Alpha" in (c.get("name") or "") for c in cards)
+        assert isinstance(response.json(), list)
 
     @pytest.mark.asyncio
-    async def test_crud_card(self, app_client):
-        """Full CRUD cycle."""
-        create = await app_client.post(
-            "/api/card-inventory",
-            json={"name": "CRUD-Card", "device_type": "disk", "model": "X", "description": ""},
-        )
-        assert create.status_code == 201
-        cid = create.json()["id"]
+    async def test_last_sync_initial_state(self, app_client):
+        """GET /card-inventory/last-sync returns null timestamps when never synced."""
+        response = await app_client.get("/api/card-inventory/last-sync")
+        assert response.status_code == 200
+        data = response.json()
+        assert "last_sync" in data
 
-        get_resp = await app_client.get(f"/api/card-inventory/{cid}")
-        assert get_resp.status_code == 200
-
-        update = await app_client.put(
-            f"/api/card-inventory/{cid}",
-            json={"description": "Updated"},
-        )
-        assert update.status_code == 200
-        assert update.json()["description"] == "Updated"
-
-        delete = await app_client.delete(f"/api/card-inventory/{cid}")
-        assert delete.status_code == 204
-
-        get_after = await app_client.get(f"/api/card-inventory/{cid}")
-        assert get_after.status_code == 404
+    @pytest.mark.asyncio
+    async def test_sync_endpoint_requires_connected_array(self, app_client):
+        """POST /card-inventory/sync with no connected arrays returns gracefully."""
+        response = await app_client.post("/api/card-inventory/sync")
+        # 200 OK with empty or error result — sync runs but finds no connected arrays
+        assert response.status_code in (200, 400, 503)

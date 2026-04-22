@@ -27,247 +27,52 @@
     </div>
 
     <!-- Active Test Task Banner -->
-    <el-card v-if="activeTask" class="active-task-banner">
-      <div class="task-banner-content">
-        <el-tag type="success" effect="dark" size="small">进行中</el-tag>
-        <span class="task-name">{{ activeTask.name }}</span>
-        <el-tag size="small" effect="plain">{{ activeTask.task_type_label || activeTask.task_type }}</el-tag>
-        <span class="task-duration">已运行 {{ taskDuration }}</span>
-        <el-button size="small" type="warning" plain @click="$router.push('/test-tasks')">管理</el-button>
-      </div>
-    </el-card>
+    <ActiveTaskBanner :task="activeTask" :duration="taskDuration" />
 
-    <!-- ===================== Layer 1: Global Health Summary ===================== -->
-    <div class="layer layer-summary">
-      <div class="summary-cards">
-        <!-- Anomaly card: first position, 2x width -->
-        <div
-          v-if="activeAnomalyCount > 0"
-          class="summary-card summary-card-anomaly clickable"
-          @click="$router.push({ path: '/alerts', query: { level: 'error' } })"
-        >
-          <div class="summary-icon icon-danger">
-            <el-icon size="22"><Warning /></el-icon>
-          </div>
-          <div class="summary-body">
-            <template v-if="!initialLoaded">
-              <div class="skeleton-value" />
-            </template>
-            <template v-else>
-              <div class="summary-value">{{ activeAnomalyCount }}</div>
-            </template>
-            <div class="summary-label">活跃异常数</div>
-          </div>
-        </div>
-        <!-- Green banner when no anomalies -->
-        <div v-else class="summary-card summary-card-healthy">
-          <div class="summary-icon icon-success">
-            <el-icon size="22"><Monitor /></el-icon>
-          </div>
-          <div class="summary-body">
-            <div class="summary-value healthy-text">系统运行平稳</div>
-            <div class="summary-label">活跃异常数: 0</div>
-          </div>
-        </div>
-
-        <!-- Needs manual: second position -->
-        <div class="summary-card clickable" @click="$router.push('/alerts')">
-          <div class="summary-icon icon-warning">
-            <el-icon size="22"><Bell /></el-icon>
-          </div>
-          <div class="summary-body">
-            <template v-if="!initialLoaded">
-              <div class="skeleton-value" />
-            </template>
-            <template v-else>
-              <div class="summary-value">{{ needsManualCount }}</div>
-            </template>
-            <div class="summary-label">需要人工处理</div>
-          </div>
-        </div>
-
-        <div class="summary-card clickable" @click="$router.push('/arrays')">
-          <div class="summary-icon icon-success">
-            <el-icon size="22"><Monitor /></el-icon>
-          </div>
-          <div class="summary-body">
-            <template v-if="!initialLoaded">
-              <div class="skeleton-value" />
-            </template>
-            <template v-else>
-              <div class="summary-value">{{ onlineAgentCount }}</div>
-            </template>
-            <div class="summary-label">在线 Agent 数</div>
-          </div>
-        </div>
-
-        <div class="summary-card">
-          <div class="summary-icon icon-info">
-            <el-icon size="22"><Clock /></el-icon>
-          </div>
-          <div class="summary-body">
-            <template v-if="!initialLoaded">
-              <div class="skeleton-value" />
-            </template>
-            <template v-else>
-              <div class="freshness-row">
-                <span class="freshness-dot dot-fresh" />
-                <span class="freshness-num">{{ freshness.fresh }}</span>
-                <span class="freshness-dot dot-stale" />
-                <span class="freshness-num">{{ freshness.stale }}</span>
-                <span class="freshness-dot dot-unknown" />
-                <span class="freshness-num">{{ freshness.unknown }}</span>
-              </div>
-            </template>
-            <div class="summary-label">数据新鲜度</div>
-          </div>
-        </div>
-
-        <!-- Total arrays: demoted to last, smaller -->
-        <div class="summary-card summary-card-demoted clickable" @click="$router.push('/arrays')">
-          <div class="summary-icon icon-primary summary-icon-sm">
-            <el-icon size="18"><Cpu /></el-icon>
-          </div>
-          <div class="summary-body">
-            <template v-if="!initialLoaded">
-              <div class="skeleton-value" />
-            </template>
-            <template v-else>
-              <div class="summary-value summary-value-sm">{{ filteredTotalCount }}</div>
-            </template>
-            <div class="summary-label">纳管阵列总数</div>
-          </div>
-        </div>
-      </div>
+    <!-- Layer 1: Global Health Summary -->
+    <div class="layer">
+      <DashboardSummary
+        :initial-loaded="initialLoaded"
+        :freshness="freshness"
+        :active-anomaly-count="activeAnomalyCount"
+        :needs-manual-count="needsManualCount"
+        :online-agent-count="onlineAgentCount"
+        :filtered-total-count="filteredTotalCount"
+      />
     </div>
 
-    <!-- ===================== Layer 2: Problem Focus ===================== -->
-    <div class="layer layer-focus">
-      <div class="focus-cards">
-        <div
-          class="focus-card focus-anomaly"
-          :class="{ 'has-items': realAnomalyPending > 0, 'focus-pulse': realAnomalyPending > 0 }"
-          @click="$router.push({ path: '/alerts', query: { level: 'error' } })"
-        >
-          <div class="focus-count">{{ realAnomalyPending }}</div>
-          <div class="focus-label">真异常待处理</div>
-        </div>
-        <div
-          class="focus-card focus-expected"
-          :class="{ 'has-items': !!activeTask }"
-          @click="$router.push('/test-tasks')"
-        >
-          <div class="focus-count">{{ activeTask ? 1 : 0 }}</div>
-          <div class="focus-label">当前测试预期</div>
-        </div>
-        <div
-          class="focus-card focus-collection"
-          :class="{ 'has-items': collectionFailureCount > 0 }"
-          @click="$router.push('/arrays')"
-        >
-          <div class="focus-count">{{ collectionFailureCount }}</div>
-          <div class="focus-label">采集失败</div>
-        </div>
-        <div
-          class="focus-card focus-recovered"
-          :class="{ 'has-items': recentRecoveryCount > 0 }"
-        >
-          <div class="focus-count">{{ recentRecoveryCount }}</div>
-          <div class="focus-label">最近恢复</div>
-        </div>
-      </div>
+    <!-- Layer 2: Problem Focus -->
+    <div class="layer">
+      <DashboardFocusCards
+        :real-anomaly-pending="realAnomalyPending"
+        :active-task="activeTask"
+        :collection-failure-count="collectionFailureCount"
+        :recent-recovery-count="recentRecoveryCount"
+      />
     </div>
 
-    <!-- ===================== Layer 3: Status Heatmap + Alert Stream ===================== -->
-    <el-row :gutter="20" class="layer layer-grid">
-      <el-col :span="16">
-        <el-card class="content-card">
-          <template #header>
-            <div class="card-header">
-              <span>阵列状态热力图</span>
-              <el-button text size="small" @click="loadArrays">
-                <el-icon><Refresh /></el-icon>
-              </el-button>
-            </div>
-          </template>
-
-          <!-- Skeleton loading -->
-          <div v-if="!initialLoaded" class="heatmap-grid">
-            <div v-for="n in 12" :key="n" class="heatmap-dot heatmap-dot-skeleton" />
-          </div>
-
-          <!-- Status Heatmap Dot Grid -->
-          <div v-else-if="filteredArrays.length > 0" class="heatmap-grid">
-            <el-tooltip
-              v-for="arr in filteredArrays"
-              :key="arr.array_id"
-              :content="getHeatmapTooltip(arr)"
-              placement="top"
-              :show-after="200"
-            >
-              <div
-                class="heatmap-dot"
-                :class="getHeatmapDotClass(arr)"
-                @click="$router.push(`/arrays/${arr.array_id}`)"
-              />
-            </el-tooltip>
-          </div>
-
-          <el-empty v-else-if="preferencesStore.personalViewActive" description="未配置关注的阵列或标签">
-            <el-button type="primary" @click="$router.push('/settings')">配置个人视图</el-button>
-          </el-empty>
-          <el-empty v-else description="暂无阵列">
-            <el-button type="primary" @click="$router.push('/arrays')">添加阵列</el-button>
-          </el-empty>
-        </el-card>
-      </el-col>
-
-      <!-- Alert Stream -->
-      <el-col :span="8">
-        <el-card class="content-card alerts-card">
-          <template #header>
-            <div class="card-header">
-              <span>实时告警流</span>
-              <el-badge
-                :value="alertStore.wsConnected ? 'LIVE' : 'OFFLINE'"
-                :type="alertStore.wsConnected ? 'success' : 'danger'"
-                class="ws-badge"
-              />
-            </div>
-          </template>
-          <div class="alerts-list">
-            <FoldedAlertList
-              :alerts="filteredAlerts"
-              :show-array-id="true"
-              :compact="true"
-              @select="openAlertDrawer"
-              @ack="handleAck"
-              @undo-ack="handleUndoAck"
-              @modify-ack="handleModifyAck"
-            />
-          </div>
-        </el-card>
-      </el-col>
+    <!-- Layer 3: Status Heatmap + Alert Stream -->
+    <el-row :gutter="20" class="layer">
+      <DashboardHeatmap
+        :initial-loaded="initialLoaded"
+        :filtered-arrays="filteredArrays"
+        :filtered-alerts="filteredAlerts"
+        :ws-connected="alertStore.wsConnected"
+        :personal-view-active="preferencesStore.personalViewActive"
+        @refresh="loadArrays"
+        @select="openAlertDrawer"
+        @ack="handleAck"
+        @undo-ack="handleUndoAck"
+        @modify-ack="handleModifyAck"
+      />
     </el-row>
 
-    <!-- ===================== Layer 4: Trend Area ===================== -->
-    <el-row :gutter="20" class="layer layer-trends">
-      <el-col :span="16">
-        <el-card class="content-card chart-card">
-          <template #header>
-            <span>24h 异常趋势</span>
-          </template>
-          <v-chart :option="trendChartOption" autoresize style="height: 260px" />
-        </el-card>
-      </el-col>
-      <el-col :span="8">
-        <el-card class="content-card chart-card">
-          <template #header>
-            <span>阵列健康分布</span>
-          </template>
-          <v-chart :option="healthPieOption" autoresize style="height: 260px" />
-        </el-card>
-      </el-col>
+    <!-- Layer 4: Trend Area -->
+    <el-row :gutter="20" class="layer">
+      <DashboardCharts
+        :trend-chart-option="trendChartOption"
+        :health-pie-option="healthPieOption"
+      />
     </el-row>
 
     <!-- Alert Detail Drawer -->
@@ -277,27 +82,19 @@
 
 <script setup>
 import { ref, computed, onMounted, onUnmounted } from 'vue'
-import { use } from 'echarts/core'
-import { CanvasRenderer } from 'echarts/renderers'
-import { LineChart, PieChart } from 'echarts/charts'
-import {
-  GridComponent,
-  TooltipComponent,
-  LegendComponent,
-  TitleComponent,
-} from 'echarts/components'
-import VChart from 'vue-echarts'
 import { ElMessage } from 'element-plus'
-import { Cpu, Bell, Warning, Refresh, Monitor, Clock } from '@element-plus/icons-vue'
+import { Refresh } from '@element-plus/icons-vue'
 import { useArrayStore } from '../stores/arrays'
 import { useAlertStore } from '../stores/alerts'
 import { usePreferencesStore } from '../stores/preferences'
 import api from '../api'
 import AlertDetailDrawer from '@/components/AlertDetailDrawer.vue'
-import FoldedAlertList from '@/components/FoldedAlertList.vue'
-import { translateAlert, getObserverName, LEVEL_LABELS, LEVEL_TAG_TYPES } from '@/utils/alertTranslator'
-
-use([CanvasRenderer, LineChart, PieChart, GridComponent, TooltipComponent, LegendComponent, TitleComponent])
+import ActiveTaskBanner from '@/components/ActiveTaskBanner.vue'
+import DashboardSummary from '@/components/DashboardSummary.vue'
+import DashboardFocusCards from '@/components/DashboardFocusCards.vue'
+import DashboardHeatmap from '@/components/DashboardHeatmap.vue'
+import DashboardCharts from '@/components/DashboardCharts.vue'
+import { getArrayFreshness, getArrayStatusClass } from '@/utils/arrayStatus'
 
 const arrayStore = useArrayStore()
 const alertStore = useAlertStore()
@@ -316,9 +113,7 @@ const dashboardL1Filter = ref(null)
 let refreshTimer = null
 let pageAbortController = null
 
-// Freshness thresholds (minutes)
-const FRESH_THRESHOLD_MIN = 5
-const STALE_THRESHOLD_MIN = 30
+const RECENT_ALERTS_CUTOFF_MS = 2 * 60 * 60 * 1000
 
 // Allowed array IDs (personal view)
 const allowedArrayIds = computed(() => {
@@ -361,9 +156,6 @@ const filteredArrays = computed(() => {
   return result
 })
 
-// Alert filters
-const RECENT_ALERTS_CUTOFF_MS = 2 * 60 * 60 * 1000
-
 const filteredAlerts = computed(() => {
   const cutoff = Date.now() - RECENT_ALERTS_CUTOFF_MS
   const within2h = alertStore.recentAlerts.filter(
@@ -375,35 +167,12 @@ const filteredAlerts = computed(() => {
   return within2h.filter(a => allowed.has(a.array_id))
 })
 
-const filteredAlertTotal = computed(() => {
-  if (!preferencesStore.personalViewActive) return summary.value.total || summary.value.total_24h || 0
-  return filteredAlerts.value.length
-})
-
-const filteredAlertErrorCount = computed(() => {
-  if (!preferencesStore.personalViewActive) return summary.value.error_count || 0
-  return filteredAlerts.value.filter(a => a.level === 'error' || a.level === 'critical').length
-})
-
 // Layer 1 computed stats
 const filteredTotalCount = computed(() => filteredArrays.value.length)
 
 const onlineAgentCount = computed(() =>
   filteredArrays.value.filter(a => a.agent_healthy).length,
 )
-
-const filteredConnectedCount = computed(() =>
-  filteredArrays.value.filter(a => a.state === 'connected').length,
-)
-
-function getArrayFreshness(arr) {
-  const ts = arr.last_heartbeat_at || arr.last_refresh
-  if (!ts) return 'unknown'
-  const age = (Date.now() - new Date(ts).getTime()) / 60000
-  if (age <= FRESH_THRESHOLD_MIN) return 'fresh'
-  if (age <= STALE_THRESHOLD_MIN) return 'stale'
-  return 'unknown'
-}
 
 const freshness = computed(() => {
   const counts = { fresh: 0, stale: 0, unknown: 0 }
@@ -438,111 +207,9 @@ const recentRecoveryCount = computed(() => {
     const ts = new Date(a.timestamp).getTime()
     if (ts < cutoff) return false
     const msg = (a.message || '').toLowerCase()
-    return msg.includes('recover') || msg.includes('resume') || msg.includes('\u6062\u590d')
+    return msg.includes('recover') || msg.includes('resume') || msg.includes('恢复')
   }).length
 })
-
-// Layer 3 helpers
-function getActiveIssueCount(arr) {
-  return (arr.active_issues || []).length
-}
-
-function getStatusDotClass(arr) {
-  if (arr.state !== 'connected') return 'dot-offline'
-  const issues = arr.active_issues || []
-  if (issues.length > 0) {
-    return issues.some(i => i.level === 'error' || i.level === 'critical')
-      ? 'dot-error' : 'dot-warning'
-  }
-  const s = arr.recent_alert_summary || {}
-  if ((s.error || 0) + (s.critical || 0) > 0) return 'dot-warning'
-  return 'dot-ok'
-}
-
-function getHeatmapDotClass(arr) {
-  if (arr.state !== 'connected') return 'heatmap-offline'
-  const issues = arr.active_issues || []
-  if (issues.length > 0) {
-    return issues.some(i => i.level === 'error' || i.level === 'critical')
-      ? 'heatmap-error' : 'heatmap-warning'
-  }
-  const s = arr.recent_alert_summary || {}
-  if ((s.error || 0) + (s.critical || 0) > 0) return 'heatmap-warning'
-  return 'heatmap-healthy'
-}
-
-function getHeatmapTooltip(arr) {
-  const name = arr.display_name || arr.name || '未命名'
-  const ip = arr.host || '-'
-  const issues = arr.active_issues || []
-  const lastIssue = issues.length > 0 ? issues[0].message || issues[0].type || '有异常' : '无异常'
-  return `${name} | ${ip} | ${lastIssue}`
-}
-
-function getFreshnessClass(arr) {
-  return 'freshness-' + getArrayFreshness(arr)
-}
-
-function getFreshnessLabel(arr) {
-  const f = getArrayFreshness(arr)
-  if (f === 'fresh') return '\u5b9e\u65f6'
-  if (f === 'stale') return '\u5ef6\u8fdf'
-  return '\u672a\u77e5'
-}
-
-function formatRelativeTime(timestamp) {
-  if (!timestamp) return ''
-  const sec = (Date.now() - new Date(timestamp).getTime()) / 1000
-  if (sec < 0) return '\u521a\u521a'
-  if (sec < 60) return `${Math.round(sec)}s \u524d`
-  if (sec < 3600) return `${Math.floor(sec / 60)}m \u524d`
-  if (sec < 86400) return `${Math.floor(sec / 3600)}h \u524d`
-  return `${Math.floor(sec / 86400)}d \u524d`
-}
-
-// Existing status helpers (kept for compatibility)
-function getArrayStatusClass(arr) {
-  if (arr.state !== 'connected') return 'status-offline'
-  const issues = arr.active_issues || []
-  if (issues.length > 0) {
-    const hasError = issues.some(i => i.level === 'error' || i.level === 'critical')
-    if (hasError) return 'status-error'
-    return 'status-warning'
-  }
-  const s = arr.recent_alert_summary || {}
-  const recentErrors = (s.error || 0) + (s.critical || 0)
-  if (recentErrors > 0) return 'status-attention'
-  const recentWarnings = s.warning || 0
-  if (recentWarnings > 0) return 'status-warning'
-  return 'status-ok'
-}
-
-function getStateTagType(state) {
-  return state === 'connected' ? 'success' : 'info'
-}
-
-function getLevelType(level) {
-  return LEVEL_TAG_TYPES[level] || 'info'
-}
-
-function getLevelText(level) {
-  return LEVEL_LABELS[level] || level
-}
-
-function getObserverLabel(name) {
-  return getObserverName(name)
-}
-
-function getAlertSummary(alert) {
-  const result = translateAlert(alert)
-  return result.summary || alert.message
-}
-
-function formatTime(timestamp) {
-  if (!timestamp) return ''
-  const date = new Date(timestamp)
-  return date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
-}
 
 // Layer 4: chart options
 const trendChartOption = computed(() => ({
@@ -561,7 +228,7 @@ const trendChartOption = computed(() => ({
     splitLine: { lineStyle: { color: '#d9d9d9' } },
   },
   series: [{
-    name: '\u5f02\u5e38\u6570',
+    name: '异常数',
     type: 'line',
     smooth: true,
     symbol: 'circle',
@@ -600,10 +267,10 @@ const healthPieOption = computed(() => {
       label: { show: false },
       emphasis: { label: { show: true, fontSize: 13, fontWeight: 'bold' } },
       data: [
-        { value: ok, name: '\u5065\u5eb7', itemStyle: { color: '#52c41a' } },
-        { value: warn, name: '\u544a\u8b66', itemStyle: { color: '#faad14' } },
-        { value: err, name: '\u5f02\u5e38', itemStyle: { color: '#ff4d4f' } },
-        { value: offline, name: '\u79bb\u7ebf', itemStyle: { color: '#8c8c8c' } },
+        { value: ok, name: '健康', itemStyle: { color: '#52c41a' } },
+        { value: warn, name: '告警', itemStyle: { color: '#faad14' } },
+        { value: err, name: '异常', itemStyle: { color: '#ff4d4f' } },
+        { value: offline, name: '离线', itemStyle: { color: '#8c8c8c' } },
       ].filter(d => d.value > 0),
     }],
   }
@@ -618,33 +285,33 @@ function openAlertDrawer(alert) {
 async function handleAck({ alertIds, ackType = 'dismiss' }) {
   try {
     await api.ackAlerts(alertIds, '', { ack_type: ackType })
-    ElMessage.success('\u5df2\u786e\u8ba4')
+    ElMessage.success('已确认')
     alertStore.recentAlerts.forEach(a => {
       if (alertIds.includes(a.id)) a.is_acked = true
     })
   } catch (e) {
-    ElMessage.error('\u786e\u8ba4\u5931\u8d25: ' + (e.response?.data?.detail || e.message))
+    ElMessage.error('确认失败: ' + (e.response?.data?.detail || e.message))
   }
 }
 
 async function handleUndoAck({ alertIds }) {
   try {
     await api.batchUndoAck(alertIds)
-    ElMessage.success('\u5df2\u64a4\u9500\u786e\u8ba4')
+    ElMessage.success('已撤销确认')
     alertStore.recentAlerts.forEach(a => {
       if (alertIds.includes(a.id)) a.is_acked = false
     })
   } catch (e) {
-    ElMessage.error('\u64a4\u9500\u5931\u8d25: ' + (e.response?.data?.detail || e.message))
+    ElMessage.error('撤销失败: ' + (e.response?.data?.detail || e.message))
   }
 }
 
 async function handleModifyAck({ alertIds, ackType }) {
   try {
     await api.batchModifyAck(alertIds, ackType)
-    ElMessage.success('\u5df2\u66f4\u6539\u786e\u8ba4\u7c7b\u578b')
+    ElMessage.success('已更改确认类型')
   } catch (e) {
-    ElMessage.error('\u66f4\u6539\u5931\u8d25: ' + (e.response?.data?.detail || e.message))
+    ElMessage.error('更改失败: ' + (e.response?.data?.detail || e.message))
   }
 }
 
@@ -743,7 +410,6 @@ async function manualRefresh() {
 onMounted(() => {
   loadData()
   refreshTimer = setInterval(silentRefresh, 30000)
-  // Connect status WebSocket for real-time updates
   arrayStore.connectStatusWebSocket()
 })
 
@@ -761,7 +427,6 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
-/* Base */
 .dashboard {
   padding: 20px 24px;
   max-width: 1600px;
@@ -790,346 +455,5 @@ onUnmounted(() => {
 
 .layer {
   margin-bottom: 20px;
-}
-
-/* Active task banner */
-.active-task-banner {
-  margin-bottom: 16px;
-  border-left: 3px solid #67c23a;
-}
-
-.task-banner-content {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.task-name {
-  font-weight: 600;
-  font-size: 15px;
-}
-
-.task-duration {
-  color: var(--el-text-color-secondary);
-  font-size: 13px;
-  margin-left: auto;
-}
-
-/* Layer 1: Summary cards */
-.summary-cards {
-  display: grid;
-  grid-template-columns: 2fr 1fr 1fr 1fr 0.8fr;
-  gap: 16px;
-}
-
-.summary-card {
-  background: #fff;
-  border: 1px solid #ebeef5;
-  border-radius: 8px;
-  padding: 16px 18px;
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  transition: all 0.2s ease;
-}
-
-.summary-card.clickable {
-  cursor: pointer;
-}
-
-.summary-card.clickable:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
-}
-
-/* Anomaly card: dominant when active */
-.summary-card-anomaly {
-  background: #fff2f0;
-  border: 2px solid #ff4d4f;
-}
-
-.summary-card-anomaly .summary-value {
-  color: #ff4d4f;
-  font-size: 32px;
-}
-
-/* Green healthy banner */
-.summary-card-healthy {
-  background: #f6ffed;
-  border: 2px solid #52c41a;
-}
-
-.healthy-text {
-  color: #52c41a !important;
-  font-size: 18px !important;
-  font-weight: 600 !important;
-}
-
-/* Demoted last card: smaller */
-.summary-card-demoted {
-  padding: 12px 14px;
-}
-
-.summary-card-demoted .summary-value-sm {
-  font-size: 18px;
-}
-
-.summary-icon-sm {
-  width: 36px;
-  height: 36px;
-  border-radius: 8px;
-}
-
-.summary-icon {
-  width: 44px;
-  height: 44px;
-  border-radius: 10px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: #fff;
-  flex-shrink: 0;
-}
-
-.icon-primary { background: #409eff; }
-.icon-success { background: #67c23a; }
-.icon-info    { background: #909399; }
-.icon-danger  { background: #f56c6c; }
-.icon-warning { background: #e6a23c; }
-
-.summary-body {
-  min-width: 0;
-}
-
-.summary-value {
-  font-size: 24px;
-  font-weight: 700;
-  color: #303133;
-  line-height: 1.2;
-}
-
-.summary-label {
-  font-size: 12px;
-  color: #909399;
-  margin-top: 2px;
-  white-space: nowrap;
-}
-
-.skeleton-value {
-  width: 48px;
-  height: 24px;
-  border-radius: 4px;
-  background: linear-gradient(90deg, #f0f0f0 25%, #e8e8e8 50%, #f0f0f0 75%);
-  background-size: 200% 100%;
-  animation: skeleton-pulse 1.5s ease infinite;
-}
-
-@keyframes skeleton-pulse {
-  0% { background-position: 200% 0; }
-  100% { background-position: -200% 0; }
-}
-
-/* Freshness dots */
-.freshness-row {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.freshness-dot {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  display: inline-block;
-}
-
-.freshness-num {
-  font-size: 16px;
-  font-weight: 700;
-  color: #303133;
-  margin-right: 6px;
-}
-
-.dot-fresh   { background: #67c23a; }
-.dot-stale   { background: #e6a23c; }
-.dot-unknown { background: #c0c4cc; }
-
-/* Layer 2: Focus cards */
-.focus-cards {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 12px;
-}
-
-.focus-card {
-  background: #fff;
-  border: 1px solid #ebeef5;
-  border-radius: 8px;
-  padding: 14px 16px;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  cursor: pointer;
-  transition: all 0.2s ease;
-  border-left: 3px solid transparent;
-}
-
-.focus-card:hover {
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
-}
-
-.focus-card.has-items.focus-anomaly    { border-left-color: #ff4d4f; background: #fff2f0; }
-.focus-card.has-items.focus-expected   { border-left-color: #409eff; background: #ecf5ff; }
-.focus-card.has-items.focus-collection { border-left-color: #faad14; background: #fffbe6; }
-.focus-card.has-items.focus-recovered  { border-left-color: #52c41a; background: #f6ffed; }
-
-/* Pulse animation for anomaly card when active */
-.focus-pulse {
-  animation: focus-pulse-anim 2s ease-in-out infinite;
-}
-
-@keyframes focus-pulse-anim {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(255, 77, 79, 0.3); }
-  50% { box-shadow: 0 0 0 6px rgba(255, 77, 79, 0); }
-}
-
-.focus-count {
-  font-size: 22px;
-  font-weight: 700;
-  color: #303133;
-  min-width: 28px;
-}
-
-.focus-label {
-  font-size: 13px;
-  color: #606266;
-  white-space: nowrap;
-}
-
-/* Layer 3: Status Heatmap */
-.content-card {
-  margin-bottom: 20px;
-}
-
-.card-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-
-/* Heatmap dot grid */
-.heatmap-grid {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  padding: 8px 0;
-}
-
-.heatmap-dot {
-  width: 24px;
-  height: 24px;
-  border-radius: 4px;
-  cursor: pointer;
-  transition: transform 0.15s ease, box-shadow 0.15s ease;
-}
-
-.heatmap-dot:hover {
-  transform: scale(1.3);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
-  z-index: 1;
-}
-
-.heatmap-dot.heatmap-healthy { background: #52c41a; }
-.heatmap-dot.heatmap-warning { background: #faad14; }
-.heatmap-dot.heatmap-error   { background: #ff4d4f; }
-.heatmap-dot.heatmap-offline { background: #8c8c8c; }
-
-.heatmap-dot-skeleton {
-  background: linear-gradient(90deg, #f0f0f0 25%, #e8e8e8 50%, #f0f0f0 75%);
-  background-size: 200% 100%;
-  animation: skeleton-pulse 1.5s ease infinite;
-  cursor: default;
-}
-
-/* Keep legacy classes for compatibility */
-.skeleton-bar {
-  border-radius: 4px;
-  background: linear-gradient(90deg, #f0f0f0 25%, #e8e8e8 50%, #f0f0f0 75%);
-  background-size: 200% 100%;
-  animation: skeleton-pulse 1.5s ease infinite;
-}
-
-.status-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  flex-shrink: 0;
-}
-
-.status-dot.dot-ok      { background: #52c41a; }
-.status-dot.dot-warning  { background: #faad14; }
-.status-dot.dot-error    { background: #ff4d4f; }
-.status-dot.dot-offline  { background: #8c8c8c; }
-
-.freshness-indicator {
-  font-size: 11px;
-  padding: 1px 6px;
-  border-radius: 3px;
-}
-
-.freshness-fresh   { color: #52c41a; background: #f6ffed; }
-.freshness-stale   { color: #faad14; background: #fffbe6; }
-.freshness-unknown  { color: #8c8c8c; background: #f5f5f5; }
-
-/* Alert stream */
-.alerts-card {
-  height: calc(100vh - 280px);
-  min-height: 400px;
-  overflow: hidden;
-}
-
-.alerts-list {
-  height: calc(100vh - 360px);
-  min-height: 320px;
-  overflow-y: auto;
-}
-
-.ws-badge {
-  margin-left: 8px;
-}
-
-.ws-badge :deep(.el-badge__content) {
-  font-size: 10px;
-}
-
-/* Layer 4: Charts */
-.chart-card :deep(.el-card__body) {
-  padding: 12px;
-}
-
-/* Responsive */
-@media (max-width: 1200px) {
-  .summary-cards {
-    grid-template-columns: 2fr 1fr 1fr;
-  }
-  .summary-card-demoted {
-    grid-column: span 1;
-  }
-  .focus-cards {
-    grid-template-columns: repeat(2, 1fr);
-  }
-}
-
-@media (max-width: 768px) {
-  .summary-cards {
-    grid-template-columns: 1fr 1fr;
-  }
-  .summary-card-anomaly,
-  .summary-card-healthy {
-    grid-column: span 2;
-  }
-  .focus-cards {
-    grid-template-columns: 1fr;
-  }
 }
 </style>

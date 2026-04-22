@@ -55,6 +55,30 @@ logger = logging.getLogger(__name__)
 # Tracks the previous health state per array so we only broadcast on change
 _prev_health_state: dict = {}
 
+# Background loop failure tracking: maps loop name → consecutive failure count
+_bg_failure_counts: dict = {}
+_BG_FAILURE_THRESHOLD = 3
+
+
+def _track_bg_failure(name: str, exc: Exception) -> None:
+    """Record a background loop failure; escalate to sys_error after threshold."""
+    count = _bg_failure_counts.get(name, 0) + 1
+    _bg_failure_counts[name] = count
+    if count >= _BG_FAILURE_THRESHOLD:
+        sys_error(
+            "bg_loop",
+            f"{name} failed {count} consecutive iterations",
+            {"error": str(exc), "consecutive": count},
+        )
+    else:
+        logger.warning("Background loop %s error (%d/%d): %s", name, count, _BG_FAILURE_THRESHOLD, exc)
+
+
+def _reset_bg_failure(name: str) -> None:
+    """Reset failure counter; log recovery if it had escalated to sys_error."""
+    if _bg_failure_counts.pop(name, 0) >= _BG_FAILURE_THRESHOLD:
+        sys_info("bg_loop", f"{name} recovered after consecutive failures")
+
 
 async def _idle_connection_cleaner():
     """Background task to clean up idle SSH connections and expired DB records."""
@@ -94,10 +118,11 @@ async def _idle_connection_cleaner():
                             logger.info(f"Cleaned up {result.rowcount} expired alert acknowledgements")
             except Exception as e:
                 logger.warning(f"Expired ack cleanup error: {e}")
+            _reset_bg_failure("idle_connection_cleaner")
         except asyncio.CancelledError:
             break
         except Exception as e:
-            logger.warning(f"Idle connection cleanup error: {e}")
+            _track_bg_failure("idle_connection_cleaner", e)
 
 
 async def _health_checker():
@@ -215,11 +240,12 @@ async def _health_checker():
                             "event": "health_check",
                         })
                 except Exception as e:
-                    logger.warning(f"Agent health check failed for {array_id}: {e}")
+                    _track_bg_failure(f"health_checker/{array_id}", e)
+            _reset_bg_failure("health_checker")
         except asyncio.CancelledError:
             break
         except Exception as e:
-            logger.warning(f"Health checker error: {e}")
+            _track_bg_failure("health_checker", e)
 
 
 async def _auto_reconnect_saved_arrays():

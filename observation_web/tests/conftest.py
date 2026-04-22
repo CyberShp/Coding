@@ -28,6 +28,8 @@ async def db_session():
     engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
     async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
+    # Import ALL models so Base.metadata is fully populated before create_all
+    from backend.models import array, alert, query, lifecycle, scheduler, traffic, task_session, snapshot, tag, user_session, user_preference, array_lock, alert_rule, audit_log, issue, monitor_template, observer_config, ai_interpretation, card_inventory, alerts_v2, expected_window, observer_snapshot, agent_heartbeat, card_presence, viewer_profile, system_config, enrollment, baseline, causal  # noqa: F401
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
@@ -57,8 +59,8 @@ async def app_client():
     db_mod._async_engine = engine
     db_mod.AsyncSessionLocal = session_factory
 
-    # Import all models so Base.metadata is fully populated, then create tables
-    from backend.models import array, alert, query, lifecycle, scheduler, traffic, task_session, snapshot  # noqa: F401
+    # Import ALL models so Base.metadata is fully populated, then create tables
+    from backend.models import array, alert, query, lifecycle, scheduler, traffic, task_session, snapshot, tag, user_session, user_preference, array_lock, alert_rule, audit_log, issue, monitor_template, observer_config, ai_interpretation, card_inventory, alerts_v2, expected_window, observer_snapshot, agent_heartbeat, card_presence, viewer_profile, system_config, enrollment, baseline, causal  # noqa: F401
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
@@ -90,7 +92,7 @@ async def app_client_with_db():
     db_mod._async_engine = engine
     db_mod.AsyncSessionLocal = session_factory
 
-    from backend.models import array, alert, query, lifecycle, scheduler, traffic, task_session, snapshot, tag, user_session, user_preference  # noqa: F401
+    from backend.models import array, alert, query, lifecycle, scheduler, traffic, task_session, snapshot, tag, user_session, user_preference, array_lock, alert_rule, audit_log, issue, monitor_template, observer_config, ai_interpretation, card_inventory, alerts_v2, expected_window, observer_snapshot, agent_heartbeat, card_presence, viewer_profile, system_config, enrollment, baseline, causal  # noqa: F401
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
