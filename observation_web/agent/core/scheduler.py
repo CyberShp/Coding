@@ -10,15 +10,15 @@ import time
 from datetime import datetime
 from typing import Any, Dict, List, Tuple
 
-from .base import BaseObserver
+from .base import BaseObserver, ObserverResult, AlertLevel
 from .reporter import Reporter
 from .updater import AgentUpdater
 
 logger = logging.getLogger(__name__)
 
 
-_BACKOFF_MAX_MULTIPLIER = 8   # cap: 8× base interval
 _FAILURE_LOG_THRESHOLD = 3   # escalate to ERROR after this many consecutive failures
+_BACKOFF_MAX_SECONDS = 900   # absolute backoff cap: 15 minutes
 
 
 class Scheduler:
@@ -51,15 +51,28 @@ class Scheduler:
         # 从配置加载并注册观察点
         self._load_observers()
 
-    def _record_failure(self, name: str, exc: Exception) -> float:
-        """Record an observer failure, log it, and return the backoff multiplier."""
+    def _record_failure(self, name: str, exc: Exception) -> None:
+        """Record an observer failure; escalate log and emit sticky alert after threshold."""
         count = self._observer_failures.get(name, 0) + 1
         self._observer_failures[name] = count
         if count >= _FAILURE_LOG_THRESHOLD:
             logger.error("[%s] 连续失败 %d 次: %s", name, count, exc)
+            synthetic = ObserverResult(
+                observer_name=name,
+                has_alert=True,
+                alert_level=AlertLevel.ERROR,
+                message=f"观察点 {name} 连续失败 {count} 次: {exc}",
+                details={"consecutive_failures": count, "last_error": str(exc)},
+                sticky=True,
+            )
+            self.reporter.report(synthetic)
         else:
             logger.warning("[%s] 执行失败: %s", name, exc)
-        return min(2 ** count, _BACKOFF_MAX_MULTIPLIER)
+
+    def _backoff_delay(self, name: str, base_interval: float) -> float:
+        """Return absolute backoff delay in seconds, capped at _BACKOFF_MAX_SECONDS."""
+        count = self._observer_failures.get(name, 0)
+        return min(base_interval * (2 ** count), _BACKOFF_MAX_SECONDS)
 
     def _record_success(self, name: str) -> None:
         """Reset failure counter; log recovery if it had escalated."""
@@ -203,8 +216,8 @@ class Scheduler:
                     self._record_success(observer.name)
                 except Exception as e:
                     self._start_work_ready = False
-                    backoff = self._record_failure(observer.name, e)
-                    next_run = now + observer.get_interval() * backoff
+                    self._record_failure(observer.name, e)
+                    next_run = now + self._backoff_delay(observer.name, observer.get_interval())
                     self._observers[i] = (observer, next_run)
                     break
                 next_run = now + observer.get_interval()
@@ -240,8 +253,8 @@ class Scheduler:
                         self._record_success(observer.name)
 
                     except Exception as e:
-                        backoff = self._record_failure(observer.name, e)
-                        next_run = now + observer.get_interval() * backoff
+                        self._record_failure(observer.name, e)
+                        next_run = now + self._backoff_delay(observer.name, observer.get_interval())
                         self._observers[i] = (observer, next_run)
                         failed = True
 

@@ -96,8 +96,9 @@ async def _idle_connection_cleaner():
                     async with AsyncSessionLocal() as session:
                         store = get_traffic_store()
                         await store.cleanup_expired(session)
+                _reset_bg_failure("idle_cleanup/traffic")
             except Exception as e:
-                logger.warning(f"Traffic cleanup error: {e}")
+                _track_bg_failure("idle_cleanup/traffic", e)
 
             # Every cycle: cleanup expired alert acknowledgements
             try:
@@ -116,8 +117,9 @@ async def _idle_connection_cleaner():
                         if result.rowcount > 0:
                             await session.commit()
                             logger.info(f"Cleaned up {result.rowcount} expired alert acknowledgements")
+                _reset_bg_failure("idle_cleanup/ack")
             except Exception as e:
-                logger.warning(f"Expired ack cleanup error: {e}")
+                _track_bg_failure("idle_cleanup/ack", e)
             _reset_bg_failure("idle_connection_cleaner")
         except asyncio.CancelledError:
             break
@@ -165,6 +167,7 @@ async def _health_checker():
                                 "agent_deployed": status_obj.agent_deployed,
                                 "event": "health_check",
                             })
+                        _reset_bg_failure(f"health_checker/{array_id}")
                         continue
 
                     alive = await asyncio.wait_for(
@@ -183,6 +186,7 @@ async def _health_checker():
                                 "agent_deployed": status_obj.agent_deployed,
                                 "event": "health_check",
                             })
+                        _reset_bg_failure(f"health_checker/{array_id}")
                         continue
 
                     # Run heavier agent health checks every 10 cycles (~5 min)
@@ -239,6 +243,7 @@ async def _health_checker():
                             "agent_deployed": status_obj.agent_deployed,
                             "event": "health_check",
                         })
+                    _reset_bg_failure(f"health_checker/{array_id}")
                 except Exception as e:
                     _track_bg_failure(f"health_checker/{array_id}", e)
             _reset_bg_failure("health_checker")
