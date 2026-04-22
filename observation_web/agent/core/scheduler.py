@@ -17,8 +17,9 @@ from .updater import AgentUpdater
 logger = logging.getLogger(__name__)
 
 
-_FAILURE_LOG_THRESHOLD = 3   # escalate to ERROR after this many consecutive failures
-_BACKOFF_MAX_SECONDS = 900   # absolute backoff cap: 15 minutes
+_FAILURE_LOG_THRESHOLD = 3    # escalate to local ERROR log after this many failures
+_ALERT_REPORT_THRESHOLD = 10  # report sticky alert to backend every N failures
+_BACKOFF_MAX_SECONDS = 900    # absolute backoff cap: 15 minutes
 
 
 class Scheduler:
@@ -52,11 +53,21 @@ class Scheduler:
         self._load_observers()
 
     def _record_failure(self, name: str, exc: Exception) -> None:
-        """Record an observer failure; escalate log and emit sticky alert after threshold."""
+        """Record an observer failure.
+
+        Logging: escalates to ERROR at _FAILURE_LOG_THRESHOLD (3) consecutive failures.
+        Backend alert: emits a sticky ObserverResult every _ALERT_REPORT_THRESHOLD (10)
+        consecutive failures so the backend surfaces sustained outages without flooding
+        on transient blips.
+        """
         count = self._observer_failures.get(name, 0) + 1
         self._observer_failures[name] = count
         if count >= _FAILURE_LOG_THRESHOLD:
             logger.error("[%s] 连续失败 %d 次: %s", name, count, exc)
+        else:
+            logger.warning("[%s] 执行失败: %s", name, exc)
+        # Only report to backend at multiples of the alert threshold (10, 20, 30 …)
+        if count >= _ALERT_REPORT_THRESHOLD and count % _ALERT_REPORT_THRESHOLD == 0:
             synthetic = ObserverResult(
                 observer_name=name,
                 has_alert=True,
@@ -66,8 +77,6 @@ class Scheduler:
                 sticky=True,
             )
             self.reporter.report(synthetic)
-        else:
-            logger.warning("[%s] 执行失败: %s", name, exc)
 
     def _backoff_delay(self, name: str, base_interval: float) -> float:
         """Return absolute backoff delay in seconds, capped at _BACKOFF_MAX_SECONDS."""

@@ -131,11 +131,14 @@ def test_idle_cleanup_subtask_reset_clears_counter(monkeypatch):
 
 # ---------------------------------------------------------------------------
 # P1-3: observer consecutive failures emit backend-visible sticky alert
+# Spec (critical-review-refactor-spec.md L243):
+#   report only when count >= 10 AND count % 10 == 0
+#   local ERROR log escalates at count >= 3 (separate threshold)
 # ---------------------------------------------------------------------------
 
 
-def test_observer_failure_below_threshold_no_report():
-    """Failures below threshold must NOT call reporter.report()."""
+def test_observer_failure_below_log_threshold_is_warning():
+    """Fewer than _FAILURE_LOG_THRESHOLD (3) failures → no ERROR log and no backend report."""
     mock_reporter = MagicMock()
     sched = _make_agent_scheduler(reporter=mock_reporter)
 
@@ -147,9 +150,21 @@ def test_observer_failure_below_threshold_no_report():
     mock_reporter.report.assert_not_called()
 
 
-def test_observer_failure_at_threshold_emits_sticky_alert():
-    """At _FAILURE_LOG_THRESHOLD consecutive failures, reporter.report() must be called
-    with a sticky ObserverResult so the backend surfaces the outage."""
+def test_observer_failure_below_alert_threshold_no_backend_report():
+    """9 consecutive failures (< _ALERT_REPORT_THRESHOLD=10) must NOT call reporter.report()."""
+    mock_reporter = MagicMock()
+    sched = _make_agent_scheduler(reporter=mock_reporter)
+
+    import agent.core.scheduler as sched_mod
+
+    for _ in range(sched_mod._ALERT_REPORT_THRESHOLD - 1):
+        sched._record_failure("error_code", Exception("SSH broken"))
+
+    mock_reporter.report.assert_not_called()
+
+
+def test_observer_failure_at_alert_threshold_emits_sticky_alert():
+    """Exactly _ALERT_REPORT_THRESHOLD (10) consecutive failures → one sticky alert."""
     from agent.core.base import AlertLevel
 
     mock_reporter = MagicMock()
@@ -157,7 +172,7 @@ def test_observer_failure_at_threshold_emits_sticky_alert():
 
     import agent.core.scheduler as sched_mod
 
-    for _ in range(sched_mod._FAILURE_LOG_THRESHOLD):
+    for _ in range(sched_mod._ALERT_REPORT_THRESHOLD):
         sched._record_failure("error_code", Exception("SSH broken"))
 
     mock_reporter.report.assert_called_once()
@@ -168,18 +183,37 @@ def test_observer_failure_at_threshold_emits_sticky_alert():
     assert result.observer_name == "error_code"
 
 
-def test_observer_failure_beyond_threshold_reports_each_occurrence():
-    """Every failure beyond the threshold should emit another sticky alert."""
+def test_observer_failure_between_multiples_no_extra_report():
+    """Failures at counts 11-19 must NOT emit another alert (next is at 20)."""
     mock_reporter = MagicMock()
     sched = _make_agent_scheduler(reporter=mock_reporter)
 
     import agent.core.scheduler as sched_mod
 
-    extras = 3
-    for _ in range(sched_mod._FAILURE_LOG_THRESHOLD + extras):
+    # Drive to exactly 10 (1 report)
+    for _ in range(sched_mod._ALERT_REPORT_THRESHOLD):
         sched._record_failure("cpu_usage", Exception("stalled"))
 
-    assert mock_reporter.report.call_count == extras + 1
+    mock_reporter.report.reset_mock()
+
+    # Counts 11-19: no additional reports
+    for _ in range(sched_mod._ALERT_REPORT_THRESHOLD - 1):
+        sched._record_failure("cpu_usage", Exception("stalled"))
+
+    mock_reporter.report.assert_not_called()
+
+
+def test_observer_failure_at_double_threshold_emits_second_alert():
+    """At count=20 (2nd multiple of 10) exactly one additional alert is emitted."""
+    mock_reporter = MagicMock()
+    sched = _make_agent_scheduler(reporter=mock_reporter)
+
+    import agent.core.scheduler as sched_mod
+
+    for _ in range(sched_mod._ALERT_REPORT_THRESHOLD * 2):
+        sched._record_failure("cpu_usage", Exception("stalled"))
+
+    assert mock_reporter.report.call_count == 2
 
 
 # ---------------------------------------------------------------------------
