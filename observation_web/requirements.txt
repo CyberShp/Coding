@@ -8,6 +8,7 @@ paramiko>=2.7.0
 # Database
 sqlalchemy>=1.4.0
 aiosqlite>=0.17.0
+alembic>=1.13
 
 # Data validation
 pydantic>=1.8.0

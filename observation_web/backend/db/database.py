@@ -87,17 +87,84 @@ def init_db():
     )
 
 
-async def create_tables():
-    """Create all tables. Schema migration (if needed) runs separately before init_db."""
-    from ..models import array, alert, query, lifecycle, scheduler, traffic, task_session, snapshot, tag, user_session, user_preference, array_lock, alert_rule, audit_log, issue, monitor_template, observer_config, ai_interpretation, card_inventory, alerts_v2, expected_window, observer_snapshot, agent_heartbeat, card_presence, viewer_profile, system_config, enrollment, baseline, causal  # noqa: F401
+def _get_alembic_config():
+    """Build Alembic Config pointing to our backend/alembic directory."""
+    from alembic.config import Config as AlembicConfig
 
+    project_root = Path(__file__).parent.parent.parent
+    alembic_ini = project_root / "alembic.ini"
+    cfg = AlembicConfig(str(alembic_ini))
+    cfg.set_main_option("script_location", str(project_root / "backend" / "alembic"))
+    return cfg
+
+
+def _run_alembic_upgrade():
+    """Run alembic upgrade head (synchronous — called via run_in_executor)."""
+    from alembic import command
+    try:
+        cfg = _get_alembic_config()
+        command.upgrade(cfg, "head")
+        logger.info("Alembic migrations applied successfully")
+    except Exception as e:
+        logger.error("Alembic migration failed: %s", e)
+        raise
+
+
+def _stamp_head_if_needed():
+    """Stamp the DB as 'head' if alembic_version is missing or empty.
+
+    Handles existing databases created before Alembic was introduced: they
+    already have the correct schema, they just need the version marker.
+    """
+    from alembic import command
+    from sqlalchemy import create_engine, text as _text
+
+    db_url = get_database_url().replace("sqlite+aiosqlite://", "sqlite://")
+    engine = create_engine(db_url)
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(
+                _text("SELECT name FROM sqlite_master WHERE type='table' AND name='alembic_version'")
+            )
+            if result.fetchone() is None:
+                logger.info("No alembic_version table found, stamping head")
+                cfg = _get_alembic_config()
+                command.stamp(cfg, "head")
+                return
+
+            result = conn.execute(_text("SELECT COUNT(*) FROM alembic_version"))
+            if result.scalar() == 0:
+                logger.info("Empty alembic_version, stamping head")
+                cfg = _get_alembic_config()
+                command.stamp(cfg, "head")
+    finally:
+        engine.dispose()
+
+
+async def create_tables():
+    """Create tables (create_all) and apply Alembic migrations."""
+    import asyncio
+    from ..models import (  # noqa: F401
+        array, alert, query, lifecycle, scheduler, traffic,
+        task_session, snapshot, tag, user_session, user_preference,
+        array_lock, alert_rule, audit_log, issue, monitor_template,
+        observer_config, ai_interpretation, card_inventory, alerts_v2,
+        expected_window, observer_snapshot, agent_heartbeat, card_presence,
+        viewer_profile, system_config, enrollment, baseline, causal,
+    )
+
+    # Step 1: create_all for new databases (idempotent on existing ones)
     async with _async_engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
-    # Incremental column migrations for existing deployments
-    await _apply_column_migrations()
+    # Step 2: apply any pending Alembic migrations (sync, via thread)
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(None, _run_alembic_upgrade)
 
-    # Startup diagnostic: verify all expected tables exist
+    # Step 3: stamp head for databases that pre-date Alembic
+    await loop.run_in_executor(None, _stamp_head_if_needed)
+
+    # Step 4: startup diagnostic — verify all expected tables exist
     async with _async_engine.begin() as conn:
         def _check_tables(sync_conn):
             result = sync_conn.execute(
@@ -112,23 +179,6 @@ async def create_tables():
                 logger.info("All %d tables verified", len(expected))
 
         await conn.run_sync(_check_tables)
-
-
-async def _apply_column_migrations():
-    """Add columns that didn't exist in earlier schema versions."""
-    async with _async_engine.begin() as conn:
-        def _migrate(sync_conn):
-            # Phase 3: consecutive_threshold on monitor_templates
-            cols = {row[1] for row in sync_conn.execute(
-                text("PRAGMA table_info(monitor_templates)")
-            )}
-            if "consecutive_threshold" not in cols:
-                sync_conn.execute(text(
-                    "ALTER TABLE monitor_templates ADD COLUMN consecutive_threshold INTEGER DEFAULT 1"
-                ))
-                logger.info("Migration: added monitor_templates.consecutive_threshold")
-
-        await conn.run_sync(_migrate)
 
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:

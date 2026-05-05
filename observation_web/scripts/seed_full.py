@@ -172,9 +172,7 @@ def main():
 
     async def _run():
         from backend.db.database import init_db, create_tables
-        from backend.db.schema_migrate import migrate_if_needed
 
-        migrate_if_needed()
         init_db()
         await create_tables()
 
