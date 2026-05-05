@@ -110,11 +110,22 @@ def _run_alembic_upgrade():
         raise
 
 
-def _stamp_head_if_needed():
-    """Stamp the DB as 'head' if alembic_version is missing or empty.
+_BASELINE_REVISION = "a18c393c631a"
 
-    Handles existing databases created before Alembic was introduced: they
-    already have the correct schema, they just need the version marker.
+
+def _stamp_head_if_needed():
+    """Safety net: stamp baseline revision when alembic_version is absent.
+
+    upgrade head (called before this function in create_tables) normally
+    handles all migration tracking.  This function covers the rare edge case
+    where a pre-Alembic database somehow exits upgrade without alembic_version
+    being created.
+
+    We stamp the *baseline* revision (not head) so that the catch-up
+    migration (c7e9d2b4f81a) will run on the next startup and add any
+    columns that were missing from the old schema.  Stamping head directly
+    would skip that migration, leaving previous_ips / consecutive_threshold
+    absent.
     """
     from alembic import command
     from sqlalchemy import create_engine, text as _text
@@ -126,17 +137,16 @@ def _stamp_head_if_needed():
             result = conn.execute(
                 _text("SELECT name FROM sqlite_master WHERE type='table' AND name='alembic_version'")
             )
-            if result.fetchone() is None:
-                logger.info("No alembic_version table found, stamping head")
-                cfg = _get_alembic_config()
-                command.stamp(cfg, "head")
-                return
+            if result.fetchone() is not None:
+                return  # upgrade head already set the version; nothing to do
 
-            result = conn.execute(_text("SELECT COUNT(*) FROM alembic_version"))
-            if result.scalar() == 0:
-                logger.info("Empty alembic_version, stamping head")
-                cfg = _get_alembic_config()
-                command.stamp(cfg, "head")
+            logger.info(
+                "No alembic_version after upgrade; stamping baseline (%s) "
+                "so catch-up migration runs on next start",
+                _BASELINE_REVISION,
+            )
+            cfg = _get_alembic_config()
+            command.stamp(cfg, _BASELINE_REVISION)
     finally:
         engine.dispose()
 

@@ -124,17 +124,13 @@ else
     python3 -m pip install -r requirements.txt -q
 fi
 
-# 5. Schema migration (create fresh DB + copy data) then create tables
+# 5. Database upgrade via Alembic (create tables + run pending migrations)
 echo -e "${YELLOW}执行数据库升级...${NC}"
 python3 -c "
 import asyncio
 import sys
 sys.path.insert(0, '.')
-from backend.db.schema_migrate import migrate_if_needed
 from backend.db.database import init_db, create_tables
-migrated = migrate_if_needed()
-if migrated:
-    print('Schema migration OK')
 init_db()
 asyncio.run(create_tables())
 print('Database OK')
