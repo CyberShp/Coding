@@ -282,10 +282,16 @@ def upgrade() -> None:
                     sa.Column('level', sa.Integer(), nullable=True,
                               server_default=sa.text('1'))
                 )
-    # Backfill: existing tags with NULL level get the ORM default (1=group).
+    # Backfill: tags that existed before hierarchy was introduced were all
+    # flat "array type" tags.  Migration 007 set them to level=2 explicitly:
+    #   "Existing tags become level 2 (array type), parent_id stays NULL"
+    # We must match BOTH NULL and 1: batch_alter_table fills existing rows
+    # with server_default=1 during table recreation, so level IS NULL alone
+    # would miss every row.  Only run when level column was absent, so we
+    # know all matching rows are pre-hierarchy.
     if tags_missing.get('level') and 'tags' in existing_tables:
         op.execute(sa.text(
-            "UPDATE tags SET level = 1 WHERE level IS NULL"
+            "UPDATE tags SET level = 2 WHERE level IS NULL OR level = 1"
         ))
 
     # ── 010 ─ user_preferences ───────────────────────────────────────────────

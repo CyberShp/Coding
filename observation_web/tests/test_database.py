@@ -192,6 +192,53 @@ class TestAlembicCatchupMigration:
 
         verify_engine.dispose()
 
+    def test_catchup_pre_hierarchy_tags_become_level_2(self, tmp_path):
+        """
+        Regression for gpt52 P1: tags that existed before the hierarchy
+        migration must be set to level=2 (array type), not level=1 (group).
+
+        Original migration 007 comment: "Existing tags become level 2 (array
+        type), parent_id stays NULL."
+
+        tags.py:174 branches on tag.level == 1 to do a child-tag fan-out
+        query — misclassifying flat tags as L1 groups would break that logic.
+        """
+        db_path = str(tmp_path / "pre_hierarchy.db")
+
+        engine = sa.create_engine(f"sqlite:///{db_path}")
+        with engine.begin() as conn:
+            # tags table WITHOUT level/parent_id — simulates a DB that existed
+            # before migration 007 was ever run
+            conn.execute(sa.text("""
+                CREATE TABLE tags (
+                    id INTEGER PRIMARY KEY,
+                    name VARCHAR(64) NOT NULL UNIQUE,
+                    color VARCHAR(32) DEFAULT '#409eff',
+                    description TEXT DEFAULT '',
+                    created_at DATETIME, updated_at DATETIME
+                )
+            """))
+            # Insert a flat tag that existed before hierarchy
+            conn.execute(sa.text(
+                "INSERT INTO tags (id, name) VALUES (1, 'StorageType-A')"
+            ))
+        engine.dispose()
+
+        self._run_upgrade_head(db_path)
+
+        verify_engine = sa.create_engine(f"sqlite:///{db_path}")
+        with verify_engine.connect() as conn:
+            row = conn.execute(
+                sa.text("SELECT level FROM tags WHERE id = 1")
+            ).fetchone()
+        verify_engine.dispose()
+
+        assert row is not None
+        assert row[0] == 2, (
+            f"Pre-hierarchy tags must be backfilled to level=2 (array type), "
+            f"not level=1 (group). Got: {row[0]}"
+        )
+
     def test_catchup_is_idempotent_on_full_schema(self, tmp_path):
         """
         upgrade head must not raise when both columns already exist
