@@ -63,30 +63,26 @@ class TestAlembicCatchupMigration:
         finally:
             config_mod._config = old_config
 
-    def test_catchup_adds_missing_columns_to_pre_alembic_db(self, tmp_path):
-        """
-        A pre-Alembic database that is missing previous_ips and
-        consecutive_threshold must have both columns after upgrade head.
+    def _build_pre_alembic_db(self, db_path: str) -> None:
+        """Create a pre-Alembic database missing all historical ADD COLUMN columns.
 
-        Red scenario: DB schema created BEFORE those columns existed
-        (no previous_ips in user_sessions, no consecutive_threshold in
-        monitor_templates, no alembic_version table).
+        Includes the tables that archived migrations 001-011 operated on,
+        but only with the original columns each table had before those
+        migrations ran.
         """
-        db_path = str(tmp_path / "pre_alembic.db")
-
-        # Build a minimal pre-Alembic schema without the historical columns
         engine = sa.create_engine(f"sqlite:///{db_path}")
         with engine.begin() as conn:
+            # user_sessions — missing previous_ips (001)
             conn.execute(sa.text("""
                 CREATE TABLE user_sessions (
                     id INTEGER PRIMARY KEY,
                     ip VARCHAR(64) NOT NULL,
                     nickname VARCHAR(64) DEFAULT '',
-                    first_seen DATETIME,
-                    last_seen DATETIME,
+                    first_seen DATETIME, last_seen DATETIME,
                     is_active BOOLEAN DEFAULT 1
                 )
             """))
+            # monitor_templates — missing consecutive_threshold (_apply_column_migrations)
             conn.execute(sa.text("""
                 CREATE TABLE monitor_templates (
                     id INTEGER PRIMARY KEY,
@@ -95,8 +91,7 @@ class TestAlembicCatchupMigration:
                     category VARCHAR(32) DEFAULT 'custom',
                     command TEXT NOT NULL,
                     command_type VARCHAR(16) DEFAULT 'shell',
-                    interval INTEGER DEFAULT 60,
-                    timeout INTEGER DEFAULT 30,
+                    interval INTEGER DEFAULT 60, timeout INTEGER DEFAULT 30,
                     match_type VARCHAR(16) DEFAULT 'regex',
                     match_expression TEXT NOT NULL,
                     match_condition VARCHAR(16) DEFAULT 'found',
@@ -107,27 +102,93 @@ class TestAlembicCatchupMigration:
                     is_enabled BOOLEAN DEFAULT 1,
                     is_builtin BOOLEAN DEFAULT 0,
                     created_by VARCHAR(64) DEFAULT '',
-                    created_at DATETIME,
-                    updated_at DATETIME
+                    created_at DATETIME, updated_at DATETIME
+                )
+            """))
+            # arrays — missing tag_id, saved_password, version (002)
+            conn.execute(sa.text("""
+                CREATE TABLE arrays (
+                    id INTEGER PRIMARY KEY,
+                    array_id VARCHAR(64) NOT NULL UNIQUE,
+                    name VARCHAR(128) NOT NULL,
+                    host VARCHAR(256) NOT NULL UNIQUE,
+                    port INTEGER DEFAULT 22,
+                    username VARCHAR(64) DEFAULT 'root',
+                    key_path VARCHAR(512) DEFAULT '',
+                    folder VARCHAR(128) DEFAULT ''
+                )
+            """))
+            # alerts — missing task_id, is_expected, matched_rule_id (003)
+            conn.execute(sa.text("""
+                CREATE TABLE alerts (
+                    id INTEGER PRIMARY KEY,
+                    array_id VARCHAR(64) NOT NULL,
+                    observer_name VARCHAR(64) NOT NULL,
+                    level VARCHAR(16) NOT NULL,
+                    message TEXT NOT NULL,
+                    details TEXT DEFAULT '{}',
+                    timestamp DATETIME NOT NULL,
+                    created_at DATETIME
+                )
+            """))
+            # tags — missing parent_id, level (007)
+            conn.execute(sa.text("""
+                CREATE TABLE tags (
+                    id INTEGER PRIMARY KEY,
+                    name VARCHAR(64) NOT NULL UNIQUE,
+                    color VARCHAR(32) DEFAULT '#409eff',
+                    description TEXT DEFAULT '',
+                    created_at DATETIME, updated_at DATETIME
                 )
             """))
         engine.dispose()
 
+    def test_catchup_adds_missing_columns_to_pre_alembic_db(self, tmp_path):
+        """
+        A pre-Alembic database missing historical ADD COLUMN columns must
+        have all of them present after upgrade head.
+
+        Verifies the columns specifically called out in gpt52's P1/P2 reviews:
+          - user_sessions.previous_ips (001)
+          - monitor_templates.consecutive_threshold (_apply_column_migrations)
+          - arrays.tag_id / version / saved_password (002)
+          - alerts.task_id / is_expected (003)
+          - tags.parent_id / level (007)
+        """
+        db_path = str(tmp_path / "pre_alembic.db")
+        self._build_pre_alembic_db(db_path)
+
         self._run_upgrade_head(db_path)
 
-        # Verify columns were added by the catch-up migration
         verify_engine = sa.create_engine(f"sqlite:///{db_path}")
         inspector = sa.inspect(verify_engine)
 
-        us_cols = {col["name"] for col in inspector.get_columns("user_sessions")}
-        assert "previous_ips" in us_cols, (
-            "catch-up migration must add previous_ips to user_sessions"
-        )
+        def cols(table):
+            return {c["name"] for c in inspector.get_columns(table)}
 
-        mt_cols = {col["name"] for col in inspector.get_columns("monitor_templates")}
-        assert "consecutive_threshold" in mt_cols, (
-            "catch-up migration must add consecutive_threshold to monitor_templates"
-        )
+        # 001
+        assert "previous_ips" in cols("user_sessions"), \
+            "previous_ips must be added to user_sessions"
+
+        # _apply_column_migrations
+        assert "consecutive_threshold" in cols("monitor_templates"), \
+            "consecutive_threshold must be added to monitor_templates"
+
+        # 002
+        arr_cols = cols("arrays")
+        assert "tag_id" in arr_cols, "tag_id must be added to arrays"
+        assert "saved_password" in arr_cols, "saved_password must be added to arrays"
+        assert "version" in arr_cols, "version must be added to arrays"
+
+        # 003
+        al_cols = cols("alerts")
+        assert "task_id" in al_cols, "task_id must be added to alerts"
+        assert "is_expected" in al_cols, "is_expected must be added to alerts"
+
+        # 007
+        tag_cols = cols("tags")
+        assert "parent_id" in tag_cols, "parent_id must be added to tags"
+        assert "level" in tag_cols, "level must be added to tags"
 
         verify_engine.dispose()
 
