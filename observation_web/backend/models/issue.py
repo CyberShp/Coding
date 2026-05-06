@@ -5,7 +5,7 @@ Issue/feedback model for user suggestions.
 from datetime import datetime
 from typing import Optional
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
 from sqlalchemy import Column, Integer, String, Text, DateTime
 from sqlalchemy.sql import func
 
@@ -56,3 +56,8 @@ class IssueResponse(BaseModel):
     updated_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+    @field_validator('created_by_nickname', 'resolution_note', mode='before')
+    @classmethod
+    def coerce_none_to_str(cls, v):
+        return v if v is not None else ""

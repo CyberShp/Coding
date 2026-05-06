@@ -1,6 +1,20 @@
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import path from 'path'
+import { readFileSync } from 'fs'
+
+// Read backend port from project config.json — single source of truth.
+// Falls back to 8002 if the file is missing or malformed.
+function getBackendPort() {
+  try {
+    const cfg = JSON.parse(readFileSync(path.resolve(__dirname, '../config.json'), 'utf-8'))
+    return cfg?.server?.port ?? 8002
+  } catch {
+    return 8002
+  }
+}
+
+const backendPort = getBackendPort()
 
 export default defineConfig({
   plugins: [vue()],
@@ -13,7 +27,7 @@ export default defineConfig({
     port: 5174,
     proxy: {
       '/api': {
-        target: 'http://localhost:8001',
+        target: `http://localhost:${backendPort}`,
         changeOrigin: true,
         configure: (proxy) => {
           proxy.on('proxyReq', (proxyReq, req) => {
@@ -24,7 +38,7 @@ export default defineConfig({
         },
       },
       '/ws': {
-        target: 'ws://localhost:8001',
+        target: `ws://localhost:${backendPort}`,
         ws: true,
         configure: (proxy) => {
           proxy.on('proxyReq', (proxyReq, req) => {

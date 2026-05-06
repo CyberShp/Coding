@@ -4,7 +4,7 @@
 ## Cat Cafe Governance Rules (Auto-managed)
 
 ### Hard Constraints (immutable)
-- **Public local defaults**: use frontend 5174 and API 8001. Do NOT use 3003/3004 (reserved for Cat Cafe).
+- **Public local defaults**: use frontend 5174 and API 8002. Do NOT use 3003/3004 (reserved for Cat Cafe).
 - **Redis port 6399** is Cat Cafe's production Redis. Never connect to it from external projects. Use 6398 for dev/test.
 - **No self-review**: The same individual cannot review their own code. Cross-family review preferred.
 - **Identity is constant**: Never impersonate another cat. Identity is a hard constraint.
