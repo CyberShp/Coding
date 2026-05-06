@@ -37,7 +37,7 @@ if not exist "frontend\node_modules" (
 )
 
 echo 启动后端服务...
-start "Backend" %PYTHON_CMD% -m uvicorn backend.main:app --host 0.0.0.0 --port 3004 --reload
+start "Backend" %PYTHON_CMD% -m uvicorn backend.main:app --host 0.0.0.0 --port 8001 --reload
 
 echo 启动前端服务...
 cd frontend
@@ -47,9 +47,9 @@ cd ..
 echo.
 echo =====================================
 echo   服务已启动!
-echo   后端 API: http://localhost:3004
-echo   前端界面: http://localhost:3003
-echo   API 文档: http://localhost:3004/docs
+echo   后端 API: http://localhost:8001
+echo   前端界面: http://localhost:5174
+echo   API 文档: http://localhost:8001/docs
 echo =====================================
 echo.
 echo 关闭此窗口不会停止服务

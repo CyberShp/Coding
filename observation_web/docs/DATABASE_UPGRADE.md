@@ -62,7 +62,7 @@ asyncio.run(create_tables())
 "
 
 # 4. 启动服务
-python3 -m uvicorn backend.main:app --host 0.0.0.0 --port 9999
+python3 -m uvicorn backend.main:app --host 0.0.0.0 --port 8001
 ```
 
 ---
@@ -114,7 +114,7 @@ pkill -f "uvicorn.*backend.main"
 cp backups/backup_YYYYMMDD_HHMMSS/observation_web.db ./
 
 # 启动服务
-python3 -m uvicorn backend.main:app --host 0.0.0.0 --port 9999
+python3 -m uvicorn backend.main:app --host 0.0.0.0 --port 8001
 ```
 
 ---

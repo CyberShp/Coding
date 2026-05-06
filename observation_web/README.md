@@ -87,7 +87,7 @@ start.bat
 ```bash
 # 后端
 pip install -r requirements.txt
-python3 -m uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload
+python3 -m uvicorn backend.main:app --host 0.0.0.0 --port 8001 --reload
 
 # 前端（另一个终端）
 cd frontend
@@ -181,7 +181,7 @@ observation_web/
     "output": "file",
     "file_path": "/var/log/observation-points/alerts.log",
     "push_enabled": true,
-    "push_url": "http://192.168.1.100:8000/api/ingest",
+    "push_url": "http://192.168.1.100:8001/api/ingest",
     "push_timeout": 5,
     "metrics_enabled": true
   }
@@ -209,7 +209,7 @@ observation_web/
 - Python 3.8+
 - Node.js 16+
 - 目标阵列支持 SSH 访问
-- 阵列与 PC 之间网络可达（推送模式需要阵列能访问 PC 的 8000 端口）
+- 阵列与 PC 之间网络可达（推送模式需要阵列能访问 PC 的 8001 端口）
 
 ## 许可证
 

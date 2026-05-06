@@ -30,7 +30,7 @@ class DatabaseConfig:
 class ServerConfig:
     """Server configuration"""
     host: str = "0.0.0.0"
-    port: int = 3004
+    port: int = 8001
     debug: bool = False
     workers: int = 1
     cors_origins: List[str] = field(default_factory=lambda: ["*"])
@@ -44,7 +44,7 @@ class RemoteConfig:
     python_cmd: str = "python3"
     upload_staging_path: str = "/home/permitdir"   # Staging dir for SFTP uploads (permission workaround)
     auto_redeploy: bool = True                      # Auto-redeploy agent when it goes offline
-    ingest_url: str = ""                            # URL for agent to push alerts (e.g. http://192.168.1.100:9999/api/ingest)
+    ingest_url: str = ""                            # URL for agent to push alerts (e.g. http://192.168.1.100:8001/api/ingest)
 
 
 @dataclass

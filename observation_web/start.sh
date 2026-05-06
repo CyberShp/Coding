@@ -64,7 +64,7 @@ fi
 
 # Start backend
 echo -e "${GREEN}启动后端服务 (FastAPI)...${NC}"
-$PYTHON_CMD -m uvicorn backend.main:app --host 0.0.0.0 --port 3004 --reload &
+$PYTHON_CMD -m uvicorn backend.main:app --host 0.0.0.0 --port 8001 --reload &
 BACKEND_PID=$!
 echo -e "  后端 PID: $BACKEND_PID"
 
@@ -84,9 +84,9 @@ cd ..
 echo ""
 echo -e "${GREEN}=====================================${NC}"
 echo -e "${GREEN}  服务已启动!                        ${NC}"
-echo -e "${GREEN}  后端 API: http://localhost:3004     ${NC}"
-echo -e "${GREEN}  前端界面: http://localhost:3003     ${NC}"
-echo -e "${GREEN}  API 文档: http://localhost:3004/docs${NC}"
+echo -e "${GREEN}  后端 API: http://localhost:8001     ${NC}"
+echo -e "${GREEN}  前端界面: http://localhost:5174     ${NC}"
+echo -e "${GREEN}  API 文档: http://localhost:8001/docs${NC}"
 echo -e "${GREEN}=====================================${NC}"
 echo ""
 echo -e "${YELLOW}按 Ctrl+C 停止所有服务${NC}"

@@ -142,8 +142,8 @@ PORT=$(python3 -c "
 import json
 with open('config.json') as f:
     c = json.load(f)
-print(c.get('server', {}).get('port', 9999))
-" 2>/dev/null || echo "9999")
+print(c.get('server', {}).get('port', 8001))
+" 2>/dev/null || echo "8001")
 
 python3 -m uvicorn backend.main:app --host 0.0.0.0 --port "$PORT" &
 sleep 3

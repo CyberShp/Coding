@@ -4,8 +4,8 @@
 
 用法:
     cd observation_web
-    python3 scripts/seed_test_data.py           # 默认 http://localhost:9999
-    python3 scripts/seed_test_data.py --host http://192.168.x.x:9999
+    python3 scripts/seed_test_data.py           # 默认 http://localhost:8001
+    python3 scripts/seed_test_data.py --host http://192.168.x.x:8001
 """
 
 import argparse
@@ -426,7 +426,7 @@ def api_test(base_url):
 
 def main():
     parser = argparse.ArgumentParser(description="喂入测试数据 + 调用新 API 验证")
-    parser.add_argument("--host", default="http://localhost:9999", help="后端地址")
+    parser.add_argument("--host", default="http://localhost:8001", help="后端地址")
     parser.add_argument("--no-seed", action="store_true", help="跳过数据库种子，只跑 API")
     parser.add_argument("--no-api", action="store_true", help="只灌数据不跑 API")
     parser.add_argument("--alerts", type=int, default=80, help="要插入的告警数量")

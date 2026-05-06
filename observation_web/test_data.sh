@@ -1,9 +1,9 @@
 #!/bin/bash
 # 测试数据注入脚本
 # 用法: ./test_data.sh [后端地址]
-# 默认: http://localhost:8000
+# 默认: http://localhost:8001
 
-BASE_URL="${1:-http://localhost:8000}"
+BASE_URL="${1:-http://localhost:8001}"
 echo "后端地址: $BASE_URL"
 echo "========================================="
 

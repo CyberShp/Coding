@@ -62,21 +62,6 @@ export function getObserverGroup(observerName) {
   return { key: 'system', label: '系统级检查' }
 }
 
-// 告警级别中文映射
-export const LEVEL_LABELS = {
-  info: '信息',
-  warning: '警告',
-  error: '错误',
-  critical: '严重',
-}
-
-export const LEVEL_TAG_TYPES = {
-  info: 'info',
-  warning: 'warning',
-  error: 'danger',
-  critical: 'danger',
-}
-
 /**
  * 翻译告警消息（v2: 三段式）
  * @param {Object} alert - { observer_name, message, details, level, ... }
