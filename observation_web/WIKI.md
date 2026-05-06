@@ -84,7 +84,7 @@
 │                                                      │
 │  ┌─────────────────┐    ┌──────────────────────────┐ │
 │  │  前端 (Vue 3)    │◄──►│    后端 (FastAPI)         │ │
-│  │  端口: 5173      │    │    端口: 9999             │ │
+│  │  端口: 3003      │    │    端口: 3004             │ │
 │  │  Element Plus    │    │    SQLite + SSH Pool     │ │
 │  │  ECharts 图表    │    │    WebSocket 实时推送     │ │
 │  └─────────────────┘    └──────────┬───────────────┘ │
@@ -199,10 +199,10 @@ bash start.sh
 - 检查 Python 和 Node.js 版本
 - 安装 Python 依赖（`pip install -r requirements.txt`）
 - 安装前端依赖（`npm install`）
-- 启动后端服务（默认端口 9999）
-- 启动前端开发服务器（默认端口 5173）
+- 启动后端服务（默认端口 3004）
+- 启动前端开发服务器（默认端口 3003）
 
-启动成功后，浏览器访问：**http://localhost:5173**
+启动成功后，浏览器访问：**http://localhost:3003**
 
 #### 手动启动
 
@@ -210,7 +210,7 @@ bash start.sh
 # 后端
 cd observation_web
 pip install -r requirements.txt
-python -m uvicorn backend.main:app --host 0.0.0.0 --port 9999
+python -m uvicorn backend.main:app --host 0.0.0.0 --port 3004
 
 # 前端（另开终端）
 cd observation_web/frontend
@@ -227,7 +227,7 @@ npm run build
 
 # 启动后端（前端由后端静态服务或 Nginx 代理）
 cd observation_web
-python -m uvicorn backend.main:app --host 0.0.0.0 --port 9999
+python -m uvicorn backend.main:app --host 0.0.0.0 --port 3004
 ```
 
 ---
@@ -836,7 +836,7 @@ API：`POST /api/alerts/batch-ack`
   },
   "server": {
     "host": "0.0.0.0",        // 监听地址
-    "port": 9999,              // 后端端口
+    "port": 3004,              // 后端端口
     "debug": false,            // 调试模式
     "cors_origins": ["*"]      // 跨域允许源
   },
@@ -853,7 +853,7 @@ API：`POST /api/alerts/batch-ack`
     "agent_deploy_path": "/OSM/coffer_data/observation_points",  // Agent 部署路径
     "agent_log_path": "/var/log/observation-points/alerts.log",  // Agent 告警日志路径
     "python_cmd": "python3",                                     // 阵列上的 Python 命令
-    "ingest_url": ""                                             // Agent 推送地址，如 http://192.168.1.100:9999/api/ingest
+    "ingest_url": ""                                             // Agent 推送地址，如 http://192.168.1.100:3004/api/ingest
   }
 }
 ```
@@ -1157,7 +1157,7 @@ Web 管理页面 → PUT /api/admin/observer-configs/{name}
 
 | 问题 | 排查方法 |
 |------|---------|
-| 端口被占用 | `lsof -i :9999` 或 `netstat -tlnp \| grep 9999`，终止占用进程或修改端口 |
+| 端口被占用 | `lsof -i :3004` 或 `netstat -tlnp \| grep 3004`，终止占用进程或修改端口 |
 | Python 依赖缺失 | `pip install -r requirements.txt` |
 | Node.js 依赖缺失 | `cd frontend && npm install` |
 | 数据库损坏 | 删除 `observation_web.db` 文件，重启后自动重建（数据将丢失） |
@@ -1237,10 +1237,10 @@ Web 管理页面 → PUT /api/admin/observer-configs/{name}
 
 | 服务 | 端口 | 说明 |
 |------|------|------|
-| Web 后端 API | 9999 | FastAPI 服务 |
-| 前端开发服务器 | 5173 | Vite 开发模式 |
+| Web 后端 API | 3004 | FastAPI 服务 |
+| 前端开发服务器 | 3003 | Vite 开发模式 |
 | SSH 连接 | 22 | 连接存储阵列 |
-| WebSocket | 9999 | 与后端同端口，路径 /ws/alerts |
+| WebSocket | 3004 | 与后端同端口，路径 /ws/alerts |
 
 ### 管理员默认账号
 
@@ -1815,9 +1815,9 @@ config.json 参数名变了
    - 在阵列上检查 `tail -f /var/log/observation-points/alerts.log`，确认 JSON 格式正确
    
 2. **Web 后端修改后**：
-   - 重启后端：`python -m uvicorn backend.main:app --reload --port 9999`
+   - 重启后端：`python -m uvicorn backend.main:app --reload --port 3004`
    - 点击阵列详情 → 刷新，观察活跃问题面板
-   - 检查 API 响应：`curl http://localhost:9999/api/alerts/recent?limit=5 | python -m json.tool`
+   - 检查 API 响应：`curl http://localhost:3004/api/alerts/recent?limit=5 | python -m json.tool`
 
 3. **Web 前端修改后**：
    - Vite 热更新会自动生效（开发模式下）

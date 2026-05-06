@@ -30,7 +30,7 @@ class DatabaseConfig:
 class ServerConfig:
     """Server configuration"""
     host: str = "0.0.0.0"
-    port: int = 8000
+    port: int = 3004
     debug: bool = False
     workers: int = 1
     cors_origins: List[str] = field(default_factory=lambda: ["*"])
