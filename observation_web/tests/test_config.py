@@ -10,7 +10,7 @@ class TestAppConfig:
     def test_default_values(self):
         c = AppConfig()
         assert c.server.host == "0.0.0.0"
-        assert c.server.port == 8000
+        assert c.server.port == 3004
         assert c.database.path == "observation_web.db"
         assert c.ssh.default_port == 22
 
@@ -21,7 +21,7 @@ class TestAppConfig:
     def test_save_and_load(self):
         """Config save/load round-trip."""
         c = AppConfig()
-        c.server.port = 9999
+        c.server.port = 3004
         c.save()
         # Just verify it doesn't crash
 

@@ -46,10 +46,14 @@ if ! $PYTHON_CMD -c "import fastapi" 2>/dev/null; then
     $PYTHON_CMD -m pip install -r requirements.txt -q
 fi
 
-# Install frontend dependencies if needed
-if [ ! -d "frontend/node_modules" ]; then
-    echo -e "${YELLOW}安装前端依赖...${NC}"
+# Install frontend dependencies — also reinstall when platform changes (e.g. macOS→Linux)
+CURRENT_PLATFORM="$(node -p "process.platform + '-' + process.arch" 2>/dev/null || echo 'unknown')"
+STORED_PLATFORM="$(cat frontend/node_modules/.node_platform 2>/dev/null || echo '')"
+if [ ! -d "frontend/node_modules" ] || [ "$CURRENT_PLATFORM" != "$STORED_PLATFORM" ]; then
+    echo -e "${YELLOW}安装前端依赖 (platform: $CURRENT_PLATFORM)...${NC}"
+    rm -rf frontend/node_modules
     cd frontend && npm install && cd ..
+    echo "$CURRENT_PLATFORM" > frontend/node_modules/.node_platform
 fi
 
 # Determine mode
@@ -60,7 +64,7 @@ fi
 
 # Start backend
 echo -e "${GREEN}启动后端服务 (FastAPI)...${NC}"
-$PYTHON_CMD -m uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload &
+$PYTHON_CMD -m uvicorn backend.main:app --host 0.0.0.0 --port 3004 --reload &
 BACKEND_PID=$!
 echo -e "  后端 PID: $BACKEND_PID"
 
@@ -80,9 +84,9 @@ cd ..
 echo ""
 echo -e "${GREEN}=====================================${NC}"
 echo -e "${GREEN}  服务已启动!                        ${NC}"
-echo -e "${GREEN}  后端 API: http://localhost:8000     ${NC}"
-echo -e "${GREEN}  前端界面: http://localhost:5173     ${NC}"
-echo -e "${GREEN}  API 文档: http://localhost:8000/docs${NC}"
+echo -e "${GREEN}  后端 API: http://localhost:3004     ${NC}"
+echo -e "${GREEN}  前端界面: http://localhost:3003     ${NC}"
+echo -e "${GREEN}  API 文档: http://localhost:3004/docs${NC}"
 echo -e "${GREEN}=====================================${NC}"
 echo ""
 echo -e "${YELLOW}按 Ctrl+C 停止所有服务${NC}"

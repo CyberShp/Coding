@@ -10,10 +10,10 @@ export default defineConfig({
     },
   },
   server: {
-    port: 3000,
+    port: 3003,
     proxy: {
       '/api': {
-        target: 'http://localhost:9999',
+        target: 'http://localhost:3004',
         changeOrigin: true,
         configure: (proxy) => {
           proxy.on('proxyReq', (proxyReq, req) => {
@@ -24,7 +24,7 @@ export default defineConfig({
         },
       },
       '/ws': {
-        target: 'ws://localhost:9999',
+        target: 'ws://localhost:3004',
         ws: true,
         configure: (proxy) => {
           proxy.on('proxyReq', (proxyReq, req) => {
