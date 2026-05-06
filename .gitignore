@@ -40,6 +40,13 @@ observation_web/*.tar.gz
 # 覆盖率
 .coverage
 
+# AI agent / tool config (session state, not project code)
+.cat-cafe/
+.claude/
+.codex/
+.gemini/
+.kimi/
+
 # 本地调试日志
 .cursor/debug.log
 
