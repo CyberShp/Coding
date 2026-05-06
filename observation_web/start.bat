@@ -36,8 +36,12 @@ if not exist "frontend\node_modules" (
     cd frontend && npm install && cd ..
 )
 
+REM Read backend port from config.json (single source of truth)
+for /f "usebackq" %%P in (`%PYTHON_CMD% -c "import json; c=json.load(open('config.json')); print(c.get('server',{}).get('port',8002))" 2^>nul`) do set BACKEND_PORT=%%P
+if not defined BACKEND_PORT set BACKEND_PORT=8002
+
 echo 启动后端服务...
-start "Backend" %PYTHON_CMD% -m uvicorn backend.main:app --host 0.0.0.0 --port 8001 --reload
+start "Backend" %PYTHON_CMD% -m uvicorn backend.main:app --host 0.0.0.0 --port %BACKEND_PORT% --reload
 
 echo 启动前端服务...
 cd frontend
@@ -47,9 +51,9 @@ cd ..
 echo.
 echo =====================================
 echo   服务已启动!
-echo   后端 API: http://localhost:8001
+echo   后端 API: http://localhost:%BACKEND_PORT%
 echo   前端界面: http://localhost:5174
-echo   API 文档: http://localhost:8001/docs
+echo   API 文档: http://localhost:%BACKEND_PORT%/docs
 echo =====================================
 echo.
 echo 关闭此窗口不会停止服务
