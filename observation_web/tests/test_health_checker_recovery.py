@@ -18,6 +18,7 @@ async def test_health_checker_waits_for_ready_before_restart(monkeypatch):
         host = "10.0.0.9"
         port = 22
         state = "connected"
+        last_error = ""
 
         def check_alive(self):
             return True
@@ -61,7 +62,7 @@ async def test_health_checker_waits_for_ready_before_restart(monkeypatch):
             if self.calls >= 11:
                 raise asyncio.CancelledError()
 
-    fake_status = SimpleNamespace(host="10.0.0.9", state="connected", agent_running=True, agent_deployed=True)
+    fake_status = SimpleNamespace(host="10.0.0.9", state="connected", agent_running=True, agent_deployed=True, agent_healthy=False)
 
     monkeypatch.setattr(main_mod, "get_ssh_pool", lambda: FakePool())
     monkeypatch.setattr(main_mod, "get_config", lambda: SimpleNamespace(remote=SimpleNamespace(auto_redeploy=True)))

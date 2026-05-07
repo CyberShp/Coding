@@ -171,7 +171,7 @@ const filteredAlerts = computed(() => {
 const filteredTotalCount = computed(() => filteredArrays.value.length)
 
 const onlineAgentCount = computed(() =>
-  filteredArrays.value.filter(a => a.agent_healthy).length,
+  filteredArrays.value.filter(a => a.agent_running).length,
 )
 
 const freshness = computed(() => {

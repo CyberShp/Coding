@@ -162,8 +162,11 @@ import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Search, Refresh } from '@element-plus/icons-vue'
 import api from '../api'
+import { useCardStore } from '../stores/cards'
 
 const AUTO_SYNC_SECONDS = 300
+
+const cardStore = useCardStore()
 
 const loading = ref(false)
 const syncing = ref(false)
@@ -179,8 +182,6 @@ const filters = ref({
 })
 const currentPage = ref(1)
 const pageSize = ref(50)
-const nextAutoSyncAt = ref(Date.now() + AUTO_SYNC_SECONDS * 1000)
-const nowTs = ref(Date.now())
 
 const modelOptions = computed(() => [...new Set(allCards.value.map(c => (c.model || '').trim()).filter(Boolean))].sort())
 const hostOptions = computed(() => [...new Set(allCards.value.map(c => (c.array_host || '').trim()).filter(Boolean))].sort())
@@ -209,12 +210,7 @@ const paginatedCards = computed(() => {
   return filteredCards.value.slice(start, start + pageSize.value)
 })
 
-const nextAutoSyncText = computed(() => {
-  const diff = Math.max(0, Math.floor((nextAutoSyncAt.value - nowTs.value) / 1000))
-  const mm = String(Math.floor(diff / 60)).padStart(2, '0')
-  const ss = String(diff % 60).padStart(2, '0')
-  return `${mm}:${ss}`
-})
+const nextAutoSyncText = computed(() => cardStore.nextAutoSyncText)
 
 async function loadData() {
   loading.value = true
@@ -310,7 +306,7 @@ async function syncCards() {
       ElMessage.success(`同步完成: ${d.synced} 条卡件已更新`)
     }
     await loadData()
-    nextAutoSyncAt.value = Date.now() + AUTO_SYNC_SECONDS * 1000
+    cardStore.resetTimer()
   } catch (e) {
     ElMessage.error('同步失败: ' + (e.response?.data?.detail || e.message))
   } finally {
@@ -326,23 +322,12 @@ onMounted(() => {
   restoreFilters()
 })
 
-let autoSyncTimer = null
-let secondTicker = null
-
 onMounted(() => {
-  autoSyncTimer = setInterval(() => {
-    if (!syncing.value) {
-      syncCards()
-    }
-  }, AUTO_SYNC_SECONDS * 1000)
-  secondTicker = setInterval(() => {
-    nowTs.value = Date.now()
-  }, 1000)
+  cardStore.startTimers(() => { if (!syncing.value) syncCards() })
 })
 
 onUnmounted(() => {
-  if (autoSyncTimer) clearInterval(autoSyncTimer)
-  if (secondTicker) clearInterval(secondTicker)
+  cardStore.stopTimers()
 })
 
 watch(filters, (val) => {

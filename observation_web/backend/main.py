@@ -131,6 +131,8 @@ async def _health_checker():
     """Lightweight health checker with faster cadence for status freshness."""
     from .core.agent_deployer import AgentDeployer
     from .core.ssh_pool import tcp_probe
+    from .core.runtime_status import get_transport_info
+    from .models.array import ConnectionState
     from .api.arrays import _array_status_cache
     from .api.websocket import broadcast_status_update
 
@@ -189,14 +191,38 @@ async def _health_checker():
                         _reset_bg_failure(f"health_checker/{array_id}")
                         continue
 
-                    # Run heavier agent health checks every 10 cycles (~5 min)
-                    if check_count % 10 == 0 and status_obj.agent_running:
+                    # Re-derive connection state from live transport info so the
+                    # broadcast always reflects reality, not the stale cache default.
+                    transport = get_transport_info(conn)
+                    if transport["transport_connected"]:
+                        if status_obj.agent_running and status_obj.agent_healthy:
+                            status_obj.state = ConnectionState.CONNECTED
+                        elif status_obj.agent_running:
+                            status_obj.state = ConnectionState.DEGRADED
+                        else:
+                            status_obj.state = ConnectionState.CONNECTED
+                    else:
+                        status_obj.state = ConnectionState.DISCONNECTED
+
+                    # Run heavier agent health checks every 10 cycles (~5 min).
+                    # Gate removed: probe ALL connected arrays, not just those
+                    # already known to be running, so newly started agents are detected.
+                    if check_count % 10 == 0:
                         deployer = AgentDeployer(conn, config)
                         still_running = await asyncio.wait_for(
                             asyncio.get_running_loop().run_in_executor(None, deployer.check_running),
                             timeout=10,
                         )
-                        if not still_running:
+                        if still_running and not status_obj.agent_running:
+                            # Newly detected running agent — promote state
+                            status_obj.agent_running = True
+                            status_obj.agent_deployed = True
+                            sys_info(
+                                "health_check",
+                                f"Agent detected running on {array_id}",
+                                {"array_id": array_id, "host": status_obj.host},
+                            )
+                        elif not still_running and status_obj.agent_running:
                             status_obj.agent_running = False
                             sys_warning(
                                 "health_check",
