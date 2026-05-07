@@ -134,12 +134,12 @@
               <el-button
                 size="small"
                 :loading="testing"
-                :disabled="!array?.array_id || array?.state !== 'connected'"
+                :disabled="!array?.array_id || array?.state === 'disconnected'"
                 @click="handleTestRun"
               >
                 <el-icon><VideoPlay /></el-icon> 试运行
               </el-button>
-              <span v-if="array?.state !== 'connected'" class="test-hint">（阵列未连接）</span>
+              <span v-if="array?.state === 'disconnected'" class="test-hint">（阵列未连接）</span>
             </div>
 
             <div v-if="testResult" class="test-result">

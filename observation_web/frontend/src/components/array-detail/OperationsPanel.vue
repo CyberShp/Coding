@@ -39,25 +39,25 @@
           <el-button
             type="primary" size="small"
             :loading="deploying"
-            :disabled="array?.state !== 'connected'"
+            :disabled="array?.state === 'disconnected'"
             @click="handleDeployAgent"
           >部署 Agent</el-button>
           <el-button
             type="success" size="small"
             :loading="starting"
-            :disabled="array?.state !== 'connected' || array?.agent_running"
+            :disabled="array?.state === 'disconnected' || array?.agent_running"
             @click="handleStartAgent"
           >启动 Agent</el-button>
           <el-button
             size="small"
             :loading="restarting"
-            :disabled="array?.state !== 'connected'"
+            :disabled="array?.state === 'disconnected'"
             @click="handleRestartAgent"
           >重启 Agent</el-button>
           <el-button
             type="danger" size="small"
             :loading="stopping"
-            :disabled="array?.state !== 'connected' || !array?.agent_running"
+            :disabled="array?.state === 'disconnected' || !array?.agent_running"
             @click="handleStopAgent"
           >停止 Agent</el-button>
         </div>

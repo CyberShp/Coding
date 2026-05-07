@@ -6,7 +6,7 @@
         <div class="page-header-content">
           <span class="page-title">{{ array?.name || '阵列详情' }}</span>
           <div class="header-actions">
-            <el-button v-if="array && array.state !== 'connected'" type="primary" size="small" @click="handleConnect">连接</el-button>
+            <el-button v-if="array && array.state === 'disconnected'" type="primary" size="small" @click="handleConnect">连接</el-button>
             <el-button v-else-if="array" size="small" @click="handleDisconnect">断开</el-button>
             <el-button size="small" @click="handleRefresh" :loading="refreshing">
               <el-icon><Refresh /></el-icon> 刷新

@@ -93,7 +93,7 @@
           <template #default="{ row }">
             <el-button-group>
               <el-button
-                v-if="row.state !== 'connected'"
+                v-if="row.state === 'disconnected'"
                 size="small"
                 type="primary"
                 @click="handleConnect(row)"

@@ -13,7 +13,8 @@ export function getArrayFreshness(arr) {
 }
 
 export function getArrayStatusClass(arr) {
-  if (arr.state !== 'connected') return 'status-offline'
+  if (arr.state === 'disconnected') return 'status-offline'
+  if (arr.state === 'degraded') return 'status-warning'
   const issues = arr.active_issues || []
   if (issues.length > 0) {
     const hasError = issues.some(i => i.level === 'error' || i.level === 'critical')
@@ -26,7 +27,8 @@ export function getArrayStatusClass(arr) {
 }
 
 export function getStatusDotClass(arr) {
-  if (arr.state !== 'connected') return 'dot-offline'
+  if (arr.state === 'disconnected') return 'dot-offline'
+  if (arr.state === 'degraded') return 'dot-warning'
   const issues = arr.active_issues || []
   if (issues.length > 0) {
     return issues.some(i => i.level === 'error' || i.level === 'critical')
@@ -38,7 +40,8 @@ export function getStatusDotClass(arr) {
 }
 
 export function getHeatmapDotClass(arr) {
-  if (arr.state !== 'connected') return 'heatmap-offline'
+  if (arr.state === 'disconnected') return 'heatmap-offline'
+  if (arr.state === 'degraded') return 'heatmap-warning'
   const issues = arr.active_issues || []
   if (issues.length > 0) {
     return issues.some(i => i.level === 'error' || i.level === 'critical')
