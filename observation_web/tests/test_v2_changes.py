@@ -421,11 +421,13 @@ class TestAgentDeployerStagingUpload:
         result = deployer.deploy()
         assert result["ok"] is True
 
-        # Verify upload went to staging path
+        # Verify uploads: first is package to staging, second is agent config
         upload_calls = mock_conn.upload_file.call_args_list
-        assert len(upload_calls) == 1
+        assert len(upload_calls) == 2
         _, staging_path = upload_calls[0][0]
         assert "/home/permitdir/" in staging_path
+        _, config_path = upload_calls[1][0]
+        assert config_path == "/etc/observation-points/config.json"
 
         # Verify mv command from staging to deploy dir
         execute_calls = [c[0][0] for c in mock_conn.execute.call_args_list]

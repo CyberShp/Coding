@@ -18,6 +18,11 @@ export const useCardStore = defineStore('cards', () => {
   })
 
   function startTimers(syncFn) {
+    // If deadline already passed while navigated away, fire immediately on remount
+    if (nextAutoSyncAt.value <= Date.now()) {
+      syncFn()
+      nextAutoSyncAt.value = Date.now() + AUTO_SYNC_SECONDS * 1000
+    }
     if (_autoSyncTimer) return // already running, deadline is preserved
     _autoSyncTimer = setInterval(() => {
       syncFn()

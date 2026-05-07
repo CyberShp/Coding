@@ -2,6 +2,7 @@
 Agent deployment utilities for observation_points.
 """
 
+import json
 import logging
 import os
 import posixpath
@@ -105,12 +106,29 @@ class AgentDeployer:
                     self.conn.host, svc_err,
                 )
 
-            # Step 4: Configuration merge
+            # Step 4: Upload agent config (ensures all observers including abnormal_reset load)
             try:
-                from ..api.observer_configs import get_all_observer_overrides
-                # This requires db session - skip for now
-            except Exception:
-                pass
+                config_data = self._generate_agent_config()
+                config_json = json.dumps(config_data, indent=2, ensure_ascii=False)
+                config_remote_path = "/etc/observation-points/config.json"
+                self._ensure_remote_dir(posixpath.dirname(config_remote_path))
+                if not self._upload_text_content(config_json, config_remote_path):
+                    warnings.append("agent config upload failed — abnormal_reset may not load")
+                    logger.warning(
+                        "Failed to upload agent config to %s on %s",
+                        config_remote_path, self.conn.host,
+                    )
+                else:
+                    logger.info(
+                        "Uploaded agent config to %s on %s",
+                        config_remote_path, self.conn.host,
+                    )
+            except Exception as cfg_exc:
+                warnings.append(f"agent config generation failed: {cfg_exc}")
+                logger.warning(
+                    "Agent config generation/upload failed on %s: %s",
+                    self.conn.host, cfg_exc,
+                )
 
             result = {
                 "ok": True,
@@ -571,6 +589,40 @@ class AgentDeployer:
                 return True
             await asyncio.sleep(interval)
             elapsed += interval
+        return False
+
+    def _generate_agent_config(self) -> dict:
+        """Load DEFAULT_CONFIG from the agent package (includes all observers: abnormal_reset etc)."""
+        import importlib.util
+        loader_py = Path(__file__).parent.parent.parent / "agent" / "config" / "loader.py"
+        spec = importlib.util.spec_from_file_location("_agent_config_loader", str(loader_py))
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod.ConfigLoader.DEFAULT_CONFIG
+
+    def _ensure_remote_dir(self, remote_dir: str) -> None:
+        """Create directory on the remote host (no-op if already exists)."""
+        self.conn.execute(f"mkdir -p {shlex.quote(remote_dir)}")
+
+    def _upload_text_content(self, content: str, remote_path: str) -> bool:
+        """Upload a string as a file to the remote host."""
+        upload_content = getattr(self.conn, "upload_content", None)
+        if callable(upload_content):
+            return bool(upload_content(remote_path, content.encode("utf-8")))
+
+        upload_file = getattr(self.conn, "upload_file", None)
+        if callable(upload_file):
+            with tempfile.NamedTemporaryFile(
+                mode="w", suffix=".json", delete=False, encoding="utf-8"
+            ) as f:
+                f.write(content)
+                tmp = f.name
+            try:
+                ok, _ = upload_file(tmp, remote_path)
+                return ok
+            finally:
+                Path(tmp).unlink(missing_ok=True)
+
         return False
 
     def _build_package(self) -> str:
