@@ -11,6 +11,7 @@ created: 2026-04-20
 
 | ID | Name | Status | Owner | Link |
 |----|------|--------|-------|------|
+| F208 | Custom Observer Studio | done | codex | docs/features/F208-custom-observer-studio.md |
 | F203 | Collection Heartbeat Indicator | done | opus | docs/features/innovation-candidates.md |
 | F204 | Observer Activity Map | done | opus | docs/features/innovation-candidates.md |
 | F205 | Live Alert Stream Mode | done | opus | docs/features/innovation-candidates.md |

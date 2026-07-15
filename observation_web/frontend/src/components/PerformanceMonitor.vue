@@ -137,7 +137,7 @@ const latestMetrics = computed(() => {
 const totalDataPoints = computed(() => metrics.value.length)
 
 const cpuStatusClass = computed(() => {
-  if (!latestMetrics.value?.cpu0) return ''
+  if (latestMetrics.value?.cpu0 == null) return ''
   if (latestMetrics.value.cpu0 >= 90) return 'status-error'
   if (latestMetrics.value.cpu0 >= 70) return 'status-warning'
   return 'status-ok'

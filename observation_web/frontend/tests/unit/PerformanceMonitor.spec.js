@@ -142,7 +142,7 @@ describe('PerformanceMonitor', () => {
   describe('cpuStatusClass computed', () => {
     it('should return status-error for CPU >= 90', () => {
       const getStatusClass = (cpu0) => {
-        if (!cpu0) return ''
+        if (cpu0 == null) return ''
         if (cpu0 >= 90) return 'status-error'
         if (cpu0 >= 70) return 'status-warning'
         return 'status-ok'
@@ -154,7 +154,7 @@ describe('PerformanceMonitor', () => {
 
     it('should return status-warning for CPU >= 70', () => {
       const getStatusClass = (cpu0) => {
-        if (!cpu0) return ''
+        if (cpu0 == null) return ''
         if (cpu0 >= 90) return 'status-error'
         if (cpu0 >= 70) return 'status-warning'
         return 'status-ok'
@@ -166,7 +166,7 @@ describe('PerformanceMonitor', () => {
 
     it('should return status-ok for CPU < 70', () => {
       const getStatusClass = (cpu0) => {
-        if (!cpu0) return ''
+        if (cpu0 == null) return ''
         if (cpu0 >= 90) return 'status-error'
         if (cpu0 >= 70) return 'status-warning'
         return 'status-ok'

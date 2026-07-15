@@ -40,6 +40,14 @@ class AlarmTypeObserver(BaseObserver):
     
     # 匹配 AlarmType:X action（X=0/1/2, action=event/fault/resume）
     ALARM_TYPE_PATTERN = re.compile(r'AlarmType:(\d+)\s+(event|fault|resume)', re.IGNORECASE)
+
+    # Older array releases log "send/resume alarm: alarm type(...)".
+    LEGACY_ALARM_PATTERN = re.compile(
+        r'(send|resume)\s+alarm:\s*alarm\s+type\((\d+)\)'
+        r'(?:.*?alarm\s+name\(([^)]*)\))?'
+        r'(?:.*?alarm\s+id\(([^)]*)\))?',
+        re.IGNORECASE,
+    )
     
     # 匹配 AlarmId:XXX
     ALARM_ID_PATTERN = re.compile(r'AlarmId:(\S+)', re.IGNORECASE)
@@ -206,19 +214,23 @@ class AlarmTypeObserver(BaseObserver):
         """解析日志行，提取 AlarmType 告警信息"""
         # 匹配 AlarmType:X action
         type_match = self.ALARM_TYPE_PATTERN.search(line)
-        if not type_match:
-            return None
-        
-        alarm_type = int(type_match.group(1))
-        action = type_match.group(2).lower()  # event / fault / resume
-        
-        # 提取 AlarmId
-        id_match = self.ALARM_ID_PATTERN.search(line)
-        alarm_id = id_match.group(1).strip() if id_match else None
-        
-        # 提取 objType
-        obj_match = self.OBJ_TYPE_PATTERN.search(line)
-        obj_type = obj_match.group(1).strip() if obj_match else '未知'
+        if type_match:
+            alarm_type = int(type_match.group(1))
+            action = type_match.group(2).lower()  # event / fault / resume
+            id_match = self.ALARM_ID_PATTERN.search(line)
+            alarm_id = id_match.group(1).strip() if id_match else None
+            obj_match = self.OBJ_TYPE_PATTERN.search(line)
+            obj_type = obj_match.group(1).strip() if obj_match else '未知'
+        else:
+            legacy_match = self.LEGACY_ALARM_PATTERN.search(line)
+            if not legacy_match:
+                return None
+            legacy_action, legacy_type, legacy_name, legacy_id = legacy_match.groups()
+            is_resume = legacy_action.lower() == 'resume'
+            alarm_type = 2 if is_resume else int(legacy_type)
+            action = 'resume' if is_resume else ('event' if alarm_type == 0 else 'fault')
+            alarm_id = legacy_id.strip() if legacy_id else None
+            obj_type = legacy_name.strip() if legacy_name else '未知'
         
         # 提取时间戳
         timestamp = self._parse_timestamp(line)

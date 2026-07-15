@@ -93,6 +93,10 @@ class CustomMonitorObserver(BaseObserver):
             mt = config.get("match_type", "regex")
             me = config.get("match_expression", "")
             self.strategy, self.strategy_config = _v1_to_v2_strategy(mt, me)
+        if self.strategy not in _V2_STRATEGIES:
+            raise ValueError(f"Unknown extraction strategy: {self.strategy}")
+        if not isinstance(self.strategy_config, dict):
+            raise ValueError("strategy_config must be an object")
 
         # Condition evaluation
         self.match_condition: str = config.get("match_condition", "found")
@@ -110,6 +114,24 @@ class CustomMonitorObserver(BaseObserver):
         # Stateful extraction engine (owns diff-strategy previous-value store)
         self._engine = ExtractionEngine()
         self._last_alert_time: Optional[float] = None
+        self.template_id = config.get("template_id")
+        self.template_key = config.get("template_key", "")
+        self.template_version = config.get("template_version", 0)
+        self.visibility = config.get("visibility", "team")
+        self.owner_id = config.get("owner_id", "")
+        self.team_scope = config.get("team_scope", "")
+
+    def _template_details(self) -> Dict[str, Any]:
+        """Metadata lets the backend apply audience rules independently of execution."""
+        return {
+            "custom_observer": True,
+            "template_id": self.template_id,
+            "template_key": self.template_key,
+            "template_version": self.template_version,
+            "visibility": self.visibility,
+            "owner_id": self.owner_id,
+            "team_scope": self.team_scope,
+        }
 
     # ── Command execution ──────────────────────────────────────────────────
 
@@ -209,6 +231,7 @@ class CustomMonitorObserver(BaseObserver):
                 has_alert=False,
                 message=f"Custom monitor {self.name} OK",
                 details={
+                    **self._template_details(),
                     "command": self.command[:80],
                     "strategy": self.strategy,
                     "value": str(result.value)[:200] if result.value is not None else None,
@@ -223,7 +246,7 @@ class CustomMonitorObserver(BaseObserver):
             return self.create_result(
                 has_alert=False,
                 message=f"Custom monitor {self.name} (cooldown {remaining}s)",
-                details={"cooldown_remaining": remaining},
+                details={**self._template_details(), "cooldown_remaining": remaining},
             )
         self._last_alert_time = now
         self._consecutive_count = 0  # reset after alert fires
@@ -237,6 +260,7 @@ class CustomMonitorObserver(BaseObserver):
             alert_level=self.alert_level,
             message=msg,
             details={
+                **self._template_details(),
                 "command": self.command,
                 "strategy": self.strategy,
                 "value": str(result.value)[:200] if result.value is not None else None,
