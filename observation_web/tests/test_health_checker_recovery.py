@@ -13,11 +13,13 @@ async def test_health_checker_waits_for_ready_before_restart(monkeypatch):
     from backend.api import arrays as arrays_api
     from backend.core import agent_deployer as deployer_mod
     from backend.core import ssh_pool as ssh_pool_mod
+    from backend.models.array import AgentState, ArrayStatus, ConnectionState
 
     class FakeConn:
         host = "10.0.0.9"
         port = 22
-        state = "connected"
+        state = ConnectionState.CONNECTED
+        last_error = ""
 
         def check_alive(self):
             return True
@@ -33,13 +35,16 @@ async def test_health_checker_waits_for_ready_before_restart(monkeypatch):
         def __init__(self, conn, config):
             self.start_calls = 0
             self.wait_calls = 0
+            self.status_calls = 0
             FakeDeployer.instances.append(self)
 
-        def check_running(self):
-            return False
-
-        def check_deployed(self):
-            return True
+        def get_agent_status(self):
+            self.status_calls += 1
+            return {
+                "deployed": True,
+                "running": self.status_calls > 1,
+                "source": "systemd",
+            }
 
         async def wait_for_ready(self, timeout=1200, interval=30):
             self.wait_calls += 1
@@ -58,10 +63,18 @@ async def test_health_checker_waits_for_ready_before_restart(monkeypatch):
 
         async def __call__(self, seconds):
             self.calls += 1
-            if self.calls >= 11:
+            if self.calls >= 2:
                 raise asyncio.CancelledError()
 
-    fake_status = SimpleNamespace(host="10.0.0.9", state="connected", agent_running=True, agent_deployed=True)
+    fake_status = ArrayStatus(
+        array_id="arr-ready",
+        name="ready",
+        host="10.0.0.9",
+        state=ConnectionState.CONNECTED,
+        agent_state=AgentState.RUNNING,
+        agent_running=True,
+        agent_deployed=True,
+    )
 
     monkeypatch.setattr(main_mod, "get_ssh_pool", lambda: FakePool())
     monkeypatch.setattr(main_mod, "get_config", lambda: SimpleNamespace(remote=SimpleNamespace(auto_redeploy=True)))

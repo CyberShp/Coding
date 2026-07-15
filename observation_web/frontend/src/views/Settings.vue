@@ -289,8 +289,11 @@ const preferencesStore = usePreferencesStore()
 const tags = ref([])
 const allArrays = ref([])
 const observerOptions = ref([
-  'alarm_type', 'card_info', 'card_recovery', 'disk_error', 'eth_link',
-  'fc_link', 'log_watcher', 'port_error', 'process_monitor',
+  'error_code', 'link_status', 'card_recovery', 'sensitive_info',
+  'alarm_type', 'memory_leak', 'cpu_usage', 'cmd_response', 'sig_monitor',
+  'port_fec', 'port_speed', 'pcie_bandwidth', 'card_info', 'port_traffic',
+  'controller_state', 'disk_state', 'process_crash', 'io_timeout',
+  'port_error_code', 'process_restart', 'sfp_monitor', 'abnormal_reset', 'start_work',
 ])
 const l1Tags = computed(() => tags.value.filter(t => t.level === 1))
 const preferences = reactive({

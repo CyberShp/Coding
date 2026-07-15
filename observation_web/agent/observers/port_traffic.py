@@ -19,6 +19,7 @@
 
 import json
 import logging
+import os
 import re
 import time
 from datetime import datetime, timedelta
@@ -70,6 +71,7 @@ class PortTrafficObserver(BaseObserver):
     - retention_hours: 本地保留时长（默认 2）
     - parse_pattern: 自定义命令的解析正则
     """
+    persistent_state_fields = BaseObserver.persistent_state_fields + ('_last_bytes', '_last_ts')
 
     DEFAULT_PATTERN = r'(?P<port>\S+)\s+(?P<tx_bytes>\d+)\s+(?P<rx_bytes>\d+)'
 
@@ -124,8 +126,7 @@ class PortTrafficObserver(BaseObserver):
         self._detected_protocol = detected_protocol
 
         if not current:
-            return self.create_result(
-                has_alert=False,
+            return self.create_error_result(
                 message="端口流量采集无数据（可能无网络端口）",
                 details={
                     'mode': active_mode,
@@ -178,16 +179,15 @@ class PortTrafficObserver(BaseObserver):
             self._cleanup_counter = 0
             self._cleanup_old_data()
 
-        if reporter and hasattr(reporter, 'record_metrics'):
-            for rec in records:
-                reporter.record_metrics({
+        if reporter and hasattr(reporter, 'record_metrics_batch'):
+            reporter.record_metrics_batch([{
                     'port': rec['port'],
                     'tx_rate_bps': rec.get('tx_rate_bps', 0),
                     'rx_rate_bps': rec.get('rx_rate_bps', 0),
                     'mode': active_mode,
                     'protocol': detected_protocol,
                     'observer': self.name,
-                })
+                } for rec in records])
 
         return self.create_result(
             has_alert=False,
@@ -535,22 +535,22 @@ class PortTrafficObserver(BaseObserver):
             cutoff = datetime.now() - timedelta(hours=self.retention_hours)
             cutoff_iso = cutoff.isoformat()
 
-            lines_to_keep = []
+            temp_path = self.output_path.with_suffix(self.output_path.suffix + '.tmp')
             with open(self.output_path, 'r', encoding='utf-8') as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        rec = json.loads(line)
-                        if rec.get('ts', '') >= cutoff_iso:
-                            lines_to_keep.append(line)
-                    except json.JSONDecodeError:
-                        continue
-
-            with open(self.output_path, 'w', encoding='utf-8') as f:
-                for line in lines_to_keep:
-                    f.write(line + '\n')
+                with open(temp_path, 'w', encoding='utf-8') as output:
+                    for line in f:
+                        stripped = line.strip()
+                        if not stripped:
+                            continue
+                        try:
+                            rec = json.loads(stripped)
+                            if rec.get('ts', '') >= cutoff_iso:
+                                output.write(stripped + '\n')
+                        except json.JSONDecodeError:
+                            continue
+                    output.flush()
+                    os.fsync(output.fileno())
+            os.replace(str(temp_path), str(self.output_path))
 
         except Exception as e:
             logger.error(f"清理 traffic.jsonl 失败: {e}")

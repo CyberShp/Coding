@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from ..core.base import BaseObserver, ObserverResult, AlertLevel
-from ..utils.helpers import tail_file, get_bus_to_slot_mapping
+from ..utils.helpers import tail_file_cursor, get_bus_to_slot_mapping
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +27,9 @@ class CardRecoveryObserver(BaseObserver):
     - 统计累计修复次数
     - 记录最近3次修复的时间和 PCIe 槽位号
     """
+    persistent_state_fields = BaseObserver.persistent_state_fields + (
+        '_file_cursor', '_first_run', '_total_count', '_recent_events',
+    )
     
     # PCIe bus 信息提取：dev(0:x.x.x) 或 top(0:x.x.x)，支持 4.40.0 等格式
     PCIE_SLOT_PATTERN = re.compile(r'((?:dev|top)\(0:[\d.]+\))', re.IGNORECASE)
@@ -49,7 +52,7 @@ class CardRecoveryObserver(BaseObserver):
         self.max_lines_per_check = config.get('max_lines_per_check', 1000)
         
         # 文件读取位置
-        self._file_position = 0
+        self._file_cursor = {}
         self._first_run = True
         
         # 统计数据
@@ -58,18 +61,19 @@ class CardRecoveryObserver(BaseObserver):
     
     def check(self) -> ObserverResult:
         """检查卡修复事件"""
+        if not self.log_path.exists():
+            return self.create_error_result("卡修复日志不存在", {'log_path': str(self.log_path)})
         # 首次运行时跳过历史数据
         skip_existing = self._first_run
         self._first_run = False
         
         # 读取新增日志行
-        new_lines, new_position = tail_file(
+        new_lines, self._file_cursor = tail_file_cursor(
             self.log_path,
-            self._file_position,
+            self._file_cursor,
             self.max_lines_per_check,
             skip_existing=skip_existing
         )
-        self._file_position = new_position
         
         # 本次检测到的事件数
         new_count = 0

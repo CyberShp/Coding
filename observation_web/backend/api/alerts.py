@@ -8,7 +8,7 @@ import logging
 from datetime import datetime, timedelta
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -23,8 +23,11 @@ router = APIRouter(prefix="/alerts", tags=["alerts"])
 
 @router.get("", response_model=List[AlertResponse])
 async def list_alerts(
+    response: Response,
     array_id: Optional[str] = Query(None, description="Filter by array ID"),
+    array_ids: Optional[str] = Query(None, description="Comma-separated array IDs"),
     observer_name: Optional[str] = Query(None, description="Filter by observer"),
+    observer_names: Optional[str] = Query(None, description="Comma-separated observer names"),
     level: Optional[str] = Query(None, description="Filter by level"),
     hours: Optional[int] = Query(24, description="Time range in hours"),
     limit: int = Query(100, ge=1, le=1000),
@@ -41,6 +44,8 @@ async def list_alerts(
     - hours: Time range (default 24 hours)
     """
     store = get_alert_store()
+    scoped_array_ids = [value for value in (array_ids or "").split(",") if value] if array_ids is not None else None
+    scoped_observers = [value for value in (observer_names or "").split(",") if value] if observer_names is not None else None
     
     start_time = None
     if hours:
@@ -49,12 +54,22 @@ async def list_alerts(
     alerts = await store.get_alerts(
         db,
         array_id=array_id,
+        array_ids=scoped_array_ids,
         observer_name=observer_name,
+        observer_names=scoped_observers,
         level=level,
         start_time=start_time,
         limit=limit,
         offset=offset,
     )
+    response.headers["X-Total-Count"] = str(await store.get_alert_count(
+        db,
+        array_id=array_id,
+        array_ids=scoped_array_ids,
+        observer_names=[observer_name] if observer_name else scoped_observers,
+        level=level,
+        start_time=start_time,
+    ))
 
     # Populate array_name from DB
     if alerts:
@@ -73,11 +88,17 @@ async def list_alerts(
 @router.get("/stats", response_model=AlertStats)
 async def get_alert_stats(
     hours: int = Query(24, description="Time range in hours"),
+    array_ids: Optional[str] = Query(None, description="Comma-separated array IDs"),
+    observer_names: Optional[str] = Query(None, description="Comma-separated observer names"),
     db: AsyncSession = Depends(get_db),
 ):
     """Get alert statistics"""
     store = get_alert_store()
-    return await store.get_stats(db, hours=hours)
+    scoped_array_ids = [value for value in (array_ids or "").split(",") if value] if array_ids is not None else None
+    scoped_observers = [value for value in (observer_names or "").split(",") if value] if observer_names is not None else None
+    return await store.get_stats(
+        db, hours=hours, array_ids=scoped_array_ids, observer_names=scoped_observers
+    )
 
 
 @router.get("/recent")
@@ -130,6 +151,8 @@ async def get_recent_alerts(
 @router.get("/aggregated")
 async def get_aggregated_alerts(
     array_id: Optional[str] = Query(None),
+    array_ids: Optional[str] = Query(None),
+    observer_names: Optional[str] = Query(None),
     hours: int = Query(24, ge=1, le=168),
     limit: int = Query(200, ge=1, le=1000),
     db: AsyncSession = Depends(get_db),
@@ -141,9 +164,12 @@ async def get_aggregated_alerts(
     from ..core.alert_aggregator import aggregate_alerts
     store = get_alert_store()
     start_time = datetime.now() - timedelta(hours=hours)
+    scoped_array_ids = [value for value in (array_ids or "").split(",") if value] if array_ids is not None else None
+    scoped_observers = [value for value in (observer_names or "").split(",") if value] if observer_names is not None else None
 
     alerts = await store.get_alerts(
-        db, array_id=array_id, start_time=start_time, limit=limit,
+        db, array_id=array_id, array_ids=scoped_array_ids,
+        observer_names=scoped_observers, start_time=start_time, limit=limit,
     )
 
     from ..models.array import ArrayModel
@@ -216,7 +242,9 @@ async def get_alert_summary(
 async def export_alerts(
     format: str = Query("csv", description="Export format: csv"),
     array_id: Optional[str] = Query(None, description="Filter by array ID"),
+    array_ids: Optional[str] = Query(None, description="Comma-separated array IDs"),
     observer_name: Optional[str] = Query(None, description="Filter by observer"),
+    observer_names: Optional[str] = Query(None, description="Comma-separated observer names"),
     level: Optional[str] = Query(None, description="Filter by level"),
     hours: int = Query(24, description="Time range in hours"),
     db: AsyncSession = Depends(get_db),
@@ -229,11 +257,15 @@ async def export_alerts(
     store = get_alert_store()
     
     start_time = datetime.now() - timedelta(hours=hours)
+    scoped_array_ids = [value for value in (array_ids or "").split(",") if value] if array_ids is not None else None
+    scoped_observers = [value for value in (observer_names or "").split(",") if value] if observer_names is not None else None
     
     alerts = await store.get_alerts(
         db,
         array_id=array_id,
+        array_ids=scoped_array_ids,
         observer_name=observer_name,
+        observer_names=scoped_observers,
         level=level,
         start_time=start_time,
         limit=10000,  # Max export limit

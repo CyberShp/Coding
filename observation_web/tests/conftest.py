@@ -58,7 +58,7 @@ async def app_client():
     db_mod.AsyncSessionLocal = session_factory
 
     # Import all models so Base.metadata is fully populated, then create tables
-    from backend.models import array, alert, query, lifecycle, scheduler, traffic, task_session, snapshot  # noqa: F401
+    from backend.models import array, alert, query, lifecycle, scheduler, traffic, task_session, snapshot, card_inventory  # noqa: F401
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
@@ -90,7 +90,7 @@ async def app_client_with_db():
     db_mod._async_engine = engine
     db_mod.AsyncSessionLocal = session_factory
 
-    from backend.models import array, alert, query, lifecycle, scheduler, traffic, task_session, snapshot, tag, user_session, user_preference  # noqa: F401
+    from backend.models import array, alert, query, lifecycle, scheduler, traffic, task_session, snapshot, tag, user_session, user_preference, card_inventory  # noqa: F401
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 

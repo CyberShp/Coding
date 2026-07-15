@@ -29,6 +29,7 @@ class ControllerStateObserver(BaseObserver):
         "keywords": ["online", "offline", "degraded"]
     }
     """
+    persistent_state_fields = BaseObserver.persistent_state_fields + ('_last_states',)
 
     def __init__(self, name: str, config: Dict[str, Any]):
         super().__init__(name, config)
@@ -38,8 +39,7 @@ class ControllerStateObserver(BaseObserver):
 
     def check(self, reporter=None) -> ObserverResult:
         if not self.command:
-            return self.create_result(
-                has_alert=False,
+            return self.create_error_result(
                 message="控制器状态监控：未配置命令，请在 config.json 中设置 command",
             )
 
@@ -50,13 +50,13 @@ class ControllerStateObserver(BaseObserver):
                 alert_level=AlertLevel.WARNING,
                 message=f"控制器状态查询失败: {stderr[:100]}",
                 details={'stderr': stderr, 'return_code': ret},
+                collection_ok=False,
             )
 
         # Parse controller states from output
         current_states = self._parse_states(stdout)
         if not current_states:
-            return self.create_result(
-                has_alert=False,
+            return self.create_error_result(
                 message="控制器状态查询正常，未识别到控制器条目",
                 details={'raw': stdout[:500]},
             )
@@ -72,7 +72,7 @@ class ControllerStateObserver(BaseObserver):
                     'new_state': state,
                 })
             # Alert on non-normal states
-            if state.lower() in ('offline', 'degraded', 'fault', 'absent'):
+            if old_state is None and state.lower() in ('offline', 'degraded', 'fault', 'absent'):
                 if not any(c['id'] == ctrl_id for c in changes):
                     changes.append({
                         'id': ctrl_id,
@@ -84,12 +84,14 @@ class ControllerStateObserver(BaseObserver):
 
         if changes:
             msgs = [f"控制器 {c['id']}: {c['old_state']} → {c['new_state']}" for c in changes[:5]]
+            anomalous = ('offline', 'degraded', 'fault', 'absent')
+            is_recovery = all(c['new_state'].lower() not in anomalous for c in changes)
             return self.create_result(
                 has_alert=True,
-                alert_level=AlertLevel.ERROR,
-                message="控制器状态变化: " + "; ".join(msgs),
-                details={'changes': changes, 'all_states': current_states},
-                sticky=True,
+                alert_level=AlertLevel.INFO if is_recovery else AlertLevel.ERROR,
+                message=("控制器状态恢复: " if is_recovery else "控制器状态变化: ") + "; ".join(msgs),
+                details={'changes': changes, 'all_states': current_states, 'recovered': is_recovery},
+                sticky=False,
             )
 
         return self.create_result(

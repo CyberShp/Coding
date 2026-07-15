@@ -5,6 +5,7 @@ CRUD for custom monitor templates and deploy to arrays.
 Admin-only (require_admin).
 """
 
+import asyncio
 import json
 import logging
 from typing import Any, Dict, List, Optional
@@ -267,9 +268,14 @@ async def deploy_templates(
             results.append({"array_id": array_id, "ok": False, "error": "Array not connected"})
             continue
         try:
-            content = conn.read_file(config_path)
+            content = await asyncio.to_thread(conn.read_file, config_path)
             config_data = json.loads(content) if content else {}
-            config_data["custom_monitors"] = custom_monitors
+            existing_monitors = config_data.get("custom_monitors") or []
+            selected_names = {monitor["name"] for monitor in custom_monitors}
+            config_data["custom_monitors"] = [
+                monitor for monitor in existing_monitors
+                if monitor.get("name") not in selected_names
+            ] + custom_monitors
 
             if observer_overrides:
                 observers = config_data.setdefault("observers", {})
@@ -280,16 +286,20 @@ async def deploy_templates(
             import base64
             encoded = base64.b64encode(config_json.encode("utf-8")).decode("ascii")
             backup_cmd = f"cp {config_path} {config_path}.bak 2>/dev/null || true"
-            conn.execute(backup_cmd)
+            await asyncio.to_thread(conn.execute, backup_cmd)
             write_cmd = f"echo '{encoded}' | base64 -d > {config_path}"
-            conn.execute(write_cmd)
+            write_code, _, write_error = await asyncio.to_thread(conn.execute, write_cmd)
+            if write_code != 0:
+                raise RuntimeError(write_error or "Failed to write agent configuration")
             from ..core.agent_deployer import AgentDeployer
             deployer = AgentDeployer(conn, config)
-            restart_result = deployer.restart_agent()
+            restart_result = await asyncio.to_thread(deployer.restart_agent)
+            restart_ok = restart_result.get("ok", False)
             results.append({
                 "array_id": array_id,
-                "ok": True,
-                "restart_ok": restart_result.get("ok", False),
+                "ok": restart_ok,
+                "restart_ok": restart_ok,
+                "error": "" if restart_ok else restart_result.get("error", "Agent restart failed"),
             })
         except Exception as e:
             logger.exception("Deploy failed for %s", array_id)

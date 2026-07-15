@@ -15,6 +15,12 @@ logger = logging.getLogger(__name__)
 
 # 默认子进程超时时间（秒）
 DEFAULT_TIMEOUT = 10
+_runtime_default_timeout = DEFAULT_TIMEOUT
+
+
+def configure_default_timeout(seconds: int):
+    global _runtime_default_timeout
+    _runtime_default_timeout = max(1, int(seconds))
 
 
 # PATH 初始化，用于 SSH/服务环境下 os_cli 等命令找不到时
@@ -23,7 +29,7 @@ _ENV_PATH_PREFIX = "export PATH=/usr/local/bin:/usr/bin:/bin:/sbin:/usr/sbin:$PA
 
 def run_command(
     cmd: Union[str, List[str]],
-    timeout: int = DEFAULT_TIMEOUT,
+    timeout: Optional[int] = None,
     shell: bool = False,
     check: bool = False,
     capture_stderr: bool = True,
@@ -44,6 +50,7 @@ def run_command(
         (返回码, stdout, stderr)
     """
     try:
+        timeout = _runtime_default_timeout if timeout is None else timeout
         if isinstance(cmd, str) and not shell:
             cmd = cmd.split()
 
@@ -157,6 +164,37 @@ def tail_file(
     except Exception as e:
         logger.error(f"读取文件失败: {path}, 错误: {e}")
         return [], last_position
+
+
+def tail_file_cursor(
+    path: Union[str, Path],
+    cursor: Optional[Dict[str, int]] = None,
+    max_lines: int = 1000,
+    skip_existing: bool = False,
+):
+    """Read incrementally while tracking inode so rename-based rotation cannot skip data."""
+    path = Path(path)
+    if not path.exists():
+        return [], cursor or {}
+    try:
+        stat = path.stat()
+        inode = int(getattr(stat, 'st_ino', 0))
+        previous = cursor or {}
+        offset = int(previous.get('offset', 0))
+        is_first = not previous
+        if previous and int(previous.get('inode', inode)) != inode:
+            offset = 0
+            skip_existing = False
+        lines, new_offset = tail_file(
+            path,
+            offset,
+            max_lines=max_lines,
+            skip_existing=skip_existing and is_first,
+        )
+        return lines, {'offset': new_offset, 'inode': inode}
+    except Exception as exc:
+        logger.error("读取增量日志游标失败: %s, 错误: %s", path, exc)
+        return [], cursor or {}
 
 
 def parse_key_value(text: str, sep: str = ':', strip: bool = True) -> Dict[str, str]:

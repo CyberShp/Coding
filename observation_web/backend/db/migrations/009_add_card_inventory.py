@@ -1,4 +1,4 @@
-"""Migration 009: Add card_inventory table for global card catalog."""
+"""Migration 009: Add the per-array card inventory table."""
 
 version = 9
 
@@ -12,17 +12,21 @@ def upgrade(conn):
         "card_inventory",
         """
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name VARCHAR(128) NOT NULL,
-        device_type VARCHAR(64) NOT NULL,
-        model VARCHAR(128) DEFAULT '',
-        description TEXT DEFAULT '',
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        array_id VARCHAR(64) NOT NULL,
+        card_no VARCHAR(32) DEFAULT '',
+        board_id VARCHAR(64) DEFAULT '',
+        health_state VARCHAR(32) DEFAULT '',
+        running_state VARCHAR(32) DEFAULT '',
+        model VARCHAR(256) DEFAULT '',
+        raw_fields TEXT DEFAULT '{}',
+        last_updated DATETIME DEFAULT CURRENT_TIMESTAMP,
+        CONSTRAINT uq_card_array_cardno UNIQUE (array_id, card_no)
         """,
     )
-    conn.execute(text(
-        "CREATE INDEX IF NOT EXISTS ix_card_inventory_name ON card_inventory(name)"
-    ))
-    conn.execute(text(
-        "CREATE INDEX IF NOT EXISTS ix_card_inventory_device_type ON card_inventory(device_type)"
-    ))
+    columns = {row[1] for row in conn.execute(text("PRAGMA table_info(card_inventory)"))}
+    for column in ("array_id", "board_id", "model"):
+        if column in columns:
+            conn.execute(text(
+                f"CREATE INDEX IF NOT EXISTS ix_card_inventory_{column} "
+                f"ON card_inventory({column})"
+            ))

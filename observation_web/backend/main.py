@@ -17,7 +17,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from .config import get_config, __version__
 from .core.system_alert import sys_error, sys_warning, sys_info
-from .db.database import init_db, create_tables, Base, get_async_engine
+from .db.database import init_db, create_tables
 from .api import arrays_router, alerts_router, query_router, ws_router, tags_router, alert_rules_router, audit_router
 from .api.auth import router as auth_router
 from .api.issues import router as issues_router
@@ -97,88 +97,188 @@ async def _idle_connection_cleaner():
 
 
 async def _health_checker():
-    """Lightweight health checker with faster cadence for status freshness."""
+    """Reconcile platform connectivity and Agent state without page polling."""
     from .core.agent_deployer import AgentDeployer
     from .core.ssh_pool import tcp_probe
-    from .api.arrays import _array_status_cache
+    from .api.arrays import (
+        _apply_agent_snapshot,
+        _apply_connection_snapshot,
+        _array_status_cache,
+        _mark_agent_unknown,
+        _publish_array_status,
+    )
+    from .models.array import AgentState, ConnectionState
 
-    check_count = 0
     while True:
         try:
             await asyncio.sleep(30)
-            check_count += 1
             ssh_pool = get_ssh_pool()
             config = get_config()
+            semaphore = asyncio.Semaphore(10)
 
-            for array_id, status_obj in list(_array_status_cache.items()):
-                try:
+            async def _check_one(array_id, status_obj):
+                async with semaphore:
+                    observed_at = datetime.now()
+                    previous_agent_state = status_obj.agent_state
+                    heartbeat_fresh = bool(
+                        status_obj.agent_heartbeat_at
+                        and (observed_at - status_obj.agent_heartbeat_at).total_seconds() <= 90
+                    )
                     conn = ssh_pool.get_connection(array_id)
                     if not conn:
-                        continue
-
-                    reachable = await asyncio.wait_for(
-                        asyncio.get_event_loop().run_in_executor(None, tcp_probe, conn.host, conn.port, 2.0),
-                        timeout=3,
-                    )
-                    if not reachable:
-                        conn._mark_disconnected()
-                        status_obj.state = conn.state
-                        logger.info("Health check: %s (%s) unreachable, marked disconnected", array_id, status_obj.host)
-                        continue
-
-                    alive = await asyncio.wait_for(
-                        asyncio.get_event_loop().run_in_executor(None, conn.check_alive),
-                        timeout=3,
-                    )
-                    status_obj.state = conn.state
-                    if not alive:
-                        continue
-
-                    # Run heavier agent health checks every 10 cycles (~5 min)
-                    if check_count % 10 == 0 and status_obj.agent_running:
-                        deployer = AgentDeployer(conn, config)
-                        still_running = await asyncio.wait_for(
-                            asyncio.get_event_loop().run_in_executor(None, deployer.check_running),
-                            timeout=10,
+                        _apply_connection_snapshot(
+                            status_obj,
+                            ConnectionState.DISCONNECTED,
+                            observed_at=observed_at,
+                            source="health_checker",
+                            error="平台未建立 SSH 连接",
                         )
-                        if not still_running:
-                            status_obj.agent_running = False
-                            sys_warning(
-                                "health_check",
-                                f"Agent stopped unexpectedly on {array_id}",
-                                {"array_id": array_id, "host": status_obj.host},
+                        if not heartbeat_fresh:
+                            _mark_agent_unknown(
+                                status_obj,
+                                "阵列未连接，Agent 状态暂时无法核验",
+                                observed_at=observed_at,
+                                source="health_checker",
                             )
-                            if config.remote.auto_redeploy:
-                                if await asyncio.wait_for(
-                                    asyncio.get_event_loop().run_in_executor(None, deployer.check_deployed),
-                                    timeout=10,
-                                ):
-                                    ready = await asyncio.wait_for(
-                                        deployer.wait_for_ready(),
-                                        timeout=1210,
-                                    )
-                                    if ready:
-                                        result = {"ok": True, "message": "Agent became ready after SSH recovery"}
-                                    else:
-                                        result = await asyncio.wait_for(
-                                            asyncio.get_event_loop().run_in_executor(None, deployer.start_agent),
-                                            timeout=60,
-                                        )
+                        await _publish_array_status(status_obj)
+                        return
+
+                    try:
+                        reachable = await asyncio.wait_for(
+                            asyncio.get_running_loop().run_in_executor(
+                                None, tcp_probe, conn.host, conn.port, 2.0
+                            ),
+                            timeout=3,
+                        )
+                        if not reachable:
+                            conn._mark_disconnected()
+                            _apply_connection_snapshot(
+                                status_obj,
+                                ConnectionState.DISCONNECTED,
+                                observed_at=observed_at,
+                                source="tcp_probe",
+                                error="阵列 SSH 端口不可达",
+                            )
+                            if not heartbeat_fresh:
+                                _mark_agent_unknown(
+                                    status_obj,
+                                    "阵列不可达，Agent 状态暂时无法核验",
+                                    observed_at=observed_at,
+                                    source="tcp_probe",
+                                )
+                            await _publish_array_status(status_obj)
+                            return
+
+                        alive = await asyncio.wait_for(
+                            asyncio.get_running_loop().run_in_executor(None, conn.check_alive),
+                            timeout=4,
+                        )
+                        _apply_connection_snapshot(
+                            status_obj,
+                            ConnectionState.CONNECTED if alive else conn.state,
+                            observed_at=observed_at,
+                            source="ssh_keepalive",
+                            error="" if alive else (conn.last_error or "SSH 会话失效"),
+                        )
+                        if not alive:
+                            if not heartbeat_fresh:
+                                _mark_agent_unknown(
+                                    status_obj,
+                                    "SSH 会话失效，Agent 状态暂时无法核验",
+                                    observed_at=observed_at,
+                                    source="ssh_keepalive",
+                                )
+                            await _publish_array_status(status_obj)
+                            return
+
+                        agent_probe_due = not heartbeat_fresh and (
+                            not status_obj.agent_observed_at
+                            or (observed_at - status_obj.agent_observed_at).total_seconds() >= 30
+                        )
+                        if agent_probe_due:
+                            deployer = AgentDeployer(conn, config)
+                            info = await asyncio.wait_for(
+                                asyncio.get_running_loop().run_in_executor(
+                                    None, deployer.get_agent_status
+                                ),
+                                timeout=10,
+                            )
+                            snapshot_applied = _apply_agent_snapshot(
+                                status_obj,
+                                info,
+                                observed_at=observed_at,
+                                source="health_probe",
+                            )
+
+                            if (
+                                snapshot_applied
+                                and config.remote.auto_redeploy
+                                and info.get("deployed")
+                                and not info.get("running")
+                                and previous_agent_state in {
+                                    AgentState.RUNNING,
+                                    AgentState.DEGRADED,
+                                    AgentState.STARTING,
+                                }
+                            ):
+                                status_obj.agent_state = AgentState.STARTING
+                                status_obj.agent_status_message = "检测到 Agent 意外停止，正在自动恢复"
+                                status_obj.agent_status_source = "auto_redeploy"
+                                await _publish_array_status(status_obj)
+                                became_ready = await deployer.wait_for_ready(
+                                    timeout=30,
+                                    interval=5,
+                                )
+                                if became_ready:
+                                    result = {"ok": True, "message": "Agent became ready"}
                                 else:
                                     result = await asyncio.wait_for(
-                                        asyncio.get_event_loop().run_in_executor(None, deployer.deploy),
-                                        timeout=120,
+                                        asyncio.get_running_loop().run_in_executor(
+                                            None, deployer.start_agent
+                                        ),
+                                        timeout=75,
                                     )
+                                verify_at = datetime.now()
                                 if result.get("ok"):
-                                    status_obj.agent_running = True
-                                    status_obj.agent_deployed = True
-                                    sys_info(
-                                        "health_check",
-                                        f"Agent auto-redeployed on {array_id}",
-                                        {"array_id": array_id, "host": status_obj.host},
+                                    info = await asyncio.wait_for(
+                                        asyncio.get_running_loop().run_in_executor(
+                                            None, deployer.get_agent_status
+                                        ),
+                                        timeout=10,
                                     )
-                except Exception as e:
-                    logger.debug(f"Agent health check failed for {array_id}: {e}")
+                                    _apply_agent_snapshot(
+                                        status_obj,
+                                        info,
+                                        observed_at=verify_at,
+                                        source="auto_redeploy",
+                                    )
+                                else:
+                                    status_obj.agent_state = AgentState.ERROR
+                                    status_obj.agent_status_message = result.get(
+                                        "error", "Agent 自动恢复失败"
+                                    )
+                                    status_obj.agent_observed_at = verify_at
+                                    status_obj.agent_status_source = "auto_redeploy"
+
+                        await _publish_array_status(status_obj)
+                    except Exception as exc:
+                        if not heartbeat_fresh:
+                            _mark_agent_unknown(
+                                status_obj,
+                                f"状态探测失败，等待下次核验: {exc}",
+                                observed_at=observed_at,
+                                source="health_checker",
+                            )
+                        await _publish_array_status(status_obj)
+                        logger.debug("Health check failed for %s: %s", array_id, exc)
+
+            await asyncio.gather(
+                *[
+                    _check_one(array_id, status_obj)
+                    for array_id, status_obj in list(_array_status_cache.items())
+                ],
+                return_exceptions=True,
+            )
         except asyncio.CancelledError:
             break
         except Exception as e:
@@ -188,7 +288,12 @@ async def _health_checker():
 async def _auto_reconnect_saved_arrays():
     """Try to reconnect arrays that have saved passwords after backend restart."""
     from .db.database import AsyncSessionLocal
-    from .api.arrays import _get_array_status
+    from .api.arrays import (
+        _apply_connection_snapshot,
+        _get_array_status,
+        _publish_array_status,
+    )
+    from .models.array import ConnectionState
 
     if AsyncSessionLocal is None:
         logger.warning("AsyncSessionLocal is unavailable, skip auto reconnect")
@@ -225,8 +330,17 @@ async def _auto_reconnect_saved_arrays():
 
             ok, conn = await asyncio.get_event_loop().run_in_executor(None, _do_connect)
             status_obj = _get_array_status(array.array_id)
-            status_obj.state = conn.state
+            status_obj.name = array.name
+            status_obj.host = array.host
+            _apply_connection_snapshot(
+                status_obj,
+                ConnectionState.CONNECTED if ok else conn.state,
+                observed_at=datetime.now(),
+                source="auto_reconnect",
+                error="" if ok else (conn.last_error or "自动重连失败"),
+            )
             status_obj.last_refresh = datetime.now()
+            await _publish_array_status(status_obj)
             if ok:
                 logger.info("Auto reconnect success: %s (%s)", array.name, array.host)
             else:
@@ -248,15 +362,7 @@ async def lifespan(app: FastAPI):
         logger.info("Database initialized")
     except Exception as e:
         logger.error("create_tables failed: %s", e, exc_info=True)
-        # Fallback: create tables only (skip migrations)
-        try:
-            from .models import array, alert, query, lifecycle, scheduler, traffic, task_session, snapshot, tag, user_session, array_lock, alert_rule, audit_log, issue, ai_interpretation, card_inventory  # noqa: F401
-            async with get_async_engine().begin() as conn:
-                await conn.run_sync(Base.metadata.create_all)
-            logger.info("Fallback: tables created without migrations")
-        except Exception as e2:
-            logger.critical("Cannot create database tables: %s", e2)
-            raise
+        raise
     
     # Initialize SSH pool
     get_ssh_pool()

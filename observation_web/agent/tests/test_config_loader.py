@@ -3,13 +3,38 @@ import os
 import json
 import tempfile
 import pytest
-from observation_points.config.loader import ConfigLoader
+from agent.config.loader import ConfigLoader
 
 
 class TestConfigLoader:
     def test_load_default_when_missing(self):
         config = ConfigLoader.load("/nonexistent/config.json")
         assert "global" in config or "reporter" in config
+
+    def test_card_info_default_command_is_configured(self):
+        card_info = ConfigLoader.DEFAULT_CONFIG["observers"]["card_info"]
+        assert card_info["enabled"] is True
+        assert card_info["command"] == "anytest intfboardallinfo"
+
+    def test_card_info_legacy_empty_command_is_upgraded(self):
+        data = {
+            "observers": {
+                "card_info": {"enabled": True, "command": ""},
+                "controller_state": {"enabled": False, "command": ""},
+                "disk_state": {"enabled": False, "command": ""},
+            }
+        }
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+            json.dump(data, f)
+            f.flush()
+            fname = f.name
+        try:
+            config = ConfigLoader.load(fname)
+            assert config["observers"]["card_info"]["command"] == "anytest intfboardallinfo"
+            assert config["observers"]["controller_state"]["command"] == ""
+            assert config["observers"]["disk_state"]["command"] == ""
+        finally:
+            os.unlink(fname)
 
     def test_load_valid_json(self):
         data = {

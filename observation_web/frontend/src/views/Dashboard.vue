@@ -1,14 +1,16 @@
 <template>
   <div class="dashboard">
-    <!-- Page Header with Refresh -->
     <div class="dashboard-header">
-      <h2>仪表盘</h2>
+      <div>
+        <span class="page-kicker">OPERATIONS OVERVIEW</span>
+        <h1>运行态势</h1>
+        <p>优先展示需要处置的阵列和告警</p>
+      </div>
       <div class="header-actions">
         <el-select
           v-model="dashboardL1Filter"
           placeholder="全部一级标签"
           clearable
-          size="small"
           style="width: 180px"
           @change="onL1FilterChange"
         >
@@ -19,173 +21,83 @@
             :value="t.id"
           />
         </el-select>
-        <el-button size="small" @click="manualRefresh" :loading="loading">
+        <el-button circle aria-label="刷新仪表盘" @click="manualRefresh" :loading="loading">
           <el-icon><Refresh /></el-icon>
-          刷新
         </el-button>
       </div>
     </div>
 
-    <!-- Stats Cards -->
-    <el-row :gutter="20" class="stats-row">
-      <el-col :span="6">
-        <el-card class="stat-card clickable" @click="$router.push('/arrays')">
-          <div class="stat-content">
-            <div class="stat-icon" style="background: #409eff">
-              <el-icon size="28"><Cpu /></el-icon>
-            </div>
-            <div class="stat-info">
-              <div class="stat-value">{{ filteredTotalCount }}</div>
-              <div class="stat-label">总阵列数</div>
-            </div>
-          </div>
-        </el-card>
-      </el-col>
-      <el-col :span="6">
-        <el-card class="stat-card clickable" @click="$router.push('/arrays')">
-          <div class="stat-content">
-            <div class="stat-icon" style="background: #67c23a">
-              <el-icon size="28"><CircleCheck /></el-icon>
-            </div>
-            <div class="stat-info">
-              <div class="stat-value">{{ filteredConnectedCount }}</div>
-              <div class="stat-label">在线阵列</div>
-            </div>
-          </div>
-        </el-card>
-      </el-col>
-      <el-col :span="6">
-        <el-card class="stat-card clickable" @click="$router.push('/alerts')">
-          <div class="stat-content">
-            <div class="stat-icon" style="background: #e6a23c">
-              <el-icon size="28"><Bell /></el-icon>
-            </div>
-            <div class="stat-info">
-              <div class="stat-value">{{ filteredAlertTotal }}</div>
-              <div class="stat-label">2h 告警</div>
-            </div>
-          </div>
-        </el-card>
-      </el-col>
-      <el-col :span="6">
-        <el-card class="stat-card clickable" @click="$router.push({ path: '/alerts', query: { level: 'error' } })">
-          <div class="stat-content">
-            <div class="stat-icon" style="background: #f56c6c">
-              <el-icon size="28"><Warning /></el-icon>
-            </div>
-            <div class="stat-info">
-              <div class="stat-value">{{ filteredAlertErrorCount }}</div>
-              <div class="stat-label">错误告警</div>
-            </div>
-          </div>
-        </el-card>
-      </el-col>
-    </el-row>
+    <div class="status-ribbon">
+      <button class="status-cell danger" type="button" @click="$router.push({ path: '/alerts', query: { level: 'error' } })">
+        <span>高优告警</span><strong>{{ filteredAlertErrorCount }}</strong><small>最近 2 小时</small>
+      </button>
+      <button class="status-cell warning" type="button" @click="$router.push('/arrays')">
+        <span>需关注阵列</span><strong>{{ attentionArrays.length }}</strong><small>{{ activeIssueCount }} 项活跃异常</small>
+      </button>
+      <button class="status-cell" type="button" @click="$router.push('/arrays')">
+        <span>离线阵列</span><strong>{{ offlineCount }}</strong><small>{{ filteredConnectedCount }}/{{ filteredTotalCount }} 在线</small>
+      </button>
+      <button class="status-cell task" type="button" @click="$router.push('/test-tasks')">
+        <span>运行任务</span><strong class="task-value">{{ activeTask ? activeTask.name : '无' }}</strong><small>{{ activeTask ? `已运行 ${taskDuration}` : '当前无测试任务' }}</small>
+      </button>
+    </div>
 
-    <!-- Active Test Task Banner -->
-    <el-card v-if="activeTask" class="active-task-banner">
-      <div class="task-banner-content">
-        <el-tag type="success" effect="dark" size="small">进行中</el-tag>
-        <span class="task-name">{{ activeTask.name }}</span>
-        <el-tag size="small" effect="plain">{{ activeTask.task_type_label || activeTask.task_type }}</el-tag>
-        <span class="task-duration">已运行 {{ taskDuration }}</span>
-        <el-button size="small" type="warning" plain @click="$router.push('/test-tasks')">管理</el-button>
-      </div>
-    </el-card>
+    <main class="dashboard-grid">
+      <section class="panel attention-panel">
+        <div class="panel-header">
+          <div><span class="panel-kicker">ACTION QUEUE</span><h2>需要处理</h2></div>
+          <span class="panel-meta">按严重程度排序</span>
+        </div>
 
-    <!-- Main Content -->
-    <el-row :gutter="20">
-      <!-- Array Health Matrix + Trends -->
-      <el-col :span="16">
-        <!-- Health Matrix -->
-        <el-card class="content-card">
-          <template #header>
-            <div class="card-header">
-              <span>阵列健康矩阵</span>
-              <el-button text @click="loadArrays">
-                <el-icon><Refresh /></el-icon>
-              </el-button>
-            </div>
-          </template>
-          <div class="health-matrix" v-if="filteredArrays.length > 0">
-            <div
-              v-for="arr in filteredArrays"
-              :key="arr.array_id"
-              class="health-tile"
-              :class="getArrayStatusClass(arr)"
-              @click="$router.push(`/arrays/${arr.array_id}`)"
-            >
-              <div class="tile-status-bar" :class="getArrayStatusClass(arr)"></div>
-              <div class="tile-content">
-                <div class="tile-name">{{ arr.name }}</div>
-                <div class="tile-host">{{ arr.host }}</div>
-                <div class="tile-meta">
-                  <el-tag :type="getStateTagType(arr.state)" size="small" effect="plain">
-                    {{ arr.state === 'connected' ? '在线' : '离线' }}
-                  </el-tag>
-                  <span v-if="arr.agent_running" class="tile-agent-badge">
-                    <el-icon color="#67c23a"><CircleCheck /></el-icon>
-                    Agent
-                  </span>
-                </div>
-                <div class="tile-issues" v-if="(arr.active_issues || []).length > 0">
-                  <el-tag type="danger" size="small" effect="plain">
-                    {{ (arr.active_issues || []).length }} 个活跃问题
-                  </el-tag>
-                </div>
-                <div class="tile-issues" v-else-if="getArrayStatusClass(arr) === 'status-attention'">
-                  <el-tag type="warning" size="small" effect="plain">近期有告警，需关注</el-tag>
-                </div>
-                <div class="tile-issues" v-else-if="arr.state === 'connected'">
-                  <el-tag type="success" size="small" effect="plain">健康</el-tag>
-                </div>
-              </div>
-            </div>
-          </div>
-          <el-empty v-else-if="preferencesStore.personalViewActive" description="未配置关注的阵列或标签">
-            <el-button type="primary" @click="$router.push('/settings')">配置个人视图</el-button>
-          </el-empty>
-          <el-empty v-else description="暂无阵列">
-            <el-button type="primary" @click="$router.push('/arrays')">添加阵列</el-button>
-          </el-empty>
-        </el-card>
+        <div v-if="attentionArrays.length" class="attention-list">
+          <button v-for="arr in attentionArrays" :key="arr.array_id" class="attention-row" type="button" @click="$router.push(`/arrays/${arr.array_id}`)">
+            <span class="severity-rail" :class="getArrayStatusClass(arr)" />
+            <span class="array-cell"><strong>{{ arr.name }}</strong><small>{{ arr.host }}</small></span>
+            <span class="issue-cell"><strong>{{ getPrimaryIssue(arr) }}</strong><small>{{ getArrayStatusText(arr) }}</small></span>
+            <span class="count-cell">{{ (arr.active_issues || []).length || '!' }}</span>
+            <span class="row-arrow">›</span>
+          </button>
+        </div>
+        <div v-else-if="filteredArrays.length" class="all-clear">
+          <el-icon :size="34"><CircleCheck /></el-icon>
+          <div><strong>当前没有待处理阵列</strong><span>所有在线阵列均未发现活跃异常</span></div>
+        </div>
+        <el-empty v-else-if="preferencesStore.personalViewActive" description="个人视图尚未配置阵列">
+          <el-button type="primary" @click="$router.push('/settings')">配置个人视图</el-button>
+        </el-empty>
+        <el-empty v-else description="暂无阵列"><el-button type="primary" @click="$router.push('/arrays')">添加阵列</el-button></el-empty>
+      </section>
 
-        <!-- Alert Trend Chart (multi-line by level) -->
-        <el-card class="content-card chart-card">
-          <template #header>
-            <span>2小时告警趋势</span>
-          </template>
-          <v-chart :option="trendChartOption" autoresize style="height: 250px" />
-        </el-card>
-      </el-col>
+      <section class="panel stream-panel">
+        <div class="panel-header">
+          <div><span class="panel-kicker">LIVE SIGNALS</span><h2>实时告警</h2></div>
+          <span class="live-state" :class="{ connected: alertStore.wsConnected }"><i />{{ alertStore.wsConnected ? '实时' : '已断开' }}</span>
+        </div>
+        <div class="alerts-list">
+          <FoldedAlertList :alerts="filteredAlerts" :show-array-id="true" :compact="true" @select="openAlertDrawer" @ack="handleAck" @undo-ack="handleUndoAck" @modify-ack="handleModifyAck" />
+        </div>
+        <el-button class="stream-more" text type="primary" @click="$router.push('/alerts')">进入告警中心</el-button>
+      </section>
 
-      <!-- Recent Alerts Stream (with folding) -->
-      <el-col :span="8">
-        <el-card class="content-card alerts-card">
-          <template #header>
-            <div class="card-header">
-              <span>实时告警流</span>
-              <el-badge :value="alertStore.wsConnected ? 'LIVE' : 'OFFLINE'" 
-                        :type="alertStore.wsConnected ? 'success' : 'danger'"
-                        class="ws-badge" />
-            </div>
-          </template>
-          <div class="alerts-list">
-            <FoldedAlertList
-              :alerts="filteredAlerts"
-              :show-array-id="true"
-              :compact="true"
-              @select="openAlertDrawer"
-              @ack="handleAck"
-              @undo-ack="handleUndoAck"
-              @modify-ack="handleModifyAck"
-            />
-          </div>
-        </el-card>
-      </el-col>
-    </el-row>
+      <section class="panel fleet-panel">
+        <div class="panel-header">
+          <div><span class="panel-kicker">FLEET STATUS</span><h2>全部阵列</h2></div>
+          <span class="panel-meta">{{ healthyArrays.length }} 个健康</span>
+        </div>
+        <div class="fleet-grid">
+          <button v-for="arr in filteredArrays" :key="arr.array_id" class="fleet-tile" :class="getArrayStatusClass(arr)" type="button" @click="$router.push(`/arrays/${arr.array_id}`)">
+            <span class="fleet-dot" /><span class="fleet-name">{{ arr.name }}</span><span class="fleet-host">{{ arr.host }}</span>
+            <span class="fleet-state">{{ getArrayStatusText(arr) }}</span>
+          </button>
+        </div>
+      </section>
 
-    <!-- 告警详情抽屉 -->
+      <section class="panel trend-panel">
+        <div class="panel-header"><div><span class="panel-kicker">2H TREND</span><h2>告警趋势</h2></div><span class="panel-meta">共 {{ filteredAlertTotal }} 条</span></div>
+        <v-chart :option="trendChartOption" autoresize class="trend-chart" />
+      </section>
+    </main>
+
     <AlertDetailDrawer v-model="drawerVisible" :alert="selectedAlert" @ack-changed="onAckChanged" />
   </div>
 </template>
@@ -198,7 +110,7 @@ import { LineChart } from 'echarts/charts'
 import { GridComponent, TooltipComponent, LegendComponent } from 'echarts/components'
 import VChart from 'vue-echarts'
 import { ElMessage } from 'element-plus'
-import { Cpu, CircleCheck, Bell, Warning, Refresh } from '@element-plus/icons-vue'
+import { CircleCheck, Refresh } from '@element-plus/icons-vue'
 import { useArrayStore } from '../stores/arrays'
 import { useAlertStore } from '../stores/alerts'
 import { usePreferencesStore } from '../stores/preferences'
@@ -222,7 +134,6 @@ const selectedAlert = ref(null)
 const loading = ref(false)
 const l1Tags = ref([])
 const dashboardL1Filter = ref(null)
-let refreshTimer = null
 let pageAbortController = null
 
 const trendChartOption = computed(() => ({
@@ -299,6 +210,23 @@ const filteredTotalCount = computed(() => filteredArrays.value.length)
 const filteredConnectedCount = computed(() =>
   filteredArrays.value.filter(a => a.state === 'connected').length
 )
+
+const statusWeight = {
+  'status-error': 0,
+  'status-offline': 1,
+  'status-warning': 2,
+  'status-attention': 3,
+  'status-ok': 4,
+}
+
+const attentionArrays = computed(() => filteredArrays.value
+  .filter(arr => getArrayStatusClass(arr) !== 'status-ok')
+  .slice()
+  .sort((a, b) => statusWeight[getArrayStatusClass(a)] - statusWeight[getArrayStatusClass(b)]))
+
+const healthyArrays = computed(() => filteredArrays.value.filter(arr => getArrayStatusClass(arr) === 'status-ok'))
+const offlineCount = computed(() => filteredArrays.value.filter(arr => arr.state !== 'connected').length)
+const activeIssueCount = computed(() => filteredArrays.value.reduce((sum, arr) => sum + (arr.active_issues || []).length, 0))
 
 const RECENT_ALERTS_CUTOFF_MS = 2 * 60 * 60 * 1000
 
@@ -393,6 +321,24 @@ function getArrayStatusClass(arr) {
   return 'status-ok'
 }
 
+function getPrimaryIssue(arr) {
+  if (arr.state !== 'connected') return '阵列连接中断'
+  const issue = (arr.active_issues || [])[0]
+  if (issue) return issue.title || issue.message || '发现活跃异常'
+  return '近期告警仍需复核'
+}
+
+function getArrayStatusText(arr) {
+  const labels = {
+    'status-error': '严重异常',
+    'status-offline': '离线',
+    'status-warning': '警告',
+    'status-attention': '需复核',
+    'status-ok': '正常',
+  }
+  return labels[getArrayStatusClass(arr)]
+}
+
 function getStateTagType(state) {
   return state === 'connected' ? 'success' : 'info'
 }
@@ -476,18 +422,6 @@ async function loadData() {
   await Promise.all(tasks)
 }
 
-async function silentRefresh() {
-  if (document.hidden || loading.value) return
-  loading.value = true
-  try {
-    await loadData()
-  } catch {
-    // Silent fail
-  } finally {
-    loading.value = false
-  }
-}
-
 async function manualRefresh() {
   loading.value = true
   try {
@@ -499,8 +433,6 @@ async function manualRefresh() {
 
 onMounted(() => {
   loadData()
-  // Auto-refresh every 30 seconds
-  refreshTimer = setInterval(silentRefresh, 30000)
 })
 
 onUnmounted(() => {
@@ -508,209 +440,456 @@ onUnmounted(() => {
     pageAbortController.abort()
     pageAbortController = null
   }
-  if (refreshTimer) {
-    clearInterval(refreshTimer)
-    refreshTimer = null
-  }
 })
 </script>
 
 <style scoped>
 .dashboard {
-  padding: 20px;
+  min-height: 100%;
+  padding: 22px 24px 36px;
+  background: #f4f6f8;
+  color: #1f2a37;
 }
 
 .dashboard-header {
   display: flex;
   justify-content: space-between;
-  align-items: center;
-  margin-bottom: 16px;
+  align-items: flex-end;
+  max-width: 1500px;
+  margin: 0 auto 18px;
 }
 
-.dashboard-header h2 {
-  margin: 0;
-  font-size: 20px;
-  font-weight: 600;
+.page-kicker,
+.panel-kicker {
+  color: #8993a1;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 9px;
+  letter-spacing: 0;
+}
+
+.dashboard-header h1 {
+  margin: 3px 0 0;
+  color: #182330;
+  font-size: 24px;
+  font-weight: 700;
+  letter-spacing: 0;
+}
+
+.dashboard-header p {
+  margin: 4px 0 0;
+  color: #7d8897;
+  font-size: 12px;
 }
 
 .header-actions {
   display: flex;
   align-items: center;
-  gap: 10px;
-}
-
-/* Active test task banner */
-.active-task-banner {
-  margin-bottom: 16px;
-  border-left: 3px solid #67c23a;
-}
-.task-banner-content {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-.task-name {
-  font-weight: 600;
-  font-size: 15px;
-}
-.task-duration {
-  color: var(--el-text-color-secondary);
-  font-size: 13px;
-  margin-left: auto;
-}
-
-.stats-row {
-  margin-bottom: 20px;
-}
-
-.stat-card {
-  border-radius: 8px;
-}
-
-.stat-card.clickable {
-  cursor: pointer;
-  transition: all 0.2s;
-}
-
-.stat-card.clickable:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
-}
-
-.stat-content {
-  display: flex;
-  align-items: center;
-}
-
-.stat-icon {
-  width: 60px;
-  height: 60px;
-  border-radius: 8px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: #fff;
-  margin-right: 16px;
-}
-
-.stat-value {
-  font-size: 28px;
-  font-weight: bold;
-  color: #303133;
-}
-
-.stat-label {
-  font-size: 14px;
-  color: #909399;
-}
-
-.content-card {
-  margin-bottom: 20px;
-}
-
-.card-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-
-/* Health Matrix */
-.health-matrix {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-  gap: 12px;
-}
-
-.health-tile {
-  border-radius: 8px;
-  background: #fff;
-  border: 1px solid #e4e7ed;
-  cursor: pointer;
-  transition: all 0.2s;
-  overflow: hidden;
-}
-
-.health-tile:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
-}
-
-.tile-status-bar {
-  height: 4px;
-  width: 100%;
-}
-
-.tile-status-bar.status-ok { background: #67c23a; }
-.tile-status-bar.status-attention { background: #f39c12; }
-.tile-status-bar.status-warning { background: #e6a23c; }
-.tile-status-bar.status-error { background: #f56c6c; }
-.tile-status-bar.status-offline { background: #dcdfe6; }
-
-.tile-content {
-  padding: 12px 14px;
-}
-
-.tile-name {
-  font-weight: 600;
-  font-size: 14px;
-  margin-bottom: 2px;
-}
-
-.tile-host {
-  font-size: 12px;
-  color: #909399;
-  margin-bottom: 8px;
-}
-
-.tile-meta {
-  display: flex;
-  align-items: center;
   gap: 8px;
 }
 
-.tile-agent-badge {
+.status-ribbon {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(140px, 0.8fr)) minmax(220px, 1.6fr);
+  max-width: 1500px;
+  margin: 0 auto 12px;
+  border: 1px solid #dde2e8;
+  border-radius: 6px;
+  background: #fff;
+  overflow: hidden;
+}
+
+.status-cell {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 2px 12px;
+  min-height: 70px;
+  padding: 13px 16px;
+  border: 0;
+  border-right: 1px solid #e6e9ed;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.status-cell:last-child {
+  border-right: 0;
+}
+
+.status-cell:hover {
+  background: #f8fafb;
+}
+
+.status-cell > span {
+  color: #465263;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.status-cell strong {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  align-self: center;
+  color: #263342;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 26px;
+  line-height: 1;
+}
+
+.status-cell small {
+  color: #8a94a2;
+  font-size: 10px;
+}
+
+.status-cell.danger strong {
+  color: #bd3737;
+}
+
+.status-cell.warning strong {
+  color: #b47620;
+}
+
+.status-cell .task-value {
+  max-width: 180px;
+  overflow: hidden;
+  font-family: inherit;
+  font-size: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dashboard-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.75fr) minmax(320px, 0.85fr);
+  gap: 12px;
+  max-width: 1500px;
+  margin: 0 auto;
+}
+
+.panel {
+  min-width: 0;
+  padding: 17px;
+  border: 1px solid #dde2e8;
+  border-radius: 6px;
+  background: #fff;
+}
+
+.panel-header {
   display: flex;
   align-items: center;
-  gap: 2px;
+  justify-content: space-between;
+  min-height: 32px;
+  margin-bottom: 13px;
+}
+
+.panel-header h2 {
+  margin: 2px 0 0;
+  color: #263342;
+  font-size: 15px;
+  font-weight: 680;
+}
+
+.panel-meta {
+  color: #8a94a2;
   font-size: 11px;
-  color: #67c23a;
 }
 
-.tile-observers {
+.attention-list {
+  border-top: 1px solid #e6e9ed;
+}
+
+.attention-row {
+  display: grid;
+  grid-template-columns: 4px minmax(140px, 0.7fr) minmax(180px, 1.4fr) 34px 14px;
+  align-items: stretch;
+  width: 100%;
+  min-height: 64px;
+  padding: 0;
+  border: 0;
+  border-bottom: 1px solid #e9ecf0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.attention-row:hover {
+  background: #f8fafb;
+}
+
+.severity-rail {
+  width: 3px;
+  margin: 11px 0;
+  border-radius: 2px;
+  background: #9da7b4;
+}
+
+.severity-rail.status-error { background: #bd3737; }
+.severity-rail.status-warning,
+.severity-rail.status-attention { background: #c0842e; }
+.severity-rail.status-offline { background: #6f7a88; }
+
+.array-cell,
+.issue-cell {
   display: flex;
-  gap: 4px;
-  margin-top: 8px;
+  min-width: 0;
+  flex-direction: column;
+  justify-content: center;
+  padding: 10px 12px;
 }
 
-.obs-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: #dcdfe6;
+.array-cell strong,
+.issue-cell strong {
+  overflow: hidden;
+  color: #2c3745;
+  font-size: 12px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.obs-ok { background: #67c23a; }
-.obs-warning { background: #e6a23c; }
-.obs-error { background: #f56c6c; }
+.array-cell small,
+.issue-cell small {
+  overflow: hidden;
+  margin-top: 4px;
+  color: #8993a1;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
+.array-cell small {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
 
-.alerts-card {
-  height: calc(100vh - 280px);
+.count-cell,
+.row-arrow {
+  align-self: center;
+  color: #697586;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 15px;
+  text-align: center;
+}
+
+.row-arrow {
+  color: #a0a9b5;
+  font-family: inherit;
+  font-size: 21px;
+}
+
+.all-clear {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  min-height: 120px;
+  padding: 18px;
+  color: #187c5a;
+  background: #f4faf7;
+}
+
+.all-clear strong,
+.all-clear span {
+  display: block;
+}
+
+.all-clear strong {
+  margin-bottom: 4px;
+  color: #2b5044;
+  font-size: 14px;
+}
+
+.all-clear span {
+  color: #74867f;
+  font-size: 11px;
+}
+
+.stream-panel {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  min-height: 520px;
   overflow: hidden;
 }
 
 .alerts-list {
-  max-height: calc(100vh - 350px);
+  max-height: 570px;
   overflow-y: auto;
 }
 
-/* Alert items are now rendered by FoldedAlertList component */
-
-.ws-badge :deep(.el-badge__content) {
+.live-state {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: #9099a6;
   font-size: 10px;
 }
 
-.chart-card {
-  margin-top: 20px;
+.live-state i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #a5adb7;
+}
+
+.live-state.connected {
+  color: #187c5a;
+}
+
+.live-state.connected i {
+  background: #1a8a63;
+  box-shadow: 0 0 0 3px #dff1e9;
+}
+
+.stream-more {
+  width: 100%;
+  margin-top: 10px;
+  border-top: 1px solid #edf0f3;
+}
+
+.fleet-panel {
+  grid-column: 1;
+}
+
+.fleet-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 7px;
+}
+
+.fleet-tile {
+  display: grid;
+  grid-template-columns: 8px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid #e3e7ec;
+  border-radius: 4px;
+  background: #fff;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 150ms ease, background-color 150ms ease;
+}
+
+.fleet-tile:hover {
+  border-color: #aeb8c4;
+  background: #fafbfc;
+}
+
+.fleet-dot {
+  grid-row: 1 / span 2;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #17835d;
+}
+
+.fleet-tile.status-error .fleet-dot { background: #bd3737; }
+.fleet-tile.status-warning .fleet-dot,
+.fleet-tile.status-attention .fleet-dot { background: #c0842e; }
+.fleet-tile.status-offline .fleet-dot { background: #929ba7; }
+
+.fleet-name,
+.fleet-host {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fleet-name {
+  color: #344050;
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.fleet-host {
+  grid-column: 2;
+  color: #9099a5;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 9px;
+}
+
+.fleet-state {
+  grid-column: 3;
+  grid-row: 1 / span 2;
+  color: #7c8795;
+  font-size: 9px;
+}
+
+.trend-panel {
+  grid-column: 1;
+}
+
+.trend-chart {
+  height: 220px;
+}
+
+@media (max-width: 1100px) {
+  .status-ribbon {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .status-cell:nth-child(2) {
+    border-right: 0;
+  }
+
+  .status-cell:nth-child(-n + 2) {
+    border-bottom: 1px solid #e6e9ed;
+  }
+
+  .dashboard-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .stream-panel,
+  .fleet-panel,
+  .trend-panel {
+    grid-column: 1;
+    grid-row: auto;
+  }
+
+  .stream-panel {
+    min-height: 0;
+  }
+}
+
+@media (max-width: 680px) {
+  .dashboard {
+    padding: 16px 12px 30px;
+  }
+
+  .dashboard-header {
+    align-items: flex-start;
+    gap: 14px;
+  }
+
+  .dashboard-header p {
+    display: none;
+  }
+
+  .header-actions :deep(.el-select) {
+    width: 140px !important;
+  }
+
+  .status-cell {
+    min-height: 62px;
+    padding: 10px 12px;
+  }
+
+  .status-cell strong {
+    font-size: 21px;
+  }
+
+  .attention-row {
+    grid-template-columns: 4px minmax(110px, 0.8fr) minmax(120px, 1fr) 26px;
+  }
+
+  .row-arrow {
+    display: none;
+  }
+
+  .panel {
+    padding: 13px;
+  }
 }
 </style>

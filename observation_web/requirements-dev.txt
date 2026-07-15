@@ -7,3 +7,4 @@ pytest-timeout>=2.1
 # Async API testing stack
 httpx>=0.24.0
 aiosqlite>=0.17.0
+aiohttp>=3.9.0

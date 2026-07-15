@@ -43,7 +43,7 @@ class CardInfoObserver(BaseObserver):
     - Model:        不能为空或 undefined/none/null/n/a，否则 WARNING
 
     配置项：
-    - command: 查询所有卡件信息的命令（留空待用户填写）
+    - command: 查询所有卡件信息的命令（默认 anytest intfboardallinfo）
     - running_state_expect: RunningState 预期值 (默认 "RUNNING")
     - health_state_expect:  HealthState 预期值 (默认 "NORMAL")
     """
@@ -59,8 +59,7 @@ class CardInfoObserver(BaseObserver):
 
     def __init__(self, name: str, config: Dict[str, Any]):
         super().__init__(name, config)
-        # TODO: 用户在 config.json -> observers.card_info.command 中填写查询命令
-        self.command = config.get('command', '')
+        self.command = config.get('command') or 'anytest intfboardallinfo'
         self.running_expect = config.get('running_state_expect', 'RUNNING')
         self.health_expect = config.get('health_state_expect', 'NORMAL')
 
@@ -90,8 +89,7 @@ class CardInfoObserver(BaseObserver):
 
     def check(self) -> ObserverResult:
         if not self.command:
-            return self.create_result(
-                has_alert=False,
+            return self.create_error_result(
                 message="卡件信息监控未配置命令 (observers.card_info.command)",
             )
 
@@ -101,12 +99,12 @@ class CardInfoObserver(BaseObserver):
                 has_alert=True,
                 alert_level=AlertLevel.WARNING,
                 message=f"卡件信息查询命令执行失败: {stderr[:200]}",
+                collection_ok=False,
             )
 
         cards = self._parse_cards(stdout)
         if not cards:
-            return self.create_result(
-                has_alert=False,
+            return self.create_error_result(
                 message="卡件信息本轮无有效卡件数据，已忽略",
             )
 

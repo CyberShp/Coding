@@ -6,14 +6,15 @@ import asyncio
 import json
 import logging
 import shlex
+import time
 import uuid
 from collections import defaultdict
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, status, Body, Query, UploadFile
-from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from fastapi.responses import JSONResponse, StreamingResponse
+from pydantic import BaseModel, Field
 from sqlalchemy import select, exists, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -21,10 +22,11 @@ from ..config import get_config
 from ..core.agent_deployer import AgentDeployer
 from ..core.ssh_pool import get_ssh_pool, SSHPool
 from ..core.system_alert import sys_error, sys_warning, sys_info
+from ..core.time_utils import parse_event_timestamp, timestamp_epoch
 from ..db.database import get_db, AsyncSessionLocal
 from ..models.array import (
     ArrayModel, ArrayCreate, ArrayUpdate, ArrayResponse,
-    ArrayStatus, ConnectionState
+    ArrayStatus, ConnectionState, AgentState, DeploymentState
 )
 from ..models.lifecycle import SyncStateModel
 from ..models.alert import AlertModel, AlertAckModel
@@ -47,11 +49,113 @@ class BatchActionRequest(BaseModel):
     array_ids: List[str]
     password: Optional[str] = None  # For batch connect
 
+
+class ConnectionTestRequest(BaseModel):
+    host: str = Field(min_length=1)
+    port: int = Field(default=22, ge=1, le=65535)
+    username: str = Field(min_length=1)
+    password: str = ""
+    key_path: str = ""
+
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/arrays", tags=["arrays"])
 
 # In-memory status cache
 _array_status_cache: Dict[str, ArrayStatus] = {}
+
+
+def _status_payload(status_obj: ArrayStatus) -> Dict[str, Any]:
+    return status_obj.model_dump(mode="json")
+
+
+async def _publish_array_status(status_obj: ArrayStatus) -> None:
+    """Push a small status snapshot without forcing clients to reload a page."""
+    from .websocket import broadcast_status_update
+    await broadcast_status_update(status_obj.array_id, _status_payload(status_obj))
+
+
+def _apply_connection_snapshot(
+    status_obj: ArrayStatus,
+    state: ConnectionState,
+    *,
+    observed_at: datetime,
+    source: str,
+    error: str = "",
+) -> bool:
+    if status_obj.connection_observed_at and observed_at < status_obj.connection_observed_at:
+        return False
+    status_obj.state = state
+    status_obj.connection_observed_at = observed_at
+    status_obj.connection_status_source = source
+    status_obj.last_error = error
+    return True
+
+
+def _apply_agent_snapshot(
+    status_obj: ArrayStatus,
+    info: Dict[str, Any],
+    *,
+    observed_at: datetime,
+    source: Optional[str] = None,
+) -> bool:
+    """Apply a process probe while preserving fresher heartbeat health."""
+    if status_obj.agent_observed_at and observed_at < status_obj.agent_observed_at:
+        return False
+
+    deployed = bool(info.get("deployed"))
+    running = bool(info.get("running"))
+    status_obj.agent_deployed = deployed
+    status_obj.agent_running = running
+    status_obj.agent_observed_at = observed_at
+    status_obj.agent_status_source = source or str(info.get("source") or "probe")
+
+    heartbeat_fresh = bool(
+        status_obj.agent_heartbeat_at
+        and (datetime.now() - status_obj.agent_heartbeat_at).total_seconds() <= 90
+    )
+    if not deployed:
+        status_obj.agent_state = AgentState.NOT_DEPLOYED
+        status_obj.agent_status_message = "Agent 尚未部署"
+    elif running:
+        if not heartbeat_fresh or status_obj.agent_state not in (
+            AgentState.STARTING, AgentState.DEGRADED, AgentState.RUNNING
+        ):
+            status_obj.agent_state = AgentState.RUNNING
+        status_obj.agent_status_message = (
+            status_obj.agent_status_message
+            if heartbeat_fresh
+            else "Agent 进程运行中，等待健康心跳"
+        )
+    else:
+        status_obj.agent_state = AgentState.STOPPED
+        status_obj.agent_status_message = "Agent 已部署但进程未运行"
+    return True
+
+
+def _mark_agent_unknown(
+    status_obj: ArrayStatus,
+    message: str,
+    *,
+    observed_at: datetime,
+    source: str,
+) -> bool:
+    if status_obj.agent_observed_at and observed_at < status_obj.agent_observed_at:
+        return False
+    status_obj.agent_state = AgentState.UNKNOWN
+    status_obj.agent_status_message = message
+    status_obj.agent_status_source = source
+    status_obj.agent_observed_at = observed_at
+    return True
+
+
+def _set_deployment_status(
+    status_obj: ArrayStatus,
+    state: DeploymentState,
+    message: str,
+) -> None:
+    status_obj.deployment_state = state
+    status_obj.deployment_message = message
+    status_obj.deployment_updated_at = datetime.now()
 
 
 async def _run_blocking(func, _timeout: float, *args, **kwargs):
@@ -211,6 +315,7 @@ async def sync_array_alerts(
     Returns count of new alerts synced. Raises on fatal error.
     """
     from ..core.alert_store import get_alert_store
+    from ..core.alert_identity import build_source_event_id
     from ..models.alert import AlertCreate, AlertLevel
     from .websocket import broadcast_alert
 
@@ -222,18 +327,26 @@ async def sync_array_alerts(
         return 0
 
     total_lines = int(total_str.strip())
-    last_pos = await _get_sync_position(db, array_id)
+    stored_pos = await _get_sync_position(db, array_id)
+    last_pos = stored_pos
 
     if full_sync or total_lines < last_pos:
         last_pos = 0
 
     new_count = total_lines - last_pos
     content = ""
+    consumed_lines = 0
     if new_count > 0:
         read_count = min(new_count, 500)
+        start_line = last_pos + 1
+        end_line = last_pos + read_count
         exit_code, content, _ = await conn.execute_async(
-            f"tail -n {read_count} {log_path} 2>/dev/null", timeout=10
+            f"sed -n '{start_line},{end_line}p' {shlex.quote(log_path)} 2>/dev/null",
+            timeout=10,
         )
+        if exit_code != 0:
+            raise RuntimeError(f"Failed to read alert log chunk for {array_id}")
+        consumed_lines = read_count
 
     if content and content.strip():
         parsed_alerts = []
@@ -247,21 +360,11 @@ async def sync_array_alerts(
 
         if parsed_alerts:
             alert_store = get_alert_store()
-            existing_alerts = await alert_store.get_alerts(db, array_id=array_id, limit=100)
-            existing_keys = {
-                f"{a.timestamp.isoformat()}_{a.observer_name}_{a.message[:50]}"
-                for a in existing_alerts
-            }
-
             new_alerts = []
             for alert in parsed_alerts:
                 timestamp_str = alert.get('timestamp', '')
                 if not timestamp_str:
                     continue
-                dedup_key = f"{timestamp_str}_{alert.get('observer_name', '')}_{alert.get('message', '')[:50]}"
-                if dedup_key in existing_keys:
-                    continue
-                existing_keys.add(dedup_key)
 
                 try:
                     level_str = alert.get('level', 'info').lower()
@@ -272,9 +375,8 @@ async def sync_array_alerts(
                         level=level,
                         message=alert.get('message', ''),
                         details=alert.get('details', {}),
-                        timestamp=datetime.fromisoformat(
-                            timestamp_str.replace('Z', '+00:00').replace('+00:00', '')
-                        ),
+                        timestamp=parse_event_timestamp(timestamp_str),
+                        source_event_id=build_source_event_id(array_id, alert),
                     )
                     new_alerts.append(alert_create)
                 except Exception as e:
@@ -283,16 +385,20 @@ async def sync_array_alerts(
             if new_alerts:
                 new_alerts_count, created_db_alerts = await alert_store.create_alerts_batch(db, new_alerts)
                 await _auto_ack_new_alerts(db, array_id, created_db_alerts)
-                for alert in new_alerts[-10:]:
+                for alert in created_db_alerts:
                     await broadcast_alert({
+                        'id': alert.id,
                         'array_id': alert.array_id,
                         'observer_name': alert.observer_name,
-                        'level': alert.level.value,
+                        'level': alert.level,
                         'message': alert.message,
                         'timestamp': alert.timestamp.isoformat(),
+                        'source_event_id': alert.source_event_id,
                     })
 
-    await _update_sync_position(db, array_id, total_lines, last_pos)
+    new_position = last_pos + consumed_lines
+    await _update_sync_position(db, array_id, new_position, stored_pos)
+    await db.commit()
     return new_alerts_count
 
 
@@ -338,19 +444,23 @@ def _get_array_status(array_id: str) -> ArrayStatus:
     return _array_status_cache[array_id]
 
 
-async def _apply_observer_overrides(conn, config, db: AsyncSession):
-    """After deploy, merge observer_configs overrides into remote config.json."""
+async def _apply_observer_overrides(conn, config, db: AsyncSession, array_id: str):
+    """Apply observer overrides and reporter identity to remote config.json."""
     try:
         from .observer_configs import get_all_observer_overrides
         overrides = await get_all_observer_overrides(db)
-        if not overrides:
-            return
-        agent_path = config.remote.agent_deploy_path
         config_path = f"/etc/observation-points/config.json"
         content = await _run_blocking(conn.read_file, 10, config_path)
         if not content:
             return
         config_data = json.loads(content)
+        reporter = config_data.setdefault("reporter", {})
+        reporter["array_id"] = array_id
+        if config.remote.ingest_url:
+            reporter.update({
+                "push_enabled": True,
+                "push_url": config.remote.ingest_url,
+            })
         observers = config_data.setdefault("observers", {})
         for obs_name, ov in overrides.items():
             obs = observers.setdefault(obs_name, {})
@@ -358,9 +468,15 @@ async def _apply_observer_overrides(conn, config, db: AsyncSession):
         import base64
         config_json = json.dumps(config_data, indent=2, ensure_ascii=False)
         encoded = base64.b64encode(config_json.encode("utf-8")).decode("ascii")
-        await _run_blocking(conn.execute, 10, f"echo '{encoded}' | base64 -d > {config_path}")
+        exit_code, _, stderr = await _run_blocking(
+            conn.execute, 10, f"echo '{encoded}' | base64 -d > {config_path}"
+        )
+        if exit_code != 0:
+            raise RuntimeError(stderr or "远端配置写入命令失败")
+        return True
     except Exception as e:
         logging.getLogger(__name__).warning(f"Failed to apply observer overrides: {e}")
+        return False
 
 
 async def _compute_recent_alert_summary(
@@ -520,7 +636,22 @@ def _update_active_issues(status_obj: ArrayStatus, alert: dict):
         return
 
     if observer == 'card_info':
-        card_alerts = details.get('alerts', [])
+        card_alerts = []
+        for card_alert in details.get('alerts', []):
+            if card_alert.get('fields'):
+                card_alerts.append(card_alert)
+                continue
+            # Legacy agents emitted one flat card/field/value item per issue.
+            card_alerts.append({
+                'card': card_alert.get('card', '?'),
+                'board_id': card_alert.get('board_id', ''),
+                'level': card_alert.get('level', level),
+                'fields': [{
+                    'field': card_alert.get('field', '?'),
+                    'value': card_alert.get('value', '?'),
+                    'level': card_alert.get('level', level),
+                }],
+            })
         # Detect recovered card keys
         old_keys = {i['key'] for i in status_obj.active_issues if i.get('observer') == 'card_info'}
         new_keys = set()
@@ -1227,6 +1358,9 @@ async def batch_action(
             
             conn = ssh_pool.get_connection(array_id)
             config = get_config()
+            status_obj = _get_array_status(array_id)
+            status_obj.name = array.name
+            status_obj.host = array.host
             
             if action == "connect":
                 effective_password = (request.password or getattr(array, "saved_password", "") or "").strip()
@@ -1246,9 +1380,13 @@ async def batch_action(
                     conn.connect,
                     max(15, get_config().ssh.timeout + 5),
                 )
+                observed_at = datetime.now()
+                _apply_connection_snapshot(
+                    status_obj, conn.state, observed_at=observed_at,
+                    source="batch_connect", error=conn.last_error,
+                )
+                await _publish_array_status(status_obj)
                 if success:
-                    status_obj = _get_array_status(array_id)
-                    status_obj.state = conn.state
                     if effective_password and (not array.saved_password or array.saved_password != effective_password):
                         await _update_saved_password(array_id, effective_password)
                     return {"array_id": array_id, "success": True, "message": "Connected"}
@@ -1257,8 +1395,11 @@ async def batch_action(
             
             elif action == "disconnect":
                 ssh_pool.disconnect(array_id)
-                status_obj = _get_array_status(array_id)
-                status_obj.state = ConnectionState.DISCONNECTED
+                _apply_connection_snapshot(
+                    status_obj, ConnectionState.DISCONNECTED,
+                    observed_at=datetime.now(), source="batch_disconnect",
+                )
+                await _publish_array_status(status_obj)
                 return {"array_id": array_id, "success": True, "message": "Disconnected"}
             
             elif action == "refresh":
@@ -1266,10 +1407,13 @@ async def batch_action(
                     return {"array_id": array_id, "success": False, "error": "Array not connected"}
                 
                 deployer = AgentDeployer(conn, config)
-                status_obj = _get_array_status(array_id)
-                status_obj.agent_deployed = await _run_blocking(deployer.check_deployed, 10)
-                status_obj.agent_running = await _run_blocking(deployer.check_running, 10)
+                observed_at = datetime.now()
+                info = await _run_blocking(deployer.get_agent_status, 10)
+                _apply_agent_snapshot(
+                    status_obj, info, observed_at=observed_at, source="batch_refresh",
+                )
                 status_obj.last_refresh = datetime.now()
+                await _publish_array_status(status_obj)
                 
                 return {"array_id": array_id, "success": True, "message": "Refreshed"}
             
@@ -1278,10 +1422,23 @@ async def batch_action(
                     return {"array_id": array_id, "success": False, "error": "Array not connected"}
                 
                 deployer = AgentDeployer(conn, config)
+                _set_deployment_status(
+                    status_obj, DeploymentState.DEPLOYING, "批量任务正在部署 Agent",
+                )
+                status_obj.agent_state = AgentState.STARTING
+                status_obj.agent_status_message = "Agent 部署中"
+                await _publish_array_status(status_obj)
                 result = await _run_blocking(deployer.deploy, 120)
                 if result.get("ok"):
-                    status_obj = _get_array_status(array_id)
-                    status_obj.agent_deployed = True
+                    observed_at = datetime.now()
+                    info = await _run_blocking(deployer.get_agent_status, 10)
+                    _apply_agent_snapshot(
+                        status_obj, info, observed_at=observed_at, source="batch_deploy",
+                    )
+                    _set_deployment_status(
+                        status_obj, DeploymentState.SUCCEEDED, "Agent 批量部署完成",
+                    )
+                    await _publish_array_status(status_obj)
                     return {
                         "array_id": array_id,
                         "success": True,
@@ -1289,6 +1446,11 @@ async def batch_action(
                         "warnings": result.get("warnings", []),
                     }
                 else:
+                    _set_deployment_status(
+                        status_obj, DeploymentState.FAILED,
+                        result.get("error", "Agent 批量部署失败"),
+                    )
+                    await _publish_array_status(status_obj)
                     return {"array_id": array_id, "success": False, "error": result.get("error")}
             
             elif action == "start-agent":
@@ -1296,12 +1458,24 @@ async def batch_action(
                     return {"array_id": array_id, "success": False, "error": "Array not connected"}
                 
                 deployer = AgentDeployer(conn, config)
+                status_obj.agent_state = AgentState.STARTING
+                status_obj.agent_status_message = "Agent 正在启动"
+                status_obj.agent_observed_at = datetime.now()
+                status_obj.agent_status_source = "batch_start"
+                await _publish_array_status(status_obj)
                 result = await _run_blocking(deployer.start_agent, 60)
                 if result.get("ok"):
-                    status_obj = _get_array_status(array_id)
-                    status_obj.agent_running = True
+                    observed_at = datetime.now()
+                    info = await _run_blocking(deployer.get_agent_status, 10)
+                    _apply_agent_snapshot(status_obj, info, observed_at=observed_at)
+                    await _publish_array_status(status_obj)
                     return {"array_id": array_id, "success": True, "message": "Agent started"}
                 else:
+                    _mark_agent_unknown(
+                        status_obj, result.get("error", "Agent 启动结果待确认"),
+                        observed_at=datetime.now(), source="batch_start",
+                    )
+                    await _publish_array_status(status_obj)
                     return {"array_id": array_id, "success": False, "error": result.get("error")}
             
             elif action == "stop-agent":
@@ -1311,10 +1485,17 @@ async def batch_action(
                 deployer = AgentDeployer(conn, config)
                 result = await _run_blocking(deployer.stop_agent, 30)
                 if result.get("ok"):
-                    status_obj = _get_array_status(array_id)
-                    status_obj.agent_running = False
+                    observed_at = datetime.now()
+                    info = await _run_blocking(deployer.get_agent_status, 10)
+                    _apply_agent_snapshot(status_obj, info, observed_at=observed_at)
+                    await _publish_array_status(status_obj)
                     return {"array_id": array_id, "success": True, "message": "Agent stopped"}
                 else:
+                    _mark_agent_unknown(
+                        status_obj, result.get("error", "Agent 停止结果待确认"),
+                        observed_at=datetime.now(), source="batch_stop",
+                    )
+                    await _publish_array_status(status_obj)
                     return {"array_id": array_id, "success": False, "error": result.get("error")}
             
             elif action == "restart-agent":
@@ -1322,12 +1503,24 @@ async def batch_action(
                     return {"array_id": array_id, "success": False, "error": "Array not connected"}
                 
                 deployer = AgentDeployer(conn, config)
+                status_obj.agent_state = AgentState.STARTING
+                status_obj.agent_status_message = "Agent 正在重启"
+                status_obj.agent_observed_at = datetime.now()
+                status_obj.agent_status_source = "batch_restart"
+                await _publish_array_status(status_obj)
                 result = await _run_blocking(deployer.restart_agent, 60)
                 if result.get("ok"):
-                    status_obj = _get_array_status(array_id)
-                    status_obj.agent_running = True
+                    observed_at = datetime.now()
+                    info = await _run_blocking(deployer.get_agent_status, 10)
+                    _apply_agent_snapshot(status_obj, info, observed_at=observed_at)
+                    await _publish_array_status(status_obj)
                     return {"array_id": array_id, "success": True, "message": "Agent restarted"}
                 else:
+                    _mark_agent_unknown(
+                        status_obj, result.get("error", "Agent 重启结果待确认"),
+                        observed_at=datetime.now(), source="batch_restart",
+                    )
+                    await _publish_array_status(status_obj)
                     return {"array_id": array_id, "success": False, "error": result.get("error")}
             
             return {"array_id": array_id, "success": False, "error": "Unknown action"}
@@ -1668,6 +1861,56 @@ async def create_array(
     return db_array
 
 
+@router.post("/test-connection")
+async def test_array_connection(payload: ConnectionTestRequest):
+    """Test SSH reachability and authentication without persisting an array."""
+    from ..core.ssh_pool import SSHConnection
+
+    config = get_config()
+    connection = SSHConnection(
+        array_id=f"probe_{uuid.uuid4().hex[:8]}",
+        host=payload.host.strip(),
+        port=payload.port,
+        username=payload.username.strip(),
+        password=payload.password or None,
+        key_path=payload.key_path.strip() or None,
+    )
+    started = time.monotonic()
+    try:
+        connected = await _run_blocking(
+            connection.connect,
+            max(float(config.ssh.timeout) + 4, 6),
+        )
+    except asyncio.TimeoutError:
+        connected = False
+        connection._last_error = "Connection attempt timed out"
+    except Exception as exc:
+        connected = False
+        connection._last_error = str(exc)
+    finally:
+        latency_ms = round((time.monotonic() - started) * 1000)
+        connection.disconnect()
+
+    if connected:
+        return {
+            "ok": True,
+            "latency_ms": latency_ms,
+            "message": "SSH 端口可达，账号认证成功",
+        }
+
+    raw_error = connection.last_error or "Unknown SSH connection error"
+    normalized = raw_error.lower()
+    if "authentication" in normalized or "auth fail" in normalized:
+        message = "账号认证失败，请检查用户名、密码或密钥路径"
+    elif "unreachable" in normalized or "tcp probe" in normalized:
+        message = f"无法连接 {payload.host}:{payload.port}，请检查地址、端口和网络"
+    elif "timed out" in normalized or "timeout" in normalized:
+        message = "连接超时，请检查网络路由、防火墙或 SSH 服务状态"
+    else:
+        message = f"SSH 连接失败：{raw_error}"
+    return {"ok": False, "latency_ms": latency_ms, "message": message}
+
+
 @router.get("/{array_id}", response_model=ArrayResponse)
 async def get_array(
     array_id: str,
@@ -1952,10 +2195,15 @@ async def connect_array(
     
     # Update status
     status_obj = _get_array_status(array_id)
-    status_obj.state = conn.state
-    status_obj.last_error = conn.last_error
+    status_obj.name = array.name
+    status_obj.host = array.host
+    _apply_connection_snapshot(
+        status_obj, conn.state, observed_at=datetime.now(), source="connect",
+        error=conn.last_error,
+    )
     
     if not success:
+        await _publish_array_status(status_obj)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Connection failed: {conn.last_error}"
@@ -1972,12 +2220,21 @@ async def connect_array(
     # Check agent status
     config = get_config()
     deployer = AgentDeployer(conn, config)
-    status_obj.agent_deployed = await _run_blocking(deployer.check_deployed, 10)
-    status_obj.agent_running = await _run_blocking(deployer.check_running, 10)
+    probe_started = datetime.now()
+    try:
+        agent_info = await _run_blocking(deployer.get_agent_status, 10)
+        _apply_agent_snapshot(status_obj, agent_info, observed_at=probe_started)
+    except Exception as exc:
+        _mark_agent_unknown(
+            status_obj, f"Agent 状态暂时无法确认: {exc}",
+            observed_at=probe_started, source="connect_probe",
+        )
+    await _publish_array_status(status_obj)
 
     if not status_obj.agent_deployed:
         return {
             "status": "connected",
+            "status_snapshot": _status_payload(status_obj),
             "agent_status": "not_deployed",
             "hint": "Agent 未部署，是否立即部署？",
             "agent_deployed": status_obj.agent_deployed,
@@ -1987,6 +2244,7 @@ async def connect_array(
 
     return {
         "status": "connected",
+        "status_snapshot": _status_payload(status_obj),
         "agent_deployed": status_obj.agent_deployed,
         "agent_running": status_obj.agent_running,
         "has_saved_password": True,
@@ -2005,9 +2263,16 @@ async def disconnect_array(
     
     # Update status
     status_obj = _get_array_status(array_id)
-    status_obj.state = ConnectionState.DISCONNECTED
+    _apply_connection_snapshot(
+        status_obj, ConnectionState.DISCONNECTED,
+        observed_at=datetime.now(), source="user_disconnect",
+    )
+    await _publish_array_status(status_obj)
     
-    return {"status": "disconnected"}
+    return {
+        "status": "disconnected",
+        "status_snapshot": _status_payload(status_obj),
+    }
 
 
 @router.post("/{array_id}/refresh")
@@ -2043,17 +2308,35 @@ async def refresh_array(
     if not reachable:
         conn._mark_disconnected()
         status_obj = _get_array_status(array_id)
-        status_obj.state = conn.state
+        observed_at = datetime.now()
+        _apply_connection_snapshot(
+            status_obj, conn.state, observed_at=observed_at,
+            source="manual_refresh", error="阵列 SSH 端口不可达",
+        )
+        _mark_agent_unknown(
+            status_obj, "阵列不可达，Agent 状态暂时无法核验",
+            observed_at=observed_at, source="manual_refresh",
+        )
+        await _publish_array_status(status_obj)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"阵列 {conn.host} 网络不可达，请检查阵列是否在线"
         )
 
-    if not conn.check_alive():
+    if not await _run_blocking(conn.check_alive, 5):
         # TCP OK but SSH dead — try one reconnect
-        if not conn._try_reconnect():
+        if not await _run_blocking(conn._try_reconnect, 15):
             status_obj = _get_array_status(array_id)
-            status_obj.state = conn.state
+            observed_at = datetime.now()
+            _apply_connection_snapshot(
+                status_obj, conn.state, observed_at=observed_at,
+                source="manual_refresh", error=conn.last_error or "SSH 会话失效",
+            )
+            _mark_agent_unknown(
+                status_obj, "SSH 重连失败，Agent 状态暂时无法核验",
+                observed_at=observed_at, source="manual_refresh",
+            )
+            await _publish_array_status(status_obj)
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="SSH连接已断开且重连失败，请手动重新连接"
@@ -2065,159 +2348,66 @@ async def refresh_array(
     config = get_config()
     deployer = AgentDeployer(conn, config)
     loop = asyncio.get_event_loop()
-    try:
-        status_obj.agent_deployed = await asyncio.wait_for(
-            loop.run_in_executor(None, deployer.check_deployed), timeout=10
-        )
-        status_obj.agent_running = await asyncio.wait_for(
-            loop.run_in_executor(None, deployer.check_running), timeout=10
-        )
-    except (asyncio.TimeoutError, Exception) as e:
-        logger.warning(f"Agent status check failed for {array_id}: {e}")
-        status_obj.agent_deployed = False
-        status_obj.agent_running = False
-    
-    # Get detailed agent info — also timeout-protected
+    probe_started = datetime.now()
     try:
         agent_info = await asyncio.wait_for(
             loop.run_in_executor(None, deployer.get_agent_status), timeout=10
         )
-        status_obj.agent_running = agent_info.get("running", False)
-    except (asyncio.TimeoutError, Exception) as e:
+        _apply_agent_snapshot(status_obj, agent_info, observed_at=probe_started)
+    except Exception as e:
         logger.warning(f"Agent info fetch failed for {array_id}: {e}")
-        agent_info = {"running": False}
-        status_obj.agent_running = False
+        agent_info = {"running": status_obj.agent_running, "pid": None}
+        _mark_agent_unknown(
+            status_obj, "Agent 状态核验超时，保留上次确认结果",
+            observed_at=probe_started, source="manual_refresh",
+        )
     
     log_path = config.remote.agent_log_path
     new_alerts_count = 0
-    
+
     try:
-        # Step 1: Get total line count of alerts.log (async with timeout protection)
-        exit_code, total_str, _ = await conn.execute_async(f"wc -l < {log_path} 2>/dev/null", timeout=5)
-        if exit_code != 0:
-            # File may not exist yet
-            status_obj.last_refresh = datetime.now()
-            return {
-                "state": status_obj.state.value if hasattr(status_obj.state, 'value') else status_obj.state,
-                "agent_deployed": status_obj.agent_deployed,
-                "agent_running": status_obj.agent_running,
-                "agent_pid": agent_info.get("pid"),
-                "new_alerts_synced": 0,
-                "observer_status": status_obj.observer_status,
-                "last_refresh": status_obj.last_refresh.isoformat() if status_obj.last_refresh else None,
-            }
-        
-        total_lines = int(total_str.strip())
-        last_pos = await _get_sync_position(db, array_id)
-        
-        # Reset position if full_sync or if file was truncated/rotated
-        if full_sync or total_lines < last_pos:
-            last_pos = 0
-        
-        new_count = total_lines - last_pos
-        
-        content = ""
-        if new_count > 0:
-            # Step 2: Only read new lines using tail
-            # Cap at 500 lines per sync to avoid large reads
-            read_count = min(new_count, 500)
-            exit_code, content, _ = await conn.execute_async(
-                f"tail -n {read_count} {log_path} 2>/dev/null", timeout=10
-            )
-        
-        if content and content.strip():
-            parsed_alerts = []
+        new_alerts_count = await sync_array_alerts(
+            array_id=array_id,
+            db=db,
+            conn=conn,
+            config=config,
+            full_sync=full_sync,
+        )
+        if new_alerts_count:
+            sys_info("arrays", f"Synced {new_alerts_count} new alerts for {array_id}")
+
+        # Status derivation uses a small recent window; durable ingestion is handled above.
+        exit_code, content, _ = await conn.execute_async(
+            f"tail -n 50 {shlex.quote(log_path)} 2>/dev/null", timeout=10
+        )
+        parsed_alerts = []
+        if exit_code == 0 and content and content.strip():
             for line in content.strip().split('\n'):
-                if not line.strip():
-                    continue
                 try:
-                    alert = json.loads(line)
-                    parsed_alerts.append(alert)
-                except Exception:
-                    pass
-            
-            if parsed_alerts:
-                # Use hash-based dedup (much faster than DB query)
-                alert_store = get_alert_store()
-                existing_alerts = await alert_store.get_alerts(db, array_id=array_id, limit=100)
-                existing_keys = set()
-                for a in existing_alerts:
-                    key = f"{a.timestamp.isoformat()}_{a.observer_name}_{a.message[:50]}"
-                    existing_keys.add(key)
-                
-                new_alerts = []
-                for alert in parsed_alerts:
-                    timestamp_str = alert.get('timestamp', '')
-                    if not timestamp_str:
-                        continue
-                    
-                    dedup_key = f"{timestamp_str}_{alert.get('observer_name', '')}_{alert.get('message', '')[:50]}"
-                    if dedup_key in existing_keys:
-                        continue
-                    existing_keys.add(dedup_key)
-                    
-                    try:
-                        level_str = alert.get('level', 'info').lower()
-                        level = AlertLevel(level_str) if level_str in [l.value for l in AlertLevel] else AlertLevel.INFO
-                        
-                        alert_create = AlertCreate(
-                            array_id=array_id,
-                            observer_name=alert.get('observer_name', 'unknown'),
-                            level=level,
-                            message=alert.get('message', ''),
-                            details=alert.get('details', {}),
-                            timestamp=datetime.fromisoformat(
-                                timestamp_str.replace('Z', '+00:00').replace('+00:00', '')
-                            ),
-                        )
-                        new_alerts.append(alert_create)
-                    except Exception as e:
-                        sys_error("arrays", f"Failed to parse alert", {"error": str(e)})
-                
-                if new_alerts:
-                    new_alerts_count, created_db_alerts = await alert_store.create_alerts_batch(db, new_alerts)
-                    await _auto_ack_new_alerts(db, array_id, created_db_alerts)
-                    sys_info("arrays", f"Synced {new_alerts_count} new alerts for {array_id}")
-                    
-                    for alert in new_alerts[-10:]:
-                        await broadcast_alert({
-                            'array_id': alert.array_id,
-                            'observer_name': alert.observer_name,
-                            'level': alert.level.value,
-                            'message': alert.message,
-                            'timestamp': alert.timestamp.isoformat(),
-                        })
-                
-                # Update observer status from recent alerts
-                for alert in parsed_alerts[-50:]:
-                    observer = alert.get('observer_name', '')
-                    level = alert.get('level', 'info')
-                    message = alert.get('message', '')
-                    
-                    if observer:
-                        if level in ('error', 'critical'):
-                            status_obj.observer_status[observer] = {
-                                'status': 'error',
-                                'message': message[:100],
-                            }
-                        elif level == 'warning':
-                            if observer not in status_obj.observer_status or \
-                               status_obj.observer_status[observer].get('status') != 'error':
-                                status_obj.observer_status[observer] = {
-                                    'status': 'warning',
-                                    'message': message[:100],
-                                }
+                    parsed_alerts.append(json.loads(line))
+                except (json.JSONDecodeError, TypeError):
+                    continue
 
-                # Update active issues from parsed alerts (chronological order)
-                for alert in parsed_alerts:
-                    _update_active_issues(status_obj, alert)
+        for alert in parsed_alerts:
+            observer = alert.get('observer_name', '')
+            level = alert.get('level', 'info')
+            message = alert.get('message', '')
+            if observer and level in ('error', 'critical'):
+                status_obj.observer_status[observer] = {
+                    'status': 'error',
+                    'message': message[:100],
+                }
+            elif observer and level == 'warning':
+                current = status_obj.observer_status.get(observer, {})
+                if current.get('status') != 'error':
+                    status_obj.observer_status[observer] = {
+                        'status': 'warning',
+                        'message': message[:100],
+                    }
 
-                # Re-derive from DB to get alert_ids and filter out acked issues
-                status_obj.active_issues = await _derive_active_issues_from_db(db, array_id)
-        
-        # Update sync position in DB (optimistic lock — skip if another instance advanced)
-        await _update_sync_position(db, array_id, total_lines, last_pos)
-        
+        for alert in parsed_alerts:
+            _update_active_issues(status_obj, alert)
+        status_obj.active_issues = await _derive_active_issues_from_db(db, array_id)
     except Exception as e:
         sys_error("arrays", f"Refresh failed for {array_id}", {"error": str(e)})
     
@@ -2245,6 +2435,7 @@ async def refresh_array(
         logger.debug(f"Traffic sync during refresh: {e}")
 
     status_obj.last_refresh = datetime.now()
+    await _publish_array_status(status_obj)
     
     # Return slim response (no recent_alerts blob)
     return {
@@ -2305,7 +2496,12 @@ async def get_array_metrics(
             except Exception:
                 pass
     
-    # Also check for pushed metrics (by host IP)
+    # Prefer stable array identity; keep host lookup for legacy Agents.
+    pushed = get_metrics_for_ip(array_id, minutes)
+    if pushed:
+        metrics.extend(pushed)
+
+    # Also check for legacy pushed metrics keyed by host IP.
     # Find the host IP for this array
     for aid, conn_obj in ssh_pool._connections.items():
         if aid == array_id:
@@ -2314,13 +2510,24 @@ async def get_array_metrics(
                 metrics.extend(pushed)
             break
     
-    # Sort by timestamp
-    metrics.sort(key=lambda m: m.get('ts', ''))
+    # File polling and push can contain the same sample; collapse them deterministically.
+    deduplicated = {}
+    for metric in metrics:
+        key = metric.get('sample_id') or (
+            metric.get('ts'), metric.get('observer'), metric.get('port'),
+            metric.get('cpu0'), metric.get('mem_used_mb'),
+        )
+        deduplicated[key] = metric
+    metrics = list(deduplicated.values())
+    metrics.sort(key=lambda m: timestamp_epoch(m.get('ts')) or 0)
     
     # Filter to requested time range
     from datetime import timedelta
-    cutoff = (datetime.now() - timedelta(minutes=minutes)).isoformat()
-    metrics = [m for m in metrics if m.get('ts', '') >= cutoff]
+    cutoff_epoch = (datetime.now() - timedelta(minutes=minutes)).timestamp()
+    metrics = [
+        m for m in metrics
+        if timestamp_epoch(m.get('ts')) is None or timestamp_epoch(m.get('ts')) >= cutoff_epoch
+    ]
     
     return {
         "array_id": array_id,
@@ -2348,11 +2555,37 @@ async def deploy_agent(
     config = get_config()
     deployer = AgentDeployer(conn, config)
     loop = asyncio.get_event_loop()
+    status_obj = _get_array_status(array_id)
+    _set_deployment_status(status_obj, DeploymentState.DEPLOYING, "正在上传并安装 Agent")
+    status_obj.agent_state = AgentState.STARTING
+    status_obj.agent_status_message = "Agent 部署中"
+    await _publish_array_status(status_obj)
     try:
-        result = await asyncio.wait_for(loop.run_in_executor(None, deployer.deploy), timeout=120)
+        result = await asyncio.wait_for(
+            loop.run_in_executor(None, lambda: deployer.deploy(start=False)),
+            timeout=120,
+        )
     except asyncio.TimeoutError:
-        raise HTTPException(status_code=504, detail="Deploy timed out (120s)")
+        _set_deployment_status(
+            status_obj, DeploymentState.VERIFYING,
+            "部署操作仍在远端执行，平台正在后台确认结果",
+        )
+        _mark_agent_unknown(
+            status_obj, "部署操作超时，结果待后台核验",
+            observed_at=datetime.now(), source="deploy_timeout",
+        )
+        await _publish_array_status(status_obj)
+        return JSONResponse(status_code=202, content={
+            "ok": True,
+            "outcome": "pending",
+            "message": "部署仍在执行，平台将自动确认最终状态",
+        })
     if not result.get("ok"):
+        _set_deployment_status(
+            status_obj, DeploymentState.FAILED,
+            result.get("error", "Agent 安装失败"),
+        )
+        await _publish_array_status(status_obj)
         sys_error(
             "arrays",
             f"Agent deploy failed for array {array_id}",
@@ -2363,14 +2596,65 @@ async def deploy_agent(
             detail=result.get("error", "Deploy failed")
         )
 
-    await _apply_observer_overrides(conn, config, db)
+    _set_deployment_status(status_obj, DeploymentState.CONFIGURING, "Agent 已安装，正在应用配置")
+    await _publish_array_status(status_obj)
+    config_applied = await _apply_observer_overrides(conn, config, db, array_id)
+    if not config_applied:
+        probe_started = datetime.now()
+        try:
+            info = await _run_blocking(deployer.get_agent_status, 10)
+            _apply_agent_snapshot(status_obj, info, observed_at=probe_started)
+        except Exception as exc:
+            _mark_agent_unknown(
+                status_obj, f"Agent 已安装，运行状态待确认: {exc}",
+                observed_at=probe_started, source="deploy_partial",
+            )
+        _set_deployment_status(
+            status_obj, DeploymentState.PARTIAL,
+            "Agent 已安装，但远端配置写入失败，尚未启动",
+        )
+        await _publish_array_status(status_obj)
+        return {
+            **result,
+            "ok": True,
+            "outcome": "partial",
+            "message": "Agent 已安装但尚未启动；配置写入失败，请检查配置路径",
+        }
 
-    status_obj = _get_array_status(array_id)
-    status_obj.agent_deployed = await _run_blocking(deployer.check_deployed, 10)
-    status_obj.agent_running = await _run_blocking(deployer.check_running, 10)
+    _set_deployment_status(status_obj, DeploymentState.VERIFYING, "配置已写入，正在启动并核验 Agent")
+    await _publish_array_status(status_obj)
+    start_result = await _run_blocking(deployer.start_agent, 75)
+    if not start_result.get("ok"):
+        _set_deployment_status(
+            status_obj, DeploymentState.PARTIAL,
+            start_result.get("error", "Agent 已部署并配置，但启动失败"),
+        )
+        _mark_agent_unknown(
+            status_obj, "Agent 启动结果待确认",
+            observed_at=datetime.now(), source="deploy_start_failed",
+        )
+        await _publish_array_status(status_obj)
+        return {
+            **result,
+            "ok": True,
+            "outcome": "partial",
+            "message": "Agent 已部署并配置；启动未确认成功",
+        }
+
+    probe_started = datetime.now()
+    try:
+        info = await _run_blocking(deployer.get_agent_status, 10)
+        _apply_agent_snapshot(status_obj, info, observed_at=probe_started)
+    except Exception as exc:
+        _mark_agent_unknown(
+            status_obj, f"Agent 已部署，运行状态待确认: {exc}",
+            observed_at=probe_started, source="deploy_verify",
+        )
+    _set_deployment_status(status_obj, DeploymentState.SUCCEEDED, "Agent 部署与配置已完成")
+    await _publish_array_status(status_obj)
     sys_info("arrays", f"Agent deployed for array {array_id}", {"array_id": array_id})
 
-    return result
+    return {**result, "outcome": "success", "status": _status_payload(status_obj)}
 
 
 @router.post("/{array_id}/start-agent")
@@ -2391,11 +2675,30 @@ async def start_agent(
     config = get_config()
     deployer = AgentDeployer(conn, config)
     loop = asyncio.get_event_loop()
+    status_obj = _get_array_status(array_id)
+    status_obj.agent_state = AgentState.STARTING
+    status_obj.agent_status_message = "Agent 正在启动"
+    status_obj.agent_status_source = "user_start"
+    status_obj.agent_observed_at = datetime.now()
+    await _publish_array_status(status_obj)
     try:
         result = await asyncio.wait_for(loop.run_in_executor(None, deployer.start_agent), timeout=60)
     except asyncio.TimeoutError:
-        raise HTTPException(status_code=504, detail="Start agent timed out (60s)")
+        _mark_agent_unknown(
+            status_obj, "启动命令已发出，结果待后台核验",
+            observed_at=datetime.now(), source="start_timeout",
+        )
+        await _publish_array_status(status_obj)
+        return JSONResponse(status_code=202, content={
+            "ok": True, "outcome": "pending",
+            "message": "启动仍在进行，平台将自动确认最终状态",
+        })
     if not result.get("ok"):
+        status_obj.agent_state = AgentState.ERROR
+        status_obj.agent_status_message = result.get("error", "Agent 启动失败")
+        status_obj.agent_status_source = "start_result"
+        status_obj.agent_observed_at = datetime.now()
+        await _publish_array_status(status_obj)
         sys_error(
             "arrays",
             f"Agent start failed for array {array_id}",
@@ -2406,9 +2709,16 @@ async def start_agent(
             detail=result.get("error", "Start failed")
         )
 
-    status_obj = _get_array_status(array_id)
-    status_obj.agent_running = await _run_blocking(deployer.check_running, 10)
-    status_obj.agent_deployed = await _run_blocking(deployer.check_deployed, 10)
+    probe_started = datetime.now()
+    try:
+        info = await _run_blocking(deployer.get_agent_status, 10)
+        _apply_agent_snapshot(status_obj, info, observed_at=probe_started)
+    except Exception as exc:
+        _mark_agent_unknown(
+            status_obj, f"启动命令成功，状态待确认: {exc}",
+            observed_at=probe_started, source="start_verify",
+        )
+    await _publish_array_status(status_obj)
     sys_info("arrays", f"Agent started for array {array_id}", {"array_id": array_id})
 
     return result
@@ -2435,8 +2745,23 @@ async def stop_agent(
     try:
         result = await asyncio.wait_for(loop.run_in_executor(None, deployer.stop_agent), timeout=30)
     except asyncio.TimeoutError:
-        raise HTTPException(status_code=504, detail="Stop agent timed out (30s)")
+        status_obj = _get_array_status(array_id)
+        _mark_agent_unknown(
+            status_obj, "停止命令已发出，结果待后台核验",
+            observed_at=datetime.now(), source="stop_timeout",
+        )
+        await _publish_array_status(status_obj)
+        return JSONResponse(status_code=202, content={
+            "ok": True, "outcome": "pending",
+            "message": "停止仍在进行，平台将自动确认最终状态",
+        })
     if not result.get("ok"):
+        status_obj = _get_array_status(array_id)
+        _mark_agent_unknown(
+            status_obj, result.get("error", "Agent 停止失败，当前状态待确认"),
+            observed_at=datetime.now(), source="stop_result",
+        )
+        await _publish_array_status(status_obj)
         sys_error(
             "arrays",
             f"Agent stop failed for array {array_id}",
@@ -2448,8 +2773,16 @@ async def stop_agent(
         )
 
     status_obj = _get_array_status(array_id)
-    status_obj.agent_running = await _run_blocking(deployer.check_running, 10)
-    status_obj.agent_deployed = await _run_blocking(deployer.check_deployed, 10)
+    probe_started = datetime.now()
+    try:
+        info = await _run_blocking(deployer.get_agent_status, 10)
+        _apply_agent_snapshot(status_obj, info, observed_at=probe_started)
+    except Exception as exc:
+        _mark_agent_unknown(
+            status_obj, f"停止命令成功，状态待确认: {exc}",
+            observed_at=probe_started, source="stop_verify",
+        )
+    await _publish_array_status(status_obj)
     sys_info("arrays", f"Agent stopped for array {array_id}", {"array_id": array_id})
 
     return result
@@ -2473,11 +2806,30 @@ async def restart_agent(
     config = get_config()
     deployer = AgentDeployer(conn, config)
     loop = asyncio.get_event_loop()
+    status_obj = _get_array_status(array_id)
+    status_obj.agent_state = AgentState.STARTING
+    status_obj.agent_status_message = "Agent 正在重启"
+    status_obj.agent_status_source = "user_restart"
+    status_obj.agent_observed_at = datetime.now()
+    await _publish_array_status(status_obj)
     try:
         result = await asyncio.wait_for(loop.run_in_executor(None, deployer.restart_agent), timeout=60)
     except asyncio.TimeoutError:
-        raise HTTPException(status_code=504, detail="Restart agent timed out (60s)")
+        _mark_agent_unknown(
+            status_obj, "重启命令已发出，结果待后台核验",
+            observed_at=datetime.now(), source="restart_timeout",
+        )
+        await _publish_array_status(status_obj)
+        return JSONResponse(status_code=202, content={
+            "ok": True, "outcome": "pending",
+            "message": "重启仍在进行，平台将自动确认最终状态",
+        })
     if not result.get("ok"):
+        status_obj.agent_state = AgentState.ERROR
+        status_obj.agent_status_message = result.get("error", "Agent 重启失败")
+        status_obj.agent_status_source = "restart_result"
+        status_obj.agent_observed_at = datetime.now()
+        await _publish_array_status(status_obj)
         sys_error(
             "arrays",
             f"Agent restart failed for array {array_id}",
@@ -2488,9 +2840,16 @@ async def restart_agent(
             detail=result.get("error", "Restart failed")
         )
 
-    status_obj = _get_array_status(array_id)
-    status_obj.agent_running = await _run_blocking(deployer.check_running, 10)
-    status_obj.agent_deployed = await _run_blocking(deployer.check_deployed, 10)
+    probe_started = datetime.now()
+    try:
+        info = await _run_blocking(deployer.get_agent_status, 10)
+        _apply_agent_snapshot(status_obj, info, observed_at=probe_started)
+    except Exception as exc:
+        _mark_agent_unknown(
+            status_obj, f"重启命令成功，状态待确认: {exc}",
+            observed_at=probe_started, source="restart_verify",
+        )
+    await _publish_array_status(status_obj)
     sys_info("arrays", f"Agent restarted for array {array_id}", {"array_id": array_id})
 
     return result

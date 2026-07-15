@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 
 
 class PortFecObserver(BaseObserver):
+    persistent_state_fields = BaseObserver.persistent_state_fields + ('_last_fec', '_first_run')
     """
     FEC 模式变化监测
 
@@ -55,8 +56,7 @@ class PortFecObserver(BaseObserver):
             current_fec = self._collect_via_ethtool()
 
         if not current_fec:
-            return self.create_result(
-                has_alert=False,
+            return self.create_error_result(
                 message="FEC 查询无数据（可能无网络端口或 ethtool 不可用）",
             )
 

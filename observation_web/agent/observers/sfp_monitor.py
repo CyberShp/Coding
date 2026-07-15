@@ -36,12 +36,14 @@ class SfpMonitorObserver(BaseObserver):
         ret, stdout, stderr = run_command(self.command, shell=True, timeout=30)
         if ret != 0:
             logger.info(f"[sfp_monitor] 命令执行失败，跳过本轮检测: {stderr[:200]}")
-            return self.create_result(
-                has_alert=False,
+            return self.create_error_result(
                 message="光模块: 命令执行失败",
+                details={'stderr': stderr[:200], 'return_code': ret},
             )
 
         blocks = self._split_blocks(stdout)
+        if not blocks:
+            return self.create_error_result("光模块: 命令成功但未解析到模块数据")
         alerts = []
 
         for block in blocks:

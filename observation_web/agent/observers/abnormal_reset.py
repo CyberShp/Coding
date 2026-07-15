@@ -60,6 +60,7 @@ class AbnormalResetObserver(BaseObserver):
     5. 读取全部输出并解析 reason / time
     6. 匹配异常关键字则上报告警，记录时间戳避免重复
     """
+    persistent_state_fields = BaseObserver.persistent_state_fields + ('_last_reported_times',)
 
     def __init__(self, name: str, config: Dict[str, Any]):
         super().__init__(name, config)
@@ -166,8 +167,7 @@ class AbnormalResetObserver(BaseObserver):
                 )
             else:
                 logger.warning(f"[abnormal_reset] 命令执行失败: {err_preview}")
-            return self.create_result(
-                has_alert=False,
+            return self.create_error_result(
                 message="异常复位: 命令执行失败",
                 details={'stderr': err_preview},
             )

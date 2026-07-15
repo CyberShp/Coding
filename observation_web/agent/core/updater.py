@@ -3,6 +3,7 @@ Agent self-updater.
 """
 
 import hashlib
+import compileall
 import json
 import logging
 import os
@@ -10,6 +11,7 @@ import shutil
 import sys
 import tarfile
 import tempfile
+import subprocess
 from pathlib import Path
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
@@ -17,11 +19,54 @@ from urllib.request import Request, urlopen
 logger = logging.getLogger(__name__)
 
 HASH_FILE = Path("/etc/observation-points/.package_hash")
+PENDING_FILE = Path("/etc/observation-points/.update_pending")
 
 
 class AgentUpdater:
     def __init__(self, config: dict):
         self.config = config
+        self._confirm_previous_update()
+
+    def _current_package(self) -> Path:
+        return Path(__file__).resolve().parents[1]
+
+    def _confirm_previous_update(self):
+        """A new process reached core initialization, so its retained backup is safe to remove."""
+        current_pkg = self._current_package()
+        backup_pkg = current_pkg.with_name(f"{current_pkg.name}.bak")
+        if PENDING_FILE.exists():
+            shutil.rmtree(backup_pkg, ignore_errors=True)
+            try:
+                PENDING_FILE.unlink()
+            except OSError:
+                pass
+
+    def _validate_staged_package(self, package_dir: Path) -> bool:
+        required = [
+            package_dir / '__init__.py',
+            package_dir / '__main__.py',
+            package_dir / 'core' / 'scheduler.py',
+            package_dir / 'core' / 'reporter.py',
+        ]
+        if not all(path.exists() for path in required):
+            return False
+        if not compileall.compile_dir(str(package_dir), quiet=1, force=True):
+            return False
+        env = os.environ.copy()
+        env['PYTHONPATH'] = str(package_dir.parent)
+        result = subprocess.run(
+            [sys.executable, '-c',
+             'import observation_points; from observation_points.core.scheduler import Scheduler'],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=20,
+            env=env,
+            universal_newlines=True,
+        )
+        if result.returncode != 0:
+            logger.warning("Staged Agent import check failed: %s", result.stderr[-500:])
+            return False
+        return True
 
     def _base_url(self) -> str:
         push_url = ((self.config.get("reporter", {}) or {}).get("push_url") or "").strip()
@@ -66,10 +111,7 @@ class AgentUpdater:
         argv = runtime.get("argv") or [
             "-m", "observation_points", "-c", "/etc/observation-points/config.json"
         ]
-        if argv and argv[0] != "-m":
-            exec_args = [python_exe] + argv
-        else:
-            exec_args = [python_exe] + argv
+        exec_args = [python_exe] + argv
         os.execv(python_exe, exec_args)
 
     def check_and_apply_update(self) -> bool:
@@ -104,24 +146,36 @@ class AgentUpdater:
                 with tarfile.open(package_path, "r:gz") as tar:
                     tar.extractall(extract_dir)
                 new_pkg = extract_dir / "observation_points"
-                if not new_pkg.exists():
-                    logger.warning("Downloaded package missing observation_points directory")
+                if not new_pkg.exists() or not self._validate_staged_package(new_pkg):
+                    logger.warning("Downloaded package failed staged validation")
                     return False
 
-                current_pkg = Path(__file__).resolve().parents[1]
+                current_pkg = self._current_package()
                 backup_pkg = current_pkg.with_name(f"{current_pkg.name}.bak")
                 if backup_pkg.exists():
                     shutil.rmtree(backup_pkg, ignore_errors=True)
 
+                old_hash = self._read_local_hash()
                 os.replace(str(current_pkg), str(backup_pkg))
-                shutil.copytree(new_pkg, current_pkg)
-                shutil.rmtree(backup_pkg, ignore_errors=True)
+                try:
+                    shutil.copytree(new_pkg, current_pkg)
+                    PENDING_FILE.parent.mkdir(parents=True, exist_ok=True)
+                    PENDING_FILE.write_text(remote_hash, encoding="utf-8")
+                    self._write_local_hash(remote_hash)
+                    logger.info("Agent updated successfully, restarting process")
+                    self._restart_self()
+                except Exception:
+                    shutil.rmtree(current_pkg, ignore_errors=True)
+                    os.replace(str(backup_pkg), str(current_pkg))
+                    if old_hash:
+                        self._write_local_hash(old_hash)
+                    try:
+                        PENDING_FILE.unlink()
+                    except OSError:
+                        pass
+                    raise
 
-            self._write_local_hash(remote_hash)
-            logger.info("Agent updated successfully, restarting process")
-            self._restart_self()
             return True
         except Exception as e:
             logger.warning("Agent update check failed: %s", e)
             return False
-

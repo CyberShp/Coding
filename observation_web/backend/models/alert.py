@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional
 import json
 
 from pydantic import BaseModel, ConfigDict, field_validator
-from sqlalchemy import Column, Integer, String, DateTime, Text, Index, ForeignKey
+from sqlalchemy import Column, Integer, String, DateTime, Text, Index, ForeignKey, UniqueConstraint
 from sqlalchemy.sql import func
 
 from ..db.database import Base
@@ -35,6 +35,7 @@ class AlertModel(Base):
     message = Column(Text, nullable=False)
     details = Column(Text, default="{}")  # JSON string
     timestamp = Column(DateTime, index=True, nullable=False)
+    source_event_id = Column(String(128), nullable=True)
     task_id = Column(Integer, nullable=True, index=True)  # Link to test task session
     is_expected = Column(Integer, default=0)  # 0=unknown, 1=expected, -1=unexpected
     matched_rule_id = Column(Integer, nullable=True)  # ID of the rule that matched
@@ -45,6 +46,7 @@ class AlertModel(Base):
         Index('ix_alerts_level_timestamp', 'level', 'timestamp'),
         Index('ix_alerts_array_observer_ts', 'array_id', 'observer_name', 'timestamp'),
         Index('ix_alerts_is_expected', 'is_expected'),
+        UniqueConstraint('array_id', 'source_event_id', name='uq_alerts_array_source_event'),
     )
 
 
@@ -71,12 +73,14 @@ class AlertBase(BaseModel):
 class AlertCreate(AlertBase):
     """Schema for creating alert"""
     array_id: str
+    source_event_id: Optional[str] = None
 
 
 class AlertResponse(AlertBase):
     """Schema for alert response"""
     id: int
     array_id: str
+    source_event_id: Optional[str] = None
     array_name: Optional[str] = None
     is_acked: bool = False
     is_expected: int = 0  # 0=unknown, 1=expected, -1=unexpected

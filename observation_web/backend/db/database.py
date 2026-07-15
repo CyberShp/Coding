@@ -88,11 +88,13 @@ def init_db():
 
 
 async def create_tables():
-    """Create all tables. Schema migration (if needed) runs separately before init_db."""
+    """Create missing tables and bring existing databases up to the latest schema."""
     from ..models import array, alert, query, lifecycle, scheduler, traffic, task_session, snapshot, tag, user_session, user_preference, array_lock, alert_rule, audit_log, issue, monitor_template, observer_config, ai_interpretation, card_inventory  # noqa: F401
+    from .migrations import run_migrations
 
     async with _async_engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(run_migrations)
 
     # Startup diagnostic: verify all expected tables exist
     async with _async_engine.begin() as conn:

@@ -1,7 +1,7 @@
 """Tests for core/base.py — BaseObserver, ObserverResult, AlertLevel."""
 import pytest
 from datetime import datetime
-from observation_points.core.base import BaseObserver, ObserverResult, AlertLevel
+from agent.core.base import BaseObserver, ObserverResult, AlertLevel
 
 
 # ---------- AlertLevel ----------

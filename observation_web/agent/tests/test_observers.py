@@ -8,8 +8,8 @@ from datetime import datetime
 from unittest.mock import patch, MagicMock
 
 # Must import through the package for relative imports to work
-from observation_points.core.base import AlertLevel
-from observation_points.utils.helpers import tail_file
+from agent.core.base import AlertLevel
+from agent.utils.helpers import tail_file
 
 
 # ---------- AlarmTypeObserver ----------
@@ -21,7 +21,7 @@ class TestAlarmTypeObserver:
         f.flush()
         f.close()
         config = {"log_path": f.name, "interval": 5, **kwargs}
-        from observation_points.observers.alarm_type import AlarmTypeObserver
+        from agent.observers.alarm_type import AlarmTypeObserver
         obs = AlarmTypeObserver("alarm_type", config)
         obs._test_file = f.name
         return obs
@@ -99,7 +99,7 @@ class TestAlarmTypeObserver:
         self._cleanup(obs)
 
     def test_missing_log_file(self):
-        from observation_points.observers.alarm_type import AlarmTypeObserver
+        from agent.observers.alarm_type import AlarmTypeObserver
         obs = AlarmTypeObserver("alarm_type", {"log_path": "/nonexistent/alarm.log"})
         result = obs.check()
         assert result.has_alert is False
@@ -108,35 +108,35 @@ class TestAlarmTypeObserver:
 # ---------- MemoryLeakObserver ----------
 
 class TestMemoryLeakObserver:
-    @patch("observation_points.observers.memory_leak.run_command")
+    @patch("agent.observers.memory_leak.run_command")
     def test_normal_memory(self, mock_cmd):
         mock_cmd.return_value = (0, "              total        used        free\nMem:          16000        8000        8000\n", "")
-        from observation_points.observers.memory_leak import MemoryLeakObserver
+        from agent.observers.memory_leak import MemoryLeakObserver
         obs = MemoryLeakObserver("memory_leak", {"threshold_percent": 90, "consecutive_threshold": 3})
         result = obs.check()
         assert result.has_alert is False
 
-    @patch("observation_points.observers.memory_leak.run_command")
+    @patch("agent.observers.memory_leak.run_command")
     def test_continuous_increase_triggers_alert(self, mock_cmd):
-        from observation_points.observers.memory_leak import MemoryLeakObserver
+        from agent.observers.memory_leak import MemoryLeakObserver
         obs = MemoryLeakObserver("memory_leak", {"consecutive_threshold": 3})
         for i in range(5):
             used = 8000 + i * 500
             mock_cmd.return_value = (0, f"              total        used        free\nMem:          16000        {used}        {16000-used}\n", "")
             result = obs.check()
 
-    @patch("observation_points.observers.memory_leak.run_command")
+    @patch("agent.observers.memory_leak.run_command")
     def test_free_command_fails(self, mock_cmd):
         mock_cmd.return_value = (-1, "", "command not found")
-        from observation_points.observers.memory_leak import MemoryLeakObserver
+        from agent.observers.memory_leak import MemoryLeakObserver
         obs = MemoryLeakObserver("memory_leak", {})
         result = obs.check()
         # Should handle gracefully
 
-    @patch("observation_points.observers.memory_leak.run_command")
+    @patch("agent.observers.memory_leak.run_command")
     def test_memory_with_reporter_metrics(self, mock_cmd):
         mock_cmd.return_value = (0, "              total        used        free\nMem:          16000        8000        8000\n", "")
-        from observation_points.observers.memory_leak import MemoryLeakObserver
+        from agent.observers.memory_leak import MemoryLeakObserver
         obs = MemoryLeakObserver("memory_leak", {})
         mock_reporter = MagicMock()
         result = obs.check(reporter=mock_reporter)
@@ -145,17 +145,17 @@ class TestMemoryLeakObserver:
 # ---------- CpuUsageObserver ----------
 
 class TestCpuUsageObserver:
-    @patch("observation_points.observers.cpu_usage.run_command")
+    @patch("agent.observers.cpu_usage.run_command")
     def test_cpu_fallback_to_top(self, mock_cmd):
-        from observation_points.observers.cpu_usage import CpuUsageObserver
+        from agent.observers.cpu_usage import CpuUsageObserver
         obs = CpuUsageObserver("cpu_usage", {"threshold_percent": 90})
         mock_cmd.return_value = (0, "%Cpu0  :  5.0 us,  3.0 sy,  0.0 ni, 92.0 id\n", "")
         result = obs.check()
 
-    @patch("observation_points.observers.cpu_usage.run_command")
+    @patch("agent.observers.cpu_usage.run_command")
     def test_cpu_command_failure(self, mock_cmd):
         mock_cmd.return_value = (-1, "", "error")
-        from observation_points.observers.cpu_usage import CpuUsageObserver
+        from agent.observers.cpu_usage import CpuUsageObserver
         obs = CpuUsageObserver("cpu_usage", {})
         result = obs.check()
 
@@ -163,10 +163,10 @@ class TestCpuUsageObserver:
 # ---------- CmdResponseObserver ----------
 
 class TestCmdResponseObserver:
-    @patch("observation_points.observers.cmd_response.run_command")
+    @patch("agent.observers.cmd_response.run_command")
     def test_fast_command(self, mock_cmd):
         mock_cmd.return_value = (0, "output", "")
-        from observation_points.observers.cmd_response import CmdResponseObserver
+        from agent.observers.cmd_response import CmdResponseObserver
         obs = CmdResponseObserver("cmd_response", {
             "timeout_seconds": 5.0,
             "commands": ["echo test"]
@@ -174,14 +174,14 @@ class TestCmdResponseObserver:
         result = obs.check()
         assert result.has_alert is False
 
-    @patch("observation_points.observers.cmd_response.run_command")
+    @patch("agent.observers.cmd_response.run_command")
     def test_slow_command_triggers_alert(self, mock_cmd):
         import time
         def slow_cmd(*args, **kwargs):
             time.sleep(0.1)
             return (0, "output", "")
         mock_cmd.side_effect = slow_cmd
-        from observation_points.observers.cmd_response import CmdResponseObserver
+        from agent.observers.cmd_response import CmdResponseObserver
         obs = CmdResponseObserver("cmd_response", {
             "timeout_seconds": 0.01,
             "commands": ["slow_cmd"]
@@ -199,7 +199,7 @@ class TestCardRecoveryObserver:
             f.flush()
             fname = f.name
         try:
-            from observation_points.observers.card_recovery import CardRecoveryObserver
+            from agent.observers.card_recovery import CardRecoveryObserver
             obs = CardRecoveryObserver("card_recovery", {"log_path": fname})
             result = obs.check()
             assert result.has_alert is False
@@ -211,7 +211,7 @@ class TestCardRecoveryObserver:
             f.flush()
             fname = f.name
         try:
-            from observation_points.observers.card_recovery import CardRecoveryObserver
+            from agent.observers.card_recovery import CardRecoveryObserver
             obs = CardRecoveryObserver("card_recovery", {"log_path": fname, "keyword": "recovery"})
             obs.check()
             with open(fname, "a") as wf:
@@ -222,7 +222,7 @@ class TestCardRecoveryObserver:
             os.unlink(fname)
 
     def test_missing_log_file(self):
-        from observation_points.observers.card_recovery import CardRecoveryObserver
+        from agent.observers.card_recovery import CardRecoveryObserver
         obs = CardRecoveryObserver("card_recovery", {"log_path": "/nonexistent/card.log"})
         result = obs.check()
         assert result.has_alert is False
@@ -236,7 +236,7 @@ class TestSensitiveInfoObserver:
             f.flush()
             fname = f.name
         try:
-            from observation_points.observers.sensitive_info import SensitiveInfoObserver
+            from agent.observers.sensitive_info import SensitiveInfoObserver
             obs = SensitiveInfoObserver("sensitive_info", {"log_paths": [fname]})
             obs.check()
             with open(fname, "a") as wf:
@@ -250,7 +250,7 @@ class TestSensitiveInfoObserver:
             f.flush()
             fname = f.name
         try:
-            from observation_points.observers.sensitive_info import SensitiveInfoObserver
+            from agent.observers.sensitive_info import SensitiveInfoObserver
             obs = SensitiveInfoObserver("sensitive_info", {"log_paths": [fname]})
             obs.check()
             with open(fname, "a") as wf:
@@ -265,7 +265,7 @@ class TestSensitiveInfoObserver:
             f.flush()
             fname = f.name
         try:
-            from observation_points.observers.sensitive_info import SensitiveInfoObserver
+            from agent.observers.sensitive_info import SensitiveInfoObserver
             obs = SensitiveInfoObserver("sensitive_info", {"log_paths": [fname]})
             result = obs.check()
             assert result.has_alert is False
@@ -281,7 +281,7 @@ class TestSigMonitorObserver:
             f.flush()
             fname = f.name
         try:
-            from observation_points.observers.sig_monitor import SigMonitorObserver
+            from agent.observers.sig_monitor import SigMonitorObserver
             obs = SigMonitorObserver("sig_monitor", {"log_path": fname, "whitelist": [15, 61]})
             obs.check()
             with open(fname, "a") as wf:
@@ -296,7 +296,7 @@ class TestSigMonitorObserver:
             f.flush()
             fname = f.name
         try:
-            from observation_points.observers.sig_monitor import SigMonitorObserver
+            from agent.observers.sig_monitor import SigMonitorObserver
             obs = SigMonitorObserver("sig_monitor", {"log_path": fname, "whitelist": [15]})
             obs.check()
             with open(fname, "a") as wf:
@@ -310,19 +310,19 @@ class TestSigMonitorObserver:
 # ---------- CustomCommandObserver ----------
 
 class TestCustomCommandObserver:
-    @patch("observation_points.observers.custom_command.run_command")
+    @patch("agent.observers.custom_command.run_command")
     def test_command_success(self, mock_cmd):
         mock_cmd.return_value = (0, '{"status": "ok"}', "")
-        from observation_points.observers.custom_command import CustomCommandObserver
+        from agent.observers.custom_command import CustomCommandObserver
         obs = CustomCommandObserver("custom_command", {
             "commands": [{"name": "test_cmd", "command": "echo test", "parse_type": "json", "alert_conditions": []}]
         })
         result = obs.check()
 
-    @patch("observation_points.observers.custom_command.run_command")
+    @patch("agent.observers.custom_command.run_command")
     def test_command_failure_alerts(self, mock_cmd):
         mock_cmd.return_value = (1, "", "error occurred")
-        from observation_points.observers.custom_command import CustomCommandObserver
+        from agent.observers.custom_command import CustomCommandObserver
         obs = CustomCommandObserver("custom_command", {
             "commands": [{"name": "fail_cmd", "command": "echo fail", "parse_type": "raw",
                           "alert_conditions": [], "allow_any_path": True}]
@@ -331,7 +331,7 @@ class TestCustomCommandObserver:
         assert result.has_alert is True
 
     def test_no_commands(self):
-        from observation_points.observers.custom_command import CustomCommandObserver
+        from agent.observers.custom_command import CustomCommandObserver
         obs = CustomCommandObserver("custom_command", {"commands": []})
         result = obs.check()
         assert result.has_alert is False
@@ -340,16 +340,16 @@ class TestCustomCommandObserver:
 # ---------- LinkStatusObserver ----------
 
 class TestLinkStatusObserver:
-    @patch("observation_points.observers.link_status.read_sysfs")
+    @patch("agent.observers.link_status.read_sysfs")
     def test_first_run_no_alert(self, mock_sysfs):
         mock_sysfs.return_value = "1"
-        from observation_points.observers.link_status import LinkStatusObserver
+        from agent.observers.link_status import LinkStatusObserver
         obs = LinkStatusObserver("link_status", {"ports": []})
         result = obs.check()
         assert result.has_alert is False
 
     def test_add_remove_whitelist(self):
-        from observation_points.observers.link_status import LinkStatusObserver
+        from agent.observers.link_status import LinkStatusObserver
         obs = LinkStatusObserver("link_status", {})
         obs.add_to_whitelist("eth0")
         assert "eth0" in obs.whitelist
@@ -360,18 +360,18 @@ class TestLinkStatusObserver:
 # ---------- ErrorCodeObserver ----------
 
 class TestErrorCodeObserver:
-    @patch("observation_points.observers.error_code.run_command")
-    @patch("observation_points.observers.error_code.read_sysfs")
+    @patch("agent.observers.error_code.run_command")
+    @patch("agent.observers.error_code.read_sysfs")
     def test_no_errors(self, mock_sysfs, mock_cmd):
         mock_sysfs.return_value = "0"
         mock_cmd.return_value = (0, "", "")
-        from observation_points.observers.error_code import ErrorCodeObserver
+        from agent.observers.error_code import ErrorCodeObserver
         obs = ErrorCodeObserver("error_code", {"ports": []})
         result = obs.check()
         assert result.has_alert is False
 
     def test_counter_wrap_detection(self):
         """BUG-CANDIDATE: Counter wrap should not trigger alert."""
-        from observation_points.observers.error_code import ErrorCodeObserver
+        from agent.observers.error_code import ErrorCodeObserver
         obs = ErrorCodeObserver("error_code", {"ports": [], "threshold": 10})
         obs._last_port_errors["eth0"] = {"rx_errors": 100}

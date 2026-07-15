@@ -42,12 +42,21 @@ class AgentDeployer:
         self.config = config
         self.last_package_hash = ""
 
-    def deploy(self) -> Dict[str, Any]:
+    def deploy(self, start: bool = True) -> Dict[str, Any]:
         if not self.conn.is_connected():
             return {"ok": False, "error": "Not connected"}
 
         local_package = None
         try:
+            # Quiesce the previous process before replacing its files. The
+            # caller may intentionally start it later after writing final config.
+            stop_result = self.stop_agent()
+            if not stop_result.get("ok"):
+                return {
+                    "ok": False,
+                    "error": stop_result.get("error", "Failed to stop existing Agent"),
+                }
+
             local_package = self._build_package()
             deploy_path = self.config.remote.agent_deploy_path
             deploy_parent = posixpath.dirname(deploy_path)
@@ -74,8 +83,8 @@ class AgentDeployer:
 
             # Step 3: Extract and configure
             extract_commands = [
-                f"cd {staging_dir} && tar -xzf {pkg_name}",
-                f"mv {staging_dir}/observation_points {deploy_path}",
+                f"cp {staging_package} {final_package}",
+                f"cd {deploy_parent} && tar -xzf {pkg_name}",
             ]
             for cmd in extract_commands:
                 exit_code, _, err = self.conn.execute(cmd)
@@ -86,9 +95,22 @@ class AgentDeployer:
             if not layout_result.get("ok"):
                 return layout_result
 
+            config_result = self._install_runtime_config(deploy_path)
+            if not config_result.get("ok"):
+                return config_result
+
             service_result = self._install_systemd_service()
             if not service_result.get("ok"):
                 return service_result
+
+            start_result = None
+            if start:
+                start_result = self.start_agent()
+                if not start_result.get("ok"):
+                    return {
+                        "ok": False,
+                        "error": start_result.get("error", "Agent failed to start after deployment"),
+                    }
 
             # Step 4: Configuration merge
             try:
@@ -97,7 +119,13 @@ class AgentDeployer:
             except Exception:
                 pass
 
-            return {"ok": True, "message": "Deployed successfully"}
+            result = {
+                "ok": True,
+                "message": "Deployed and started successfully" if start else "Deployed successfully",
+            }
+            if start_result and start_result.get("warnings"):
+                result["warnings"] = start_result["warnings"]
+            return result
 
         except Exception as e:
             logger.exception("Deployment failed")
@@ -118,15 +146,18 @@ class AgentDeployer:
         return "alive" in (out or "")
 
     def _upload_package(self, local_package: str, remote_path: str) -> bool:
+        upload_file = getattr(self.conn, "upload_file", None)
+        if callable(upload_file):
+            result = upload_file(local_package, remote_path)
+            if isinstance(result, tuple) and len(result) >= 1:
+                return bool(result[0])
+            if isinstance(result, bool):
+                return result
+
         upload_content = getattr(self.conn, "upload_content", None)
         if callable(upload_content):
             with open(local_package, "rb") as f:
                 return bool(upload_content(remote_path, f.read()))
-
-        upload_file = getattr(self.conn, "upload_file", None)
-        if callable(upload_file):
-            ok, _ = upload_file(local_package, remote_path)
-            return ok
 
         return False
 
@@ -152,6 +183,21 @@ class AgentDeployer:
             }
         return {"ok": True}
 
+    def _install_runtime_config(self, deploy_path: str) -> Dict[str, Any]:
+        """Seed the service config without overwriting an existing remote config."""
+        package_config = posixpath.join(deploy_path, "config.json")
+        runtime_dir = "/etc/observation-points"
+        runtime_config = posixpath.join(runtime_dir, "config.json")
+        command = (
+            f"mkdir -p {shlex.quote(runtime_dir)} && "
+            f"if [ ! -f {shlex.quote(runtime_config)} ]; then "
+            f"cp {shlex.quote(package_config)} {shlex.quote(runtime_config)}; fi"
+        )
+        exit_code, _, err = self.conn.execute(command)
+        if exit_code != 0:
+            return {"ok": False, "error": f"Runtime config install failed: {err or command}"}
+        return {"ok": True}
+
     def _load_service_template(self) -> str:
         return SERVICE_TEMPLATE_PATH.read_text(encoding="utf-8")
 
@@ -160,9 +206,7 @@ class AgentDeployer:
             return {"ok": True, "message": "systemd unavailable, skipped service install"}
 
         try:
-            service_content = self._load_service_template().format(
-                BACKEND_HOST=self.config.server.host
-            )
+            service_content = self._load_service_template()
         except Exception as exc:
             logger.exception("Failed to load service template")
             return {"ok": False, "error": f"Failed to render service template: {exc}"}
@@ -222,10 +266,24 @@ class AgentDeployer:
 
         return self._start_agent_legacy()
 
+    def reload_agent(self) -> Dict[str, Any]:
+        """Apply a rewritten config while preserving durable Agent state."""
+        if not self.conn.is_connected():
+            return {"ok": False, "error": "Not connected"}
+        if self._is_systemd_available():
+            exit_code, _, err = self.conn.execute(f"systemctl reload {SYSTEMD_SERVICE_NAME}")
+            if exit_code == 0:
+                ready = asyncio.run(self.wait_for_ready(timeout=60, interval=2))
+                if ready:
+                    return {"ok": True, "message": "Agent configuration reloaded"}
+            logger.warning("systemctl reload failed on %s: %s", self.conn.host, err)
+        return self.start_agent()
+
     def _start_agent_legacy(self) -> Dict[str, Any]:
         deploy_path = self.config.remote.agent_deploy_path
         deploy_parent = posixpath.dirname(deploy_path)
         log_path = self.config.remote.agent_log_path
+        runtime_log_path = posixpath.join(posixpath.dirname(log_path), "agent.log")
         python_cmd = self.config.remote.python_cmd
         log_parent = posixpath.dirname(log_path)
         start_script = (
@@ -233,7 +291,7 @@ class AgentDeployer:
             f"cd {deploy_parent} && "
             f"nohup {python_cmd} -m observation_points "
             f"-c /etc/observation-points/config.json "
-            f"--log-file {log_path} "
+            f"--log-file {runtime_log_path} "
             f"> {AGENT_START_LOG} 2>&1 & "
             f"echo $!"
         )
@@ -343,42 +401,61 @@ class AgentDeployer:
         return exit_code == 0 and "deployed" in out
 
     def check_running(self) -> bool:
-        """Check if agent is running."""
-        if self._is_systemd_available():
-            exit_code, out, _ = self.conn.execute(
-                f"systemctl is-active {SYSTEMD_SERVICE_NAME} 2>/dev/null"
-            )
-            if exit_code == 0 and out.strip() == "active":
-                return True
-
-        # Try PID file first
-        exit_code, pid_str, _ = self.conn.execute(f"cat {AGENT_PID_FILE} 2>/dev/null")
-        if exit_code == 0 and pid_str.strip().isdigit():
-            pid = pid_str.strip()
-            if self._is_process_alive(pid):
-                return True
-        
-        # Fallback to pgrep only if PID file doesn't work
-        exit_code, out, _ = self.conn.execute(
-            "pgrep -f 'python.*observation_points' 2>/dev/null | head -1"
-        )
-        return exit_code == 0 and out.strip().isdigit()
+        """Check if agent is running using the same probe as detailed status."""
+        return bool(self.get_agent_status().get("running"))
 
     def get_agent_status(self) -> Dict[str, Any]:
-        """Get detailed agent status."""
-        info = {"deployed": self.check_deployed(), "running": False, "pid": None}
-        
+        """Get one internally consistent Agent process snapshot."""
+        info = {
+            "deployed": self.check_deployed(),
+            "running": False,
+            "pid": None,
+            "source": "process",
+            "service_state": "unknown",
+        }
+
+        if self._is_systemd_available():
+            command = (
+                f"systemctl show {SYSTEMD_SERVICE_NAME} "
+                "--property=LoadState,ActiveState,SubState,MainPID --no-page 2>/dev/null"
+            )
+            exit_code, out, err = self.conn.execute(command)
+            if exit_code == 0 and out:
+                fields = {}
+                for line in out.splitlines():
+                    if "=" in line:
+                        key, value = line.split("=", 1)
+                        fields[key] = value.strip()
+                active = fields.get("ActiveState", "unknown")
+                sub = fields.get("SubState", "unknown")
+                pid_text = fields.get("MainPID", "0")
+                info.update({
+                    "source": "systemd",
+                    "service_state": active,
+                    "service_substate": sub,
+                    "running": active == "active" and sub not in ("dead", "failed"),
+                    "pid": int(pid_text) if pid_text.isdigit() and int(pid_text) > 0 else None,
+                })
+                if info["running"]:
+                    return info
+            elif err:
+                info["message"] = err.strip()[:300]
+
         exit_code, pid_str, _ = self.conn.execute(f"cat {AGENT_PID_FILE} 2>/dev/null")
         if exit_code == 0 and pid_str.strip().isdigit():
             pid = pid_str.strip()
             if self._is_process_alive(pid):
-                info["running"] = True
-                info["pid"] = int(pid)
-                # Get uptime
+                info.update({"running": True, "pid": int(pid), "source": "pid_file"})
                 exit_code, out, _ = self.conn.execute(f"ps -o etime= -p {pid} 2>/dev/null")
                 if exit_code == 0:
                     info["uptime"] = out.strip()
-        
+                return info
+
+        exit_code, out, _ = self.conn.execute(
+            "pgrep -f 'python.*observation_points' 2>/dev/null | head -1"
+        )
+        if exit_code == 0 and out.strip().isdigit():
+            info.update({"running": True, "pid": int(out.strip()), "source": "process_scan"})
         return info
 
     async def wait_for_ready(

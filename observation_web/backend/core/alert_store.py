@@ -9,13 +9,51 @@ import logging
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
-from sqlalchemy import select, func, desc, and_
+from sqlalchemy import select, func, desc, and_, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models.alert import AlertModel, AlertCreate, AlertResponse, AlertStats, AlertLevel
 from ..db.database import get_db
 
 logger = logging.getLogger(__name__)
+
+
+async def _assign_task_ids(db: AsyncSession, alerts: List[AlertModel]) -> None:
+    """Attach alerts to matching running or completed tasks, including late data."""
+    if not alerts:
+        return
+
+    from ..models.task_session import TaskSessionModel
+
+    min_ts = min(a.timestamp for a in alerts)
+    max_ts = max(a.timestamp for a in alerts)
+    result = await db.execute(
+        select(TaskSessionModel)
+        .where(
+            TaskSessionModel.started_at.is_not(None),
+            TaskSessionModel.started_at <= max_ts,
+            or_(
+                TaskSessionModel.status == "running",
+                TaskSessionModel.ended_at >= min_ts,
+            ),
+        )
+        .order_by(TaskSessionModel.started_at.desc())
+    )
+    tasks = result.scalars().all()
+
+    for alert in alerts:
+        for task in tasks:
+            if alert.timestamp < task.started_at:
+                continue
+            if task.ended_at and alert.timestamp > task.ended_at:
+                continue
+            try:
+                array_ids = json.loads(task.array_ids or "[]")
+            except (json.JSONDecodeError, TypeError):
+                array_ids = []
+            if not array_ids or alert.array_id in array_ids:
+                alert.task_id = task.id
+                break
 
 
 class AlertStore:
@@ -41,9 +79,11 @@ class AlertStore:
             message=alert.message,
             details=json.dumps(alert.details, ensure_ascii=False),
             timestamp=alert.timestamp,
+            source_event_id=alert.source_event_id,
         )
         
         db.add(db_alert)
+        await _assign_task_ids(db, [db_alert])
         await db.commit()
         await db.refresh(db_alert)
         
@@ -58,6 +98,25 @@ class AlertStore:
         if not alerts:
             return 0, []
         
+        source_ids = {a.source_event_id for a in alerts if a.source_event_id}
+        existing_ids = set()
+        if source_ids:
+            result = await db.execute(
+                select(AlertModel.source_event_id).where(
+                    AlertModel.source_event_id.in_(source_ids)
+                )
+            )
+            existing_ids = {row[0] for row in result.all()}
+
+        seen_ids = set(existing_ids)
+        unique_alerts = []
+        for alert in alerts:
+            if alert.source_event_id and alert.source_event_id in seen_ids:
+                continue
+            if alert.source_event_id:
+                seen_ids.add(alert.source_event_id)
+            unique_alerts.append(alert)
+
         db_alerts = [
             AlertModel(
                 array_id=a.array_id,
@@ -66,11 +125,16 @@ class AlertStore:
                 message=a.message,
                 details=json.dumps(a.details, ensure_ascii=False),
                 timestamp=a.timestamp,
+                source_event_id=a.source_event_id,
             )
-            for a in alerts
+            for a in unique_alerts
         ]
+
+        if not db_alerts:
+            return 0, []
         
         db.add_all(db_alerts)
+        await _assign_task_ids(db, db_alerts)
         await db.flush()  # Assign IDs before commit
         await db.commit()
         
@@ -80,7 +144,9 @@ class AlertStore:
         self,
         db: AsyncSession,
         array_id: Optional[str] = None,
+        array_ids: Optional[List[str]] = None,
         observer_name: Optional[str] = None,
+        observer_names: Optional[List[str]] = None,
         level: Optional[str] = None,
         start_time: Optional[datetime] = None,
         end_time: Optional[datetime] = None,
@@ -95,8 +161,12 @@ class AlertStore:
         conditions = []
         if array_id:
             conditions.append(AlertModel.array_id == array_id)
+        elif array_ids is not None:
+            conditions.append(AlertModel.array_id.in_(array_ids) if array_ids else False)
         if observer_name:
             conditions.append(AlertModel.observer_name == observer_name)
+        elif observer_names is not None:
+            conditions.append(AlertModel.observer_name.in_(observer_names) if observer_names else False)
         if level:
             conditions.append(AlertModel.level == level)
         if start_time:
@@ -131,8 +201,11 @@ class AlertStore:
         self,
         db: AsyncSession,
         array_id: Optional[str] = None,
+        array_ids: Optional[List[str]] = None,
+        observer_names: Optional[List[str]] = None,
         level: Optional[str] = None,
         start_time: Optional[datetime] = None,
+        end_time: Optional[datetime] = None,
     ) -> int:
         """Get alert count with filters"""
         query = select(func.count(AlertModel.id))
@@ -140,10 +213,16 @@ class AlertStore:
         conditions = []
         if array_id:
             conditions.append(AlertModel.array_id == array_id)
+        elif array_ids is not None:
+            conditions.append(AlertModel.array_id.in_(array_ids) if array_ids else False)
+        if observer_names is not None:
+            conditions.append(AlertModel.observer_name.in_(observer_names) if observer_names else False)
         if level:
             conditions.append(AlertModel.level == level)
         if start_time:
             conditions.append(AlertModel.timestamp >= start_time)
+        if end_time:
+            conditions.append(AlertModel.timestamp < end_time)
         
         if conditions:
             query = query.where(and_(*conditions))
@@ -155,26 +234,37 @@ class AlertStore:
         self,
         db: AsyncSession,
         hours: int = 24,
+        array_ids: Optional[List[str]] = None,
+        observer_names: Optional[List[str]] = None,
     ) -> AlertStats:
         """Get alert statistics"""
         start_time = datetime.now() - timedelta(hours=hours)
         
         # Total count
-        total = await self.get_alert_count(db, start_time=start_time)
+        total = await self.get_alert_count(
+            db, start_time=start_time, array_ids=array_ids, observer_names=observer_names
+        )
         
         # By level
         by_level = {}
         for level in AlertLevel:
-            count = await self.get_alert_count(db, level=level.value, start_time=start_time)
+            count = await self.get_alert_count(
+                db, level=level.value, start_time=start_time,
+                array_ids=array_ids, observer_names=observer_names,
+            )
             by_level[level.value] = count
         
         # By observer
+        scope_conditions = [AlertModel.timestamp >= start_time]
+        if array_ids is not None:
+            scope_conditions.append(AlertModel.array_id.in_(array_ids) if array_ids else False)
+        if observer_names is not None:
+            scope_conditions.append(AlertModel.observer_name.in_(observer_names) if observer_names else False)
+
         query = select(
             AlertModel.observer_name,
             func.count(AlertModel.id)
-        ).where(
-            AlertModel.timestamp >= start_time
-        ).group_by(AlertModel.observer_name)
+        ).where(*scope_conditions).group_by(AlertModel.observer_name)
         
         result = await db.execute(query)
         by_observer = {row[0]: row[1] for row in result.all()}
@@ -183,9 +273,7 @@ class AlertStore:
         query = select(
             AlertModel.array_id,
             func.count(AlertModel.id)
-        ).where(
-            AlertModel.timestamp >= start_time
-        ).group_by(AlertModel.array_id)
+        ).where(*scope_conditions).group_by(AlertModel.array_id)
         
         result = await db.execute(query)
         by_array = {row[0]: row[1] for row in result.all()}
@@ -204,9 +292,10 @@ class AlertStore:
             bucket_start = now - timedelta(minutes=bucket_minutes * (num_buckets - i))
             bucket_end   = now - timedelta(minutes=bucket_minutes * (num_buckets - i - 1))
 
-            count_from_start = await self.get_alert_count(db, start_time=bucket_start)
-            count_from_end   = await self.get_alert_count(db, start_time=bucket_end)
-            bucket_count = count_from_start - count_from_end if i < num_buckets - 1 else count_from_start
+            bucket_count = await self.get_alert_count(
+                db, start_time=bucket_start, end_time=bucket_end,
+                array_ids=array_ids, observer_names=observer_names,
+            )
 
             trend.append({
                 'hour': bucket_start.strftime('%H:%M'),

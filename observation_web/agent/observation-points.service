@@ -6,12 +6,15 @@ Wants=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=/OSM/coffer_data
-ExecStartPre=/bin/bash -c 'until ping -c1 -W2 {BACKEND_HOST} >/dev/null 2>&1; do sleep 5; done'
-ExecStart=/usr/bin/python3 -m observation_points -c /etc/observation-points/config.json --log-file /var/log/observation-points/alerts.log
-Restart=on-failure
+ExecStartPre=/bin/mkdir -p /var/log/observation-points
+ExecStart=/usr/bin/python3 -m observation_points -c /etc/observation-points/config.json --log-file /var/log/observation-points/agent.log
+ExecReload=/bin/kill -HUP $MAINPID
+Environment=PYTHONUNBUFFERED=1
+Restart=always
 RestartSec=10
 StartLimitIntervalSec=300
 StartLimitBurst=5
+TimeoutStopSec=20
 
 [Install]
 WantedBy=multi-user.target

@@ -84,9 +84,9 @@
         <el-table-column prop="username" label="用户名" width="100" />
         <el-table-column label="Agent" width="100">
           <template #default="{ row }">
-            <el-tag v-if="row.agent_running" type="success" size="small">运行中</el-tag>
-            <el-tag v-else-if="row.agent_deployed" type="warning" size="small">已部署</el-tag>
-            <el-tag v-else type="info" size="small">未部署</el-tag>
+            <el-tag :type="getAgentStateType(row.agent_state)" size="small">
+              {{ getAgentStateText(row.agent_state) }}
+            </el-tag>
           </template>
         </el-table-column>
         <el-table-column label="操作" width="280">
@@ -215,9 +215,11 @@ import {
   Upload, RefreshRight, VideoPause
 } from '@element-plus/icons-vue'
 import api from '../api'
+import { useArrayStore } from '../stores/arrays'
 import BatchProgressDialog from '../components/BatchProgressDialog.vue'
 
 const route = useRoute()
+const arrayStore = useArrayStore()
 
 const tagId = computed(() => parseInt(route.params.tagId))
 const tag = ref(null)
@@ -275,6 +277,20 @@ function getStateText(state) {
   return texts[state] || state
 }
 
+function getAgentStateText(state) {
+  return ({
+    unknown: '待确认', not_deployed: '未部署', stopped: '已停止',
+    starting: '启动中', running: '运行中', degraded: '部分异常', error: '异常',
+  })[state] || '待确认'
+}
+
+function getAgentStateType(state) {
+  return ({
+    running: 'success', degraded: 'warning', starting: 'warning',
+    stopped: 'info', not_deployed: 'info', unknown: 'info', error: 'danger',
+  })[state] || 'info'
+}
+
 async function loadTag() {
   try {
     const res = await api.getTag(tagId.value)
@@ -289,12 +305,22 @@ async function loadArrays() {
   try {
     const res = await api.getArrayStatuses(tagId.value)
     arrays.value = res.data || []
+    arrays.value.forEach(item => arrayStore.applyStatusUpdate(item.array_id, item))
   } catch (e) {
     ElMessage.error('获取阵列列表失败')
   } finally {
     loading.value = false
   }
 }
+
+watch(
+  () => arrayStore.arrays,
+  (statuses) => {
+    const updates = new Map(statuses.map(item => [item.array_id, item]))
+    arrays.value = arrays.value.map(item => updates.get(item.array_id) || item)
+  },
+  { deep: true },
+)
 
 function handleSearch() {
   activeSearchIp.value = searchIp.value.trim()

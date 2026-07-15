@@ -4,7 +4,10 @@
 """
 
 import argparse
+import fcntl
 import logging
+from logging.handlers import RotatingFileHandler
+import os
 import signal
 import sys
 from pathlib import Path
@@ -13,6 +16,7 @@ from typing import Optional
 from .config.loader import ConfigLoader
 from .core.scheduler import Scheduler
 from .core.reporter import Reporter
+from .utils.helpers import configure_default_timeout
 
 
 def setup_logging(log_level: str, log_file: Optional[str] = None):
@@ -21,7 +25,12 @@ def setup_logging(log_level: str, log_file: Optional[str] = None):
     
     handlers = [logging.StreamHandler(sys.stdout)]
     if log_file:
-        handlers.append(logging.FileHandler(log_file, encoding='utf-8'))
+        handlers.append(RotatingFileHandler(
+            log_file,
+            maxBytes=20 * 1024 * 1024,
+            backupCount=3,
+            encoding='utf-8',
+        ))
     
     logging.basicConfig(
         level=level,
@@ -86,11 +95,25 @@ def main():
         logger.error(f"加载配置失败: {e}")
         sys.exit(1)
 
+    lock_path = Path((config.get('global', {}) or {}).get(
+        'lock_path', '/var/run/observation-points.lock'
+    ))
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_handle = open(lock_path, 'a+')
+    try:
+        fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        logger.error("已有 Agent 实例正在运行: %s", lock_path)
+        sys.exit(1)
+
     # Runtime restart context for updater (preserve current launch arguments).
+    package_name = (__package__ or 'observation_points').split('.')[0]
+    restart_argv = ['-m', package_name] + sys.argv[1:]
     config['_runtime'] = {
         'python_executable': sys.executable,
-        'argv': sys.argv[1:],
+        'argv': restart_argv,
     }
+    configure_default_timeout((config.get('global', {}) or {}).get('subprocess_timeout', 10))
     
     logger.info(f"观察点监控系统启动，版本: 1.0.0")
     logger.info(f"配置文件: {config_path}")
@@ -106,13 +129,18 @@ def main():
     scheduler = Scheduler(config, reporter)
     
     # 信号处理
+    reload_requested = [False]
+
     def signal_handler(signum, frame):
         logger.info("收到退出信号，正在停止...")
+        if signum == getattr(signal, 'SIGHUP', None):
+            reload_requested[0] = True
         scheduler.stop()
-        sys.exit(0)
     
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
+    if hasattr(signal, 'SIGHUP'):
+        signal.signal(signal.SIGHUP, signal_handler)
     
     # 启动调度器
     try:
@@ -123,7 +151,13 @@ def main():
     except Exception as e:
         logger.error(f"运行时错误: {e}")
         scheduler.stop()
-        sys.exit(1)
+        raise
+    finally:
+        reporter.close(drain_timeout=5)
+
+    if reload_requested[0]:
+        logger.info("重新加载配置并重启 Agent 进程")
+        os.execv(sys.executable, [sys.executable] + restart_argv)
 
 
 if __name__ == '__main__':

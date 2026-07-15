@@ -6,13 +6,13 @@ IO 超时监控观察点
 """
 
 import logging
+import hashlib
 import re
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List
 
 from ..core.base import BaseObserver, ObserverResult, AlertLevel
-from ..utils.helpers import run_command
+from ..utils.helpers import run_command, tail_file
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +42,9 @@ class IoTimeoutObserver(BaseObserver):
     def __init__(self, name: str, config: Dict[str, Any]):
         super().__init__(name, config)
         self.log_paths = config.get('log_paths', ['/var/log/messages', '/var/log/syslog'])
-        self._last_positions = {}
+        self._log_cursors = {}
+        self._seen_dmesg = []
+        self._dmesg_initialized = False
 
     def check(self, reporter=None) -> ObserverResult:
         all_events = []
@@ -52,8 +54,14 @@ class IoTimeoutObserver(BaseObserver):
             all_events.extend(events)
 
         # Also check dmesg
-        dmesg_events = self._scan_dmesg()
+        dmesg_events, dmesg_ok = self._scan_dmesg()
         all_events.extend(dmesg_events)
+
+        if not dmesg_ok and not any(Path(path).exists() for path in self.log_paths):
+            return self.create_error_result(
+                "IO 超时监控无可用日志源",
+                {'log_paths': self.log_paths},
+            )
 
         if all_events:
             summaries = [e['summary'] for e in all_events[:5]]
@@ -66,7 +74,7 @@ class IoTimeoutObserver(BaseObserver):
                     'events': all_events[:30],
                     'log_path': self.log_paths[0] if self.log_paths else '',
                 },
-                sticky=True,
+                sticky=False,
             )
 
         return self.create_result(
@@ -80,19 +88,21 @@ class IoTimeoutObserver(BaseObserver):
             return []
 
         events = []
-        last_pos = self._last_positions.get(log_path, 0)
+        cursor = self._log_cursors.get(log_path)
 
         try:
-            size = path.stat().st_size
-            if size < last_pos:
-                last_pos = 0
+            stat = path.stat()
+            inode = getattr(stat, 'st_ino', 0)
+            if cursor is None:
+                lines, position = tail_file(path, 0, max_lines=500, skip_existing=True)
+            else:
+                last_pos = int(cursor.get('offset', 0))
+                if cursor.get('inode') != inode:
+                    last_pos = 0
+                lines, position = tail_file(path, last_pos, max_lines=500)
+            self._log_cursors[log_path] = {'offset': position, 'inode': inode}
 
-            with open(path, 'r', errors='ignore') as f:
-                f.seek(last_pos)
-                new_lines = f.readlines()
-                self._last_positions[log_path] = f.tell()
-
-            for line in new_lines[-500:]:
+            for line in lines:
                 for pattern, io_type in IO_PATTERNS:
                     if re.search(pattern, line, re.IGNORECASE):
                         events.append({
@@ -107,15 +117,21 @@ class IoTimeoutObserver(BaseObserver):
 
         return events
 
-    def _scan_dmesg(self) -> List[Dict]:
+    def _scan_dmesg(self):
         ret, stdout, stderr = run_command('dmesg -T 2>/dev/null | tail -200', shell=True, timeout=10)
         if ret != 0:
-            return []
+            return [], False
 
         events = []
+        seen = set(self._seen_dmesg)
+        current_hashes = []
         for line in stdout.split('\n'):
             for pattern, io_type in IO_PATTERNS:
                 if re.search(pattern, line, re.IGNORECASE):
+                    fingerprint = hashlib.sha256(line.strip().encode('utf-8')).hexdigest()
+                    current_hashes.append(fingerprint)
+                    if fingerprint in seen or not self._dmesg_initialized:
+                        break
                     events.append({
                         'type': io_type,
                         'summary': f"{io_type}: {line.strip()[:80]}",
@@ -123,5 +139,9 @@ class IoTimeoutObserver(BaseObserver):
                         'source': 'dmesg',
                     })
                     break
-
-        return events
+        self._dmesg_initialized = True
+        self._seen_dmesg = (self._seen_dmesg + current_hashes)[-2000:]
+        return events, True
+    persistent_state_fields = BaseObserver.persistent_state_fields + (
+        '_log_cursors', '_seen_dmesg', '_dmesg_initialized',
+    )

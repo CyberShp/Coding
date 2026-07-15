@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 
 
 class CpuUsageObserver(BaseObserver):
+    persistent_state_fields = BaseObserver.persistent_state_fields + ('_history', '_last_cpu_stats')
     """
     CPU0 利用率监测观察点
     
@@ -53,8 +54,7 @@ class CpuUsageObserver(BaseObserver):
         cpu_usage = self._get_cpu0_usage()
         
         if cpu_usage is None:
-            return self.create_result(
-                has_alert=False,
+            return self.create_error_result(
                 message="无法获取 CPU0 利用率",
                 details={'error': '读取 /proc/stat 失败'},
             )

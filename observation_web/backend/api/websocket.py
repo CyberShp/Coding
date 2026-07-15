@@ -170,23 +170,12 @@ class ConnectionManager:
         return len(self._connections.get(channel, set()))
 
     def should_send_status(self, array_id: str, status: Dict, throttle_ms: int = 500) -> bool:
-        """Check if status update should be sent (deduplication + throttling)"""
-        import time
-        now = time.time() * 1000
-
-        # Throttle check
-        last_time = self._last_status_time.get(array_id, 0)
-        if now - last_time < throttle_ms:
-            return False
-
-        # Deduplication check - compare with cached status
+        """Deduplicate snapshots without dropping fast lifecycle transitions."""
         cached = self._status_cache.get(array_id)
         if cached and cached == status:
             return False
 
-        # Update cache
         self._status_cache[array_id] = status.copy() if isinstance(status, dict) else status
-        self._last_status_time[array_id] = now
         return True
 
 

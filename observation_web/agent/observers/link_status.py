@@ -27,6 +27,7 @@ class LinkStatusObserver(BaseObserver):
     - 检测 link down/up 事件
     - 支持白名单排除
     """
+    persistent_state_fields = BaseObserver.persistent_state_fields + ('_last_states', '_first_run')
     
     def __init__(self, name: str, config: Dict[str, Any]):
         super().__init__(name, config)

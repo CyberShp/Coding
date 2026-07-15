@@ -27,6 +27,7 @@ class DiskStateObserver(BaseObserver):
         "command": "show disk status"
     }
     """
+    persistent_state_fields = BaseObserver.persistent_state_fields + ('_last_states',)
 
     def __init__(self, name: str, config: Dict[str, Any]):
         super().__init__(name, config)
@@ -35,8 +36,7 @@ class DiskStateObserver(BaseObserver):
 
     def check(self, reporter=None) -> ObserverResult:
         if not self.command:
-            return self.create_result(
-                has_alert=False,
+            return self.create_error_result(
                 message="磁盘状态监控：未配置命令，请在 config.json 中设置 command",
             )
 
@@ -47,12 +47,12 @@ class DiskStateObserver(BaseObserver):
                 alert_level=AlertLevel.WARNING,
                 message=f"磁盘状态查询失败: {stderr[:100]}",
                 details={'stderr': stderr},
+                collection_ok=False,
             )
 
         current_states = self._parse_states(stdout)
         if not current_states:
-            return self.create_result(
-                has_alert=False,
+            return self.create_error_result(
                 message="磁盘状态查询正常，未识别到磁盘条目",
                 details={'raw': stdout[:500]},
             )
@@ -67,7 +67,7 @@ class DiskStateObserver(BaseObserver):
                     'old_state': old_state,
                     'new_state': state,
                 })
-            elif state.lower() in anomalous:
+            elif old_state is None and state.lower() in anomalous:
                 changes.append({
                     'id': disk_id,
                     'old_state': old_state or '未知',
@@ -78,16 +78,17 @@ class DiskStateObserver(BaseObserver):
 
         if changes:
             msgs = [f"磁盘 {c['id']}: {c['old_state']} → {c['new_state']}" for c in changes[:5]]
+            has_anomaly = any(c['new_state'].lower() in anomalous for c in changes)
             level = AlertLevel.ERROR if any(
                 c['new_state'].lower() in ('offline', 'fault', 'failed')
                 for c in changes
-            ) else AlertLevel.WARNING
+            ) else (AlertLevel.WARNING if has_anomaly else AlertLevel.INFO)
             return self.create_result(
                 has_alert=True,
                 alert_level=level,
-                message="磁盘状态变化: " + "; ".join(msgs),
-                details={'changes': changes, 'all_states': current_states},
-                sticky=True,
+                message=("磁盘状态变化: " if has_anomaly else "磁盘状态恢复: ") + "; ".join(msgs),
+                details={'changes': changes, 'all_states': current_states, 'recovered': not has_anomaly},
+                sticky=False,
             )
 
         return self.create_result(

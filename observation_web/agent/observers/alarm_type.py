@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from ..core.base import BaseObserver, ObserverResult, AlertLevel
-from ..utils.helpers import tail_file
+from ..utils.helpers import tail_file_cursor
 
 logger = logging.getLogger(__name__)
 
@@ -37,15 +37,24 @@ class AlarmTypeObserver(BaseObserver):
     - 最近事件标记是否已恢复
     - 无新告警时不输出例行日志
     """
+    persistent_state_fields = BaseObserver.persistent_state_fields + (
+        '_file_cursor', '_first_run', '_total_event_count', '_total_send_count',
+        '_total_resume_count', '_active_alarms', '_recent_events',
+    )
     
     # 匹配 AlarmType:X action（X=0/1/2, action=event/fault/resume）
     ALARM_TYPE_PATTERN = re.compile(r'AlarmType:(\d+)\s+(event|fault|resume)', re.IGNORECASE)
+    LEGACY_ALARM_PATTERN = re.compile(
+        r'(send|resume)\s+alarm:\s*alarm\s+type\((\d+)\)', re.IGNORECASE
+    )
     
     # 匹配 AlarmId:XXX
     ALARM_ID_PATTERN = re.compile(r'AlarmId:(\S+)', re.IGNORECASE)
     
     # 匹配 objType:XXX
     OBJ_TYPE_PATTERN = re.compile(r'objType:(\S+)', re.IGNORECASE)
+    LEGACY_ALARM_ID_PATTERN = re.compile(r'alarm\s+id\(([^)]+)\)', re.IGNORECASE)
+    LEGACY_ALARM_NAME_PATTERN = re.compile(r'alarm\s+name\(([^)]+)\)', re.IGNORECASE)
     
     # 日志时间戳格式
     TIMESTAMP_PATTERNS = [
@@ -62,7 +71,7 @@ class AlarmTypeObserver(BaseObserver):
         self.recent_count = config.get('recent_count', 5)  # 最近事件数量
         
         # 文件读取位置
-        self._file_position = 0
+        self._file_cursor = {}
         self._first_run = True
         
         # 统计数据
@@ -78,18 +87,19 @@ class AlarmTypeObserver(BaseObserver):
     
     def check(self) -> ObserverResult:
         """检查 AlarmType 事件"""
+        if not self.log_path.exists():
+            return self.create_error_result("AlarmType 日志不存在", {'log_path': str(self.log_path)})
         # 首次运行时跳过历史数据
         skip_existing = self._first_run
         self._first_run = False
         
         # 读取新增日志行
-        new_lines, new_position = tail_file(
+        new_lines, self._file_cursor = tail_file_cursor(
             self.log_path,
-            self._file_position,
+            self._file_cursor,
             self.max_lines_per_check,
             skip_existing=skip_existing
         )
-        self._file_position = new_position
         
         # 本次检测到的事件
         new_events = []          # 新事件上报 (type 0)
@@ -206,18 +216,23 @@ class AlarmTypeObserver(BaseObserver):
         """解析日志行，提取 AlarmType 告警信息"""
         # 匹配 AlarmType:X action
         type_match = self.ALARM_TYPE_PATTERN.search(line)
-        if not type_match:
+        legacy_match = self.LEGACY_ALARM_PATTERN.search(line)
+        if type_match:
+            alarm_type = int(type_match.group(1))
+            action = type_match.group(2).lower()
+            id_match = self.ALARM_ID_PATTERN.search(line)
+            obj_match = self.OBJ_TYPE_PATTERN.search(line)
+        elif legacy_match:
+            legacy_action = legacy_match.group(1).lower()
+            legacy_type = int(legacy_match.group(2))
+            alarm_type = 2 if legacy_action == 'resume' else legacy_type
+            action = 'resume' if legacy_action == 'resume' else ('event' if legacy_type == 0 else 'fault')
+            id_match = self.LEGACY_ALARM_ID_PATTERN.search(line)
+            obj_match = self.LEGACY_ALARM_NAME_PATTERN.search(line)
+        else:
             return None
-        
-        alarm_type = int(type_match.group(1))
-        action = type_match.group(2).lower()  # event / fault / resume
-        
-        # 提取 AlarmId
-        id_match = self.ALARM_ID_PATTERN.search(line)
+
         alarm_id = id_match.group(1).strip() if id_match else None
-        
-        # 提取 objType
-        obj_match = self.OBJ_TYPE_PATTERN.search(line)
         obj_type = obj_match.group(1).strip() if obj_match else '未知'
         
         # 提取时间戳

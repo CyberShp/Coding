@@ -5,8 +5,8 @@ import tempfile
 import pytest
 from datetime import datetime, timedelta
 from unittest.mock import patch, MagicMock
-from observation_points.core.base import ObserverResult, AlertLevel
-from observation_points.core.reporter import Reporter, Alert
+from agent.core.base import ObserverResult, AlertLevel
+from agent.core.reporter import Reporter, Alert
 
 
 # ---------- Alert dataclass ----------
@@ -17,6 +17,7 @@ class TestAlert:
                   message="msg", timestamp=datetime.now(), details={"k": "v"})
         j = a.to_json()
         parsed = json.loads(j)
+        assert parsed["event_id"]
         assert parsed["observer_name"] == "test"
         assert parsed["level"] == "error"
 
@@ -25,6 +26,7 @@ class TestAlert:
         a = Alert(observer_name="t", level=AlertLevel.INFO, message="m",
                   timestamp=ts, details={})
         d = a.to_dict()
+        assert d["event_id"]
         assert d["observer_name"] == "t"
         assert "2026" in d["timestamp"]
 

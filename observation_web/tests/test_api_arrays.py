@@ -19,6 +19,32 @@ class TestArrayAPI:
         resp = await app_client.post("/api/arrays", json=data)
         assert resp.status_code in [200, 201, 400]
 
+    async def test_connection_probe_returns_actionable_failure(self, app_client, monkeypatch):
+        from backend.api import arrays as arrays_api
+
+        async def fail_connect(func, timeout, *args, **kwargs):
+            return False
+
+        monkeypatch.setattr(arrays_api, "_run_blocking", fail_connect)
+        resp = await app_client.post("/api/arrays/test-connection", json={
+            "host": "192.0.2.10",
+            "port": 22,
+            "username": "root",
+            "password": "bad-password",
+        })
+
+        assert resp.status_code == 200
+        assert resp.json()["ok"] is False
+        assert "SSH 连接失败" in resp.json()["message"]
+
+    async def test_connection_probe_validates_port(self, app_client):
+        resp = await app_client.post("/api/arrays/test-connection", json={
+            "host": "192.0.2.10",
+            "port": 70000,
+            "username": "root",
+        })
+        assert resp.status_code == 422
+
     async def test_get_array_not_found(self, app_client):
         resp = await app_client.get("/api/arrays/nonexistent-id")
         assert resp.status_code == 404

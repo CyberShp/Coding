@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 
 
 class PortSpeedObserver(BaseObserver):
+    persistent_state_fields = BaseObserver.persistent_state_fields + ('_last_speed', '_first_run')
     """
     端口速率变化监测
 
@@ -56,8 +57,7 @@ class PortSpeedObserver(BaseObserver):
             current_speed = self._collect_via_sysfs()
 
         if not current_speed:
-            return self.create_result(
-                has_alert=False,
+            return self.create_error_result(
                 message="端口速率查询无数据（可能无网络端口）",
             )
 

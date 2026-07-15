@@ -81,7 +81,7 @@
             {{ formatTime(row.created_at) }}
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="280" fixed="right">
+        <el-table-column label="操作" width="340" fixed="right">
           <template #default="{ row }">
             <el-button
               v-if="row.status === 'created'"
@@ -93,6 +93,11 @@
               type="warning" size="small"
               @click="stopTask(row.id)"
             >结束</el-button>
+            <el-button
+              v-if="row.status === 'running'"
+              type="primary" size="small" plain
+              @click="openLiveStatus(row.id)"
+            ><el-icon><View /></el-icon>观察</el-button>
             <el-button
               v-if="row.status === 'completed' || row.status === 'running'"
               type="primary" size="small" plain
@@ -172,6 +177,63 @@
       <template #footer>
         <el-button @click="showCreateDialog = false">取消</el-button>
         <el-button type="primary" @click="createTask" :loading="creating">创建</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog
+      v-model="showLiveDialog"
+      title="测试实时观察"
+      width="820px"
+      @closed="stopLiveRefresh"
+    >
+      <div v-if="liveData" class="live-status">
+        <div class="live-overview">
+          <div>
+            <strong>{{ liveData.task_name }}</strong>
+            <span class="live-updated">更新于 {{ formatTime(liveData.server_time) }}</span>
+          </div>
+          <div class="live-counts">
+            <el-tag type="success">同步正常 {{ liveData.fresh_count }}</el-tag>
+            <el-tag :type="liveData.attention_count ? 'warning' : 'info'">
+              需关注 {{ liveData.attention_count }}
+            </el-tag>
+          </div>
+        </div>
+
+        <el-table :data="liveData.arrays" v-loading="loadingLive" stripe>
+          <el-table-column label="阵列" min-width="170">
+            <template #default="{ row }">
+              <div>{{ row.array_name || row.array_id }}</div>
+              <div class="array-id">{{ row.array_id }}</div>
+            </template>
+          </el-table-column>
+          <el-table-column label="同步状态" width="110">
+            <template #default="{ row }">
+              <el-tag :type="freshnessType(row.freshness)" size="small">
+                {{ freshnessLabel(row.freshness) }}
+              </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="数据年龄" width="110">
+            <template #default="{ row }">{{ formatAge(row.sync_age_seconds) }}</template>
+          </el-table-column>
+          <el-table-column label="任务告警" width="100" prop="alert_count" />
+          <el-table-column label="严重告警" width="100">
+            <template #default="{ row }">
+              <span :class="{ 'critical-count': row.critical_count > 0 }">{{ row.critical_count }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="最后告警" width="170">
+            <template #default="{ row }">{{ formatTime(row.last_alert_at) }}</template>
+          </el-table-column>
+        </el-table>
+      </div>
+      <el-empty v-else-if="!loadingLive" description="暂无阵列数据" />
+      <template #footer>
+        <el-button :loading="loadingLive" @click="loadLiveStatus">
+          <el-icon><Refresh /></el-icon>刷新
+        </el-button>
+        <el-button type="primary" @click="showLiveDialog = false">关闭</el-button>
       </template>
     </el-dialog>
 
@@ -334,8 +396,8 @@
 </template>
 
 <script setup>
-import { ref, computed, reactive, onMounted } from 'vue'
-import { Plus, Lock, Refresh, Warning } from '@element-plus/icons-vue'
+import { ref, computed, reactive, onMounted, onUnmounted } from 'vue'
+import { Plus, Lock, Refresh, Warning, View } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import api from '../api'
 import { getObserverName } from '@/utils/alertTranslator'
@@ -350,9 +412,14 @@ const activeLocks = ref([])
 const alertRules = ref([])
 const showCreateDialog = ref(false)
 const showSummaryDialog = ref(false)
+const showLiveDialog = ref(false)
 const showRulesConfig = ref(false)
 const showAddRuleDialog = ref(false)
 const summaryData = ref(null)
+const liveData = ref(null)
+const loadingLive = ref(false)
+const liveTaskId = ref(null)
+let liveRefreshTimer = null
 
 const commonObservers = [
   'link_status', 'port_speed', 'alarm_type', 'error_code',
@@ -553,6 +620,51 @@ async function viewSummary(id) {
   }
 }
 
+async function openLiveStatus(id) {
+  liveTaskId.value = id
+  liveData.value = null
+  showLiveDialog.value = true
+  await loadLiveStatus()
+  stopLiveRefresh()
+  liveRefreshTimer = setInterval(loadLiveStatus, 5000)
+}
+
+async function loadLiveStatus() {
+  if (!liveTaskId.value || loadingLive.value) return
+  loadingLive.value = true
+  try {
+    const res = await api.getTestTaskLiveStatus(liveTaskId.value)
+    liveData.value = res.data
+  } catch (e) {
+    ElMessage.error('获取实时状态失败')
+    stopLiveRefresh()
+  } finally {
+    loadingLive.value = false
+  }
+}
+
+function stopLiveRefresh() {
+  if (liveRefreshTimer) {
+    clearInterval(liveRefreshTimer)
+    liveRefreshTimer = null
+  }
+}
+
+function freshnessType(status) {
+  return { fresh: 'success', delayed: 'warning', stale: 'danger', never: 'info' }[status] || 'info'
+}
+
+function freshnessLabel(status) {
+  return { fresh: '正常', delayed: '延迟', stale: '中断', never: '未同步' }[status] || status
+}
+
+function formatAge(seconds) {
+  if (seconds == null) return '--'
+  if (seconds < 60) return `${seconds}s`
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${seconds % 60}s`
+  return `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m`
+}
+
 function formatDuration(sec) {
   if (!sec) return '--'
   if (sec < 60) return `${Math.round(sec)}s`
@@ -643,6 +755,8 @@ async function handleCreateRule() {
 onMounted(async () => {
   await Promise.all([loadTasks(), loadArrays(), loadLocks(), loadRules()])
 })
+
+onUnmounted(stopLiveRefresh)
 </script>
 
 <style scoped>
@@ -650,6 +764,11 @@ onMounted(async () => {
 .card-header { display: flex; justify-content: space-between; align-items: center; }
 .header-actions { display: flex; gap: 10px; }
 .muted { color: var(--el-text-color-placeholder); }
+.live-overview { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; }
+.live-updated { margin-left: 12px; color: var(--el-text-color-secondary); font-size: 12px; }
+.live-counts { display: flex; gap: 8px; }
+.array-id { color: var(--el-text-color-secondary); font-size: 12px; }
+.critical-count { color: var(--el-color-danger); font-weight: 700; }
 
 .locks-banner { margin-bottom: 16px; }
 .locks-list { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }

@@ -4,6 +4,8 @@ import pytest
 import pytest_asyncio
 from datetime import datetime, timedelta
 
+from backend.models.alert import AlertModel
+
 
 @pytest.mark.asyncio
 class TestAlertAPI:
@@ -23,6 +25,32 @@ class TestAlertAPI:
     async def test_list_alerts_pagination(self, app_client):
         resp = await app_client.get("/api/alerts?limit=10&offset=0")
         assert resp.status_code == 200
+
+    async def test_personal_scope_filters_data_total_and_stats(self, app_client_with_db):
+        client, db = app_client_with_db
+        db.add_all([
+            AlertModel(
+                array_id="array-1", observer_name="cpu_usage", level="warning",
+                message="in scope", details="{}", timestamp=datetime.now(),
+            ),
+            AlertModel(
+                array_id="array-2", observer_name="cpu_usage", level="warning",
+                message="wrong array", details="{}", timestamp=datetime.now(),
+            ),
+            AlertModel(
+                array_id="array-1", observer_name="link_status", level="error",
+                message="wrong observer", details="{}", timestamp=datetime.now(),
+            ),
+        ])
+        await db.commit()
+
+        params = {"array_ids": "array-1", "observer_names": "cpu_usage"}
+        response = await client.get("/api/alerts", params=params)
+        stats = await client.get("/api/alerts/stats", params={"hours": 24, **params})
+
+        assert [item["message"] for item in response.json()] == ["in scope"]
+        assert response.headers["x-total-count"] == "1"
+        assert stats.json()["total"] == 1
 
     async def test_alert_stats(self, app_client):
         resp = await app_client.get("/api/alerts/stats?hours=24")

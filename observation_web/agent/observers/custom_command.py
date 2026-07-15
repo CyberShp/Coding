@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 
 
 class CustomCommandObserver(BaseObserver):
+    persistent_state_fields = BaseObserver.persistent_state_fields + ('_last_run',)
     """
     自定义命令观察点
     

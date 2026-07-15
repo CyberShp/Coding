@@ -32,6 +32,7 @@ class StartWorkObserver(BaseObserver):
                 alert_level=AlertLevel.WARNING,
                 message=f"开工检查命令失败: {(stderr or '')[:200]}",
                 details={"started": False, "reason": "command_failed"},
+                collection_ok=False,
             )
 
         modules = {}
@@ -50,6 +51,7 @@ class StartWorkObserver(BaseObserver):
                 alert_level=AlertLevel.WARNING,
                 message="开工检查解析失败：未发现模块状态",
                 details={"started": False, "reason": "parse_failed"},
+                collection_ok=False,
             )
 
         not_started = [name for name, state in modules.items() if state != "1"]

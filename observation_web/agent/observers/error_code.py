@@ -18,6 +18,9 @@ logger = logging.getLogger(__name__)
 
 
 class ErrorCodeObserver(BaseObserver):
+    persistent_state_fields = BaseObserver.persistent_state_fields + (
+        '_last_port_errors', '_last_pcie_errors',
+    )
     """
     端口计数器监测观察点
     

@@ -3,7 +3,7 @@
     <div class="app-container">
       <el-container>
         <!-- Sidebar -->
-        <el-aside width="200px" class="sidebar">
+        <el-aside width="200px" class="sidebar" :class="{ 'is-open': mobileNavOpen }">
           <div class="logo">
             <el-icon><Monitor /></el-icon>
             <span>观察点监控</span>
@@ -12,6 +12,7 @@
             :default-active="activeMenu"
             router
             class="sidebar-menu"
+            @select="mobileNavOpen = false"
           >
             <el-menu-item index="/">
               <el-icon><Odometer /></el-icon>
@@ -59,11 +60,15 @@
             </el-menu-item>
           </el-menu>
         </el-aside>
+        <button v-if="mobileNavOpen" class="mobile-backdrop" type="button" aria-label="关闭导航" @click="mobileNavOpen = false" />
 
         <!-- Main Content -->
-        <el-container>
+        <el-container class="content-shell">
           <el-header class="header">
             <div class="header-left">
+              <el-button class="mobile-nav-trigger" text circle aria-label="打开导航" @click="mobileNavOpen = true">
+                <el-icon><Menu /></el-icon>
+              </el-button>
               <el-breadcrumb separator="/">
                 <el-breadcrumb-item :to="{ path: '/' }">首页</el-breadcrumb-item>
                 <el-breadcrumb-item v-if="currentRoute">{{ currentRoute }}</el-breadcrumb-item>
@@ -109,7 +114,7 @@
                 </div>
               </el-popover>
 
-              <el-tooltip content="开启/关闭告警提示音">
+              <el-tooltip content="开启/关闭告警提示音" class="sound-control">
                 <el-switch
                   v-model="soundOn"
                   active-text=""
@@ -220,12 +225,13 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
+import { ref, reactive, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import zhCn from 'element-plus/dist/locale/zh-cn.mjs'
-import { Monitor, Odometer, Cpu, Bell, Search, Setting, User, Warning, Files, Timer, WarningFilled, Stopwatch, UserFilled, ChatDotRound, InfoFilled, Box, Star } from '@element-plus/icons-vue'
+import { Monitor, Odometer, Cpu, Bell, Search, Setting, User, Warning, Files, Timer, WarningFilled, Stopwatch, UserFilled, ChatDotRound, InfoFilled, Box, Star, Menu } from '@element-plus/icons-vue'
 import { useAlertStore } from './stores/alerts'
+import { useArrayStore } from './stores/arrays'
 import { useAuthStore } from './stores/auth'
 import { usePreferencesStore } from './stores/preferences'
 import { setSoundEnabled } from './utils/notification'
@@ -233,10 +239,12 @@ import api from './api'
 
 const route = useRoute()
 const alertStore = useAlertStore()
+const arrayStore = useArrayStore()
 const authStore = useAuthStore()
 const preferencesStore = usePreferencesStore()
 const soundOn = ref(false)
 const showSuppressedDetail = ref(false)
+const mobileNavOpen = ref(false)
 
 function formatRemaining(expiresAt) {
   const ms = expiresAt - Date.now()
@@ -269,6 +277,7 @@ const claimInput = ref('')
 let userCountInterval = null
 
 const activeMenu = computed(() => route.path)
+watch(() => route.path, () => { mobileNavOpen.value = false })
 const currentRoute = computed(() => {
   const routes = {
     '/': '',
@@ -391,6 +400,7 @@ async function claimNickname() {
 // Initialize WebSocket connection
 onMounted(() => {
   alertStore.connectWebSocket()
+  arrayStore.connectStatusWebSocket()
   loadCurrentUser()
   preferencesStore.load()
   loadUserCount()
@@ -399,6 +409,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   alertStore.disconnectWebSocket()
+  arrayStore.disconnectStatusWebSocket()
   if (userCountInterval) clearInterval(userCountInterval)
 })
 </script>
@@ -432,6 +443,15 @@ html, body, #app {
 .sidebar {
   background-color: var(--sidebar-bg);
   overflow-y: auto;
+}
+
+.content-shell {
+  min-width: 0;
+}
+
+.mobile-nav-trigger,
+.mobile-backdrop {
+  display: none;
 }
 
 .logo {
@@ -647,5 +667,75 @@ html, body, #app {
 .my-dot {
   width: 10px;
   height: 10px;
+}
+
+@media (max-width: 760px) {
+  .sidebar {
+    position: fixed;
+    inset: 0 auto 0 0;
+    z-index: 2100;
+    width: 220px !important;
+    transform: translateX(-100%);
+    transition: transform 180ms ease;
+  }
+
+  .sidebar.is-open {
+    transform: translateX(0);
+  }
+
+  .mobile-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 2050;
+    display: block;
+    width: 100%;
+    border: 0;
+    background: rgba(22, 31, 43, 0.42);
+  }
+
+  .mobile-nav-trigger {
+    display: inline-flex;
+    flex: 0 0 auto;
+  }
+
+  .header {
+    height: 54px;
+    padding: 0 10px;
+  }
+
+  .header-left {
+    display: flex;
+    align-items: center;
+  }
+
+  .header-left .el-breadcrumb {
+    display: none;
+  }
+
+  .header-right {
+    gap: 7px;
+  }
+
+  .header-right .el-switch {
+    display: none;
+  }
+
+  .header-right .el-button--small {
+    padding: 5px 8px;
+  }
+
+  .alert-badge {
+    margin-right: 2px;
+  }
+
+  .main-content {
+    padding: 0;
+  }
+
+  .critical-banner,
+  .suppressed-banner {
+    padding: 7px 10px;
+    font-size: 12px;
+  }
 }
 </style>

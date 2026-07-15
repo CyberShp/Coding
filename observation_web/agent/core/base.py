@@ -8,9 +8,14 @@ import logging
 from abc import ABC, abstractmethod
 from collections import deque
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, List, Optional, Tuple
+
+
+def utc_now() -> datetime:
+    """Return an explicit UTC timestamp for cross-array ordering."""
+    return datetime.now(timezone.utc)
 
 
 class AlertLevel(Enum):
@@ -25,13 +30,14 @@ class AlertLevel(Enum):
 class ObserverResult:
     """观察点检查结果"""
     observer_name: str
-    timestamp: datetime = field(default_factory=datetime.now)
+    timestamp: datetime = field(default_factory=utc_now)
     has_alert: bool = False
     alert_level: AlertLevel = AlertLevel.INFO
     message: str = ""
     details: Dict[str, Any] = field(default_factory=dict)
     raw_data: Any = None
     sticky: bool = False  # 持续告警标志，True 时不受冷却限制
+    collection_ok: bool = True
 
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典"""
@@ -43,6 +49,7 @@ class ObserverResult:
             'message': self.message,
             'details': self.details,
             'sticky': self.sticky,
+            'collection_ok': self.collection_ok,
         }
 
 
@@ -54,6 +61,7 @@ class BaseObserver(ABC):
     - check(): 执行检查，返回 ObserverResult
     - cleanup(): 清理资源（可选）
     """
+    persistent_state_fields = ('_last_values',)
     
     def __init__(self, name: str, config: Dict[str, Any]):
         """
@@ -92,6 +100,36 @@ class BaseObserver(ABC):
     def cleanup(self):
         """清理资源（子类可覆盖）"""
         pass
+
+    def export_state(self) -> Dict[str, Any]:
+        """Return the small runtime baseline needed after an Agent restart."""
+        state = {}
+        for field_name in self.persistent_state_fields:
+            if hasattr(self, field_name):
+                value = getattr(self, field_name)
+                state[field_name] = list(value) if isinstance(value, deque) else value
+        return state
+
+    def restore_state(self, state: Dict[str, Any]):
+        """Restore state while preserving deque/set container semantics."""
+        if not isinstance(state, dict):
+            return
+        for field_name in self.persistent_state_fields:
+            if field_name not in state or not hasattr(self, field_name):
+                continue
+            current = getattr(self, field_name)
+            value = state[field_name]
+            if isinstance(current, deque):
+                current.clear()
+                current.extend(value or [])
+            elif isinstance(current, set):
+                current.clear()
+                current.update(value or [])
+            elif isinstance(current, dict) and isinstance(value, dict):
+                current.clear()
+                current.update(value)
+            else:
+                setattr(self, field_name, value)
     
     def is_enabled(self) -> bool:
         """是否启用"""
@@ -109,7 +147,7 @@ class BaseObserver(ABC):
             data: 要记录的数据
         """
         self._history.append({
-            'timestamp': datetime.now(),
+            'timestamp': utc_now(),
             'data': data,
         })
     
@@ -185,7 +223,8 @@ class BaseObserver(ABC):
                       message: str = "",
                       details: Optional[Dict] = None,
                       raw_data: Any = None,
-                      sticky: bool = False) -> ObserverResult:
+                      sticky: bool = False,
+                      collection_ok: bool = True) -> ObserverResult:
         """
         创建检查结果
         
@@ -208,4 +247,17 @@ class BaseObserver(ABC):
             details=details or {},
             raw_data=raw_data,
             sticky=sticky,
+            collection_ok=collection_ok,
+        )
+
+    def create_error_result(self, message: str, details: Optional[Dict] = None,
+                            alert: bool = False,
+                            alert_level: AlertLevel = AlertLevel.WARNING) -> ObserverResult:
+        """Create a result that distinguishes collector failure from healthy silence."""
+        return self.create_result(
+            has_alert=alert,
+            alert_level=alert_level,
+            message=message,
+            details=details,
+            collection_ok=False,
         )

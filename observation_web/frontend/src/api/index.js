@@ -61,6 +61,7 @@ export default {
   getArrayStatuses: (tagId = null, options = {}) => http.get('/arrays/statuses', { params: tagId ? { tag_id: tagId } : {}, ...options }),
   getArray: (id) => http.get(`/arrays/${id}`),
   createArray: (data) => http.post('/arrays', data),
+  testArrayConnection: (data) => httpLong.post('/arrays/test-connection', data),
   updateArray: (id, data) => http.put(`/arrays/${id}`, data),
   deleteArray: (id) => http.delete(`/arrays/${id}`),
   getArrayStatus: (id, options = {}) => http.get(`/arrays/${id}/status`, options),
@@ -125,10 +126,10 @@ export default {
   connectArray: (id, password) => httpLong.post(`/arrays/${id}/connect`, null, { params: { password } }),
   disconnectArray: (id) => http.post(`/arrays/${id}/disconnect`),
   refreshArray: (id) => httpLong.post(`/arrays/${id}/refresh`),
-  deployAgent: (id) => httpLong.post(`/arrays/${id}/deploy-agent`),
-  startAgent: (id) => httpLong.post(`/arrays/${id}/start-agent`),
+  deployAgent: (id) => httpLong.post(`/arrays/${id}/deploy-agent`, null, { timeout: 150000 }),
+  startAgent: (id) => httpLong.post(`/arrays/${id}/start-agent`, null, { timeout: 90000 }),
   stopAgent: (id) => httpLong.post(`/arrays/${id}/stop-agent`),
-  restartAgent: (id) => httpLong.post(`/arrays/${id}/restart-agent`),
+  restartAgent: (id) => httpLong.post(`/arrays/${id}/restart-agent`, null, { timeout: 90000 }),
   // Log Viewer
   getArrayLogs: (id, params) => http.get(`/arrays/${id}/logs`, { params }),
   listLogFiles: (id, directory = '/var/log') => http.get(`/arrays/${id}/log-files`, { params: { directory } }),
@@ -156,7 +157,8 @@ export default {
   // Alerts
   getAlerts: (params, options = {}) => http.get('/alerts', { params, ...options }),
   getRecentAlerts: (limit = 20, options = {}) => http.get('/alerts/recent', { params: { limit }, ...options }),
-  getAlertStats: (hours = 24, options = {}) => http.get('/alerts/stats', { params: { hours }, ...options }),
+  getAlertStats: (hours = 24, options = {}, filters = {}) =>
+    http.get('/alerts/stats', { params: { hours, ...filters }, ...options }),
   getAlertSummary: (hours = 2, options = {}) => http.get('/alerts/summary', { params: { hours }, ...options }),
   getAggregatedAlerts: (params) => http.get('/alerts/aggregated', { params }),
   exportAlerts: (params) => http.get('/alerts/export', { params, responseType: 'blob' }),
@@ -188,6 +190,7 @@ export default {
   stopTestTask: (id) => http.post(`/test-tasks/${id}/stop`),
   deleteTestTask: (id) => http.delete(`/test-tasks/${id}`),
   getTestTaskSummary: (id) => http.get(`/test-tasks/${id}/summary`),
+  getTestTaskLiveStatus: (id) => http.get(`/test-tasks/${id}/live-status`),
 
   // Test Task Locks
   getAllLocks: () => http.get('/test-tasks/locks/all'),

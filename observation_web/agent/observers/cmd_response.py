@@ -54,6 +54,16 @@ class CmdResponseObserver(BaseObserver):
                 logger.warning(
                     f"命令响应超时: {cmd} 耗时 {result['elapsed_seconds']:.3f}s (阈值: {self.timeout_seconds}s)"
                 )
+
+        failed = [item for item in details['results'] if not item.get('success')]
+        if failed:
+            return self.create_result(
+                has_alert=True,
+                alert_level=AlertLevel.WARNING,
+                message="命令响应检查失败: " + ", ".join(item['command'] for item in failed[:5]),
+                details=details,
+                collection_ok=False,
+            )
         
         if alerts:
             message = f"命令响应超时: {', '.join(alerts)}"

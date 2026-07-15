@@ -1,326 +1,181 @@
 <template>
   <div class="array-detail" v-loading="loading">
-    <el-page-header @back="$router.back()">
-      <template #content>
-        <span class="page-title">{{ array?.name || '阵列详情' }}</span>
-      </template>
-    </el-page-header>
-
-    <div class="content" v-if="array">
-      <!-- Basic Info -->
-      <el-card class="info-card">
-        <template #header>
-          <div class="card-header">
-            <span>基本信息</span>
-            <div class="actions">
-              <el-button 
-                v-if="array.state !== 'connected'"
-                type="primary"
-                size="small"
-                @click="handleConnect"
-              >
-                连接
-              </el-button>
-              <el-button 
-                v-else
-                size="small"
-                @click="handleDisconnect"
-              >
-                断开
-              </el-button>
-              <el-button size="small" @click="handleRefresh" :loading="refreshing">
-                <el-icon><Refresh /></el-icon>
-                刷新
-              </el-button>
-            </div>
+    <template v-if="array">
+      <header class="array-command-header">
+        <el-button class="back-button" text circle aria-label="返回" @click="$router.back()">
+          <el-icon><ArrowLeft /></el-icon>
+        </el-button>
+        <div class="array-identity">
+          <div class="identity-line">
+            <span class="status-dot" :class="array.state === 'connected' ? 'is-online' : 'is-offline'" />
+            <h1>{{ array.name }}</h1>
+            <span class="array-address">{{ arrayEndpoint }}</span>
           </div>
-        </template>
-        
-        <el-descriptions :column="3" border>
-          <el-descriptions-item label="名称">{{ array.name }}</el-descriptions-item>
-          <el-descriptions-item label="地址">{{ array.host }}:{{ array.port }}</el-descriptions-item>
-          <el-descriptions-item label="用户名">{{ array.username }}</el-descriptions-item>
-          <el-descriptions-item label="标签">
-            <el-select
-              v-model="array.tag_id"
-              placeholder="选择标签"
-              size="small"
-              clearable
-              style="width: 200px"
-              @change="handleTagChange"
-            >
-              <el-option
-                v-for="tag in tags"
-                :key="tag.id"
-                :label="tag.parent_name ? `${tag.parent_name} / ${tag.name}` : tag.name"
-                :value="tag.id"
-              />
-            </el-select>
-          </el-descriptions-item>
-          <el-descriptions-item label="连接状态">
-            <el-tag :type="getStateType(array.state)">{{ getStateText(array.state) }}</el-tag>
-          </el-descriptions-item>
-          <el-descriptions-item label="Agent 状态">
-            <el-tag v-if="array.agent_running" type="success">运行中</el-tag>
-            <el-tag v-else-if="array.agent_deployed" type="warning">已部署</el-tag>
-            <el-tag v-else type="info">未部署</el-tag>
-          </el-descriptions-item>
-          <el-descriptions-item label="最后刷新">
-            {{ array.last_refresh ? formatDateTime(array.last_refresh) : '-' }}
-          </el-descriptions-item>
-        </el-descriptions>
-      </el-card>
-
-      <!-- Active Issues Panel -->
-      <el-card class="active-issues-card">
-        <template #header>
-          <div class="card-header">
-            <el-tooltip content="来自系统级观察点：CPU、内存、AlarmType、PCIe、卡件等，不含端口误码/链路">
-              <span>活跃异常（系统级）</span>
-            </el-tooltip>
-            <el-tag v-if="activeIssues.length > 0" type="danger" size="small">{{ activeIssues.length }} 项</el-tag>
-            <el-tag v-else type="success" size="small">无异常</el-tag>
-            <span v-if="unackedCount > 0" class="unacked-hint">未确认告警 {{ unackedCount }} 条</span>
-          </div>
-        </template>
-
-        <div v-if="activeIssues.length > 0" class="issues-list">
-          <div
-            v-for="issue in activeIssues"
-            :key="issue.key"
-            class="issue-item"
-            :class="[`issue-${issue.level}`, { 'issue-suppressed': issue.suppressed }]"
-            @click="openIssueDetail(issue)"
-          >
-            <div class="issue-row">
-              <span class="issue-title">{{ issue.title }}</span>
-              <el-tag v-if="!issue.suppressed" :type="issue.level === 'error' || issue.level === 'critical' ? 'danger' : 'warning'" size="small">
-                {{ issue.level === 'error' || issue.level === 'critical' ? '错误' : '警告' }}
-              </el-tag>
-              <el-tag v-else type="info" size="small">已忽略</el-tag>
-              <span class="issue-observer">{{ getObserverName(issue.observer) }}</span>
-              <span class="issue-since" v-if="issue.since && !issue.suppressed">持续自 {{ formatRelativeTime(issue.since) }}</span>
-              <template v-if="issue.suppressed">
-                <span class="issue-acked">确认人: {{ (issue.acked_by_nickname || issue.acked_by_ip) || '--' }}</span>
-                <span class="issue-expires" v-if="issue.ack_expires_at">恢复: {{ formatDateTime(issue.ack_expires_at) }}</span>
-              </template>
-              <el-button
-                v-if="issue.alert_id && !issue.suppressed"
-                size="small"
-                type="success"
-                text
-                class="issue-ack-btn"
-                @click.stop="handleAckIssue(issue)"
-              >
-                <el-icon><Check /></el-icon> 忽略
-              </el-button>
-            </div>
-            <div class="issue-message">{{ issue.message }}</div>
+          <div class="identity-meta">
+            <span>{{ getStateText(array.state) }}</span>
+            <span>Agent {{ getAgentStateText(array.agent_state) }}</span>
+            <span>{{ activeIssues.length ? `${activeIssues.length} 项活跃异常` : '监测正常' }}</span>
           </div>
         </div>
-
-        <div v-else class="issues-empty">
-          <el-icon :size="32" color="#67c23a"><CircleCheck /></el-icon>
-          <p>所有监测项正常运行</p>
-        </div>
-      </el-card>
-
-      <!-- AI 综合解读预留区域：有活跃异常时显示 -->
-      <el-card v-if="activeIssues.length > 0" class="ai-summary-card">
-        <template #header>
-          <div class="card-header">
-            <el-icon><MagicStick /></el-icon>
-            <span>AI 综合解读</span>
-          </div>
-        </template>
-        <div v-if="aiSummaryLoading" class="ai-summary-loading">
-          <el-icon class="is-loading"><Loading /></el-icon>
-          <span>AI 正在解读...</span>
-        </div>
-        <div v-else-if="aiSummaryError" class="ai-summary-error">
-          <el-alert type="warning" :title="aiSummaryError" show-icon />
-          <el-button type="primary" plain size="small" style="margin-top:8px" @click="fetchAISummary">重试</el-button>
-        </div>
-        <div v-else-if="aiSummaryText" class="ai-summary-content">
-          <div class="ai-summary-text">{{ aiSummaryText }}</div>
-        </div>
-        <div v-else class="ai-summary-trigger">
-          <el-button type="primary" :loading="aiSummaryLoading" @click="fetchAISummary">
-            <el-icon><MagicStick /></el-icon>
-            获取 AI 综合解读
+        <div class="header-actions">
+          <el-button v-if="array.state !== 'connected'" type="primary" @click="handleConnect">连接</el-button>
+          <el-button v-else @click="handleDisconnect">断开</el-button>
+          <el-button circle aria-label="刷新阵列" :loading="refreshing" @click="handleRefresh">
+            <el-icon><Refresh /></el-icon>
           </el-button>
-          <p class="ai-summary-hint">基于当前活跃异常的代表条目生成解读；点击上方单项可在侧栏查看该条 AI 解读</p>
         </div>
-      </el-card>
+      </header>
 
-      <!-- Watchers (who is viewing this array) -->
-      <el-card v-if="watchers.length > 0" class="watchers-card">
-        <template #header>
-          <div class="card-header">
-            <el-icon><User /></el-icon>
-            <span>当前关注 ({{ watchers.length }})</span>
-          </div>
-        </template>
-        <div class="watchers-list">
-          <el-tag
-            v-for="w in watchers"
-            :key="w.ip"
-            :style="{ borderColor: w.color, color: w.color }"
-            effect="plain"
-            size="small"
-            class="watcher-tag"
-          >
-            {{ w.nickname || w.ip }}
-          </el-tag>
+      <div class="signal-strip">
+        <button class="signal-item signal-danger" type="button" @click="activeSection = 'overview'">
+          <span class="signal-label">活跃异常</span>
+          <strong>{{ activeIssues.length }}</strong>
+          <span>{{ activeIssues.length ? '需要处置' : '当前正常' }}</span>
+        </button>
+        <button class="signal-item" type="button" @click="activeSection = 'overview'">
+          <span class="signal-label">未确认告警</span>
+          <strong>{{ unackedCount }}</strong>
+          <span>最近 20 条</span>
+        </button>
+        <button class="signal-item" type="button" @click="activeSection = 'agent'">
+          <span class="signal-label">Agent</span>
+          <strong class="signal-state">{{ getAgentStateText(array.agent_state) }}</strong>
+          <span>{{ agentEvidenceText }}</span>
+        </button>
+        <div class="signal-item signal-static">
+          <span class="signal-label">最后同步</span>
+          <strong class="signal-time">{{ array.last_refresh ? formatDateTime(array.last_refresh) : '--' }}</strong>
+          <span v-if="watchers.length">{{ watchers.length }} 人正在关注</span>
+          <span v-else>无人协同查看</span>
         </div>
-      </el-card>
+      </div>
 
-      <!-- Recent Alerts (Translated + Drawer + Folding) -->
-      <el-card class="alerts-card">
-        <template #header>
-          <div class="card-header">
-            <span>最近告警</span>
-            <el-button size="small" @click="$router.push('/alerts')">查看全部</el-button>
+      <el-tabs v-model="activeSection" class="workspace-tabs">
+        <el-tab-pane label="概览" name="overview">
+          <div class="overview-grid">
+            <section class="surface issues-surface">
+              <div class="surface-header">
+                <div>
+                  <span class="surface-kicker">DIAGNOSIS QUEUE</span>
+                  <h2>当前需处理</h2>
+                </div>
+                <span class="surface-count" :class="{ 'has-danger': activeIssues.length }">{{ activeIssues.length }}</span>
+              </div>
+              <div v-if="activeIssues.length" class="issues-list">
+                <article
+                  v-for="issue in activeIssues"
+                  :key="issue.key"
+                  class="issue-item"
+                  :class="[`issue-${issue.level}`, { 'issue-suppressed': issue.suppressed }]"
+                  @click="openIssueDetail(issue)"
+                >
+                  <div class="issue-row">
+                    <span class="issue-title">{{ issue.title }}</span>
+                    <span class="issue-observer">{{ getObserverName(issue.observer) }}</span>
+                    <span v-if="issue.since && !issue.suppressed" class="issue-since">持续 {{ formatRelativeTime(issue.since) }}</span>
+                    <el-button v-if="issue.alert_id && !issue.suppressed" text type="success" class="issue-ack-btn" @click.stop="handleAckIssue(issue)">
+                      <el-icon><Check /></el-icon> 忽略
+                    </el-button>
+                  </div>
+                  <div class="issue-message">{{ issue.message }}</div>
+                </article>
+              </div>
+              <div v-else class="issues-empty">
+                <el-icon :size="30"><CircleCheck /></el-icon>
+                <div><strong>暂无活跃异常</strong><span>所有系统级观察点状态正常</span></div>
+              </div>
+            </section>
+
+            <aside class="surface context-surface">
+              <div class="surface-header compact"><h2>阵列信息</h2></div>
+              <dl class="context-list">
+                <div><dt>地址</dt><dd>{{ arrayEndpoint }}</dd></div>
+                <div><dt>用户</dt><dd>{{ array.username }}</dd></div>
+                <div><dt>标签</dt><dd>
+                  <el-select v-model="array.tag_id" placeholder="未分类" size="small" clearable @change="handleTagChange">
+                    <el-option v-for="tag in tags" :key="tag.id" :label="tag.parent_name ? `${tag.parent_name} / ${tag.name}` : tag.name" :value="tag.id" />
+                  </el-select>
+                </dd></div>
+              </dl>
+              <div v-if="watchers.length" class="watchers-block">
+                <span class="context-label"><el-icon><User /></el-icon> 协同查看</span>
+                <div class="watchers-list">
+                  <el-tag v-for="w in watchers" :key="w.ip" :style="{ borderColor: w.color, color: w.color }" effect="plain" size="small">
+                    {{ w.nickname || w.ip }}
+                  </el-tag>
+                </div>
+              </div>
+            </aside>
+
+            <section v-if="activeIssues.length" class="surface ai-surface">
+              <div class="surface-header compact">
+                <h2><el-icon><MagicStick /></el-icon> AI 综合解读</h2>
+                <el-button v-if="!aiSummaryLoading" text type="primary" @click="fetchAISummary">{{ aiSummaryText ? '重新解读' : '开始解读' }}</el-button>
+              </div>
+              <div v-if="aiSummaryLoading" class="ai-state"><el-icon class="is-loading"><Loading /></el-icon> 正在分析当前异常...</div>
+              <el-alert v-else-if="aiSummaryError" type="warning" :title="aiSummaryError" show-icon />
+              <div v-else-if="aiSummaryText" class="ai-summary-text">{{ aiSummaryText }}</div>
+              <p v-else class="ai-placeholder">汇总当前异常的关联、影响与建议检查顺序。</p>
+            </section>
+
+            <section class="surface alerts-surface">
+              <div class="surface-header compact">
+                <div><span class="surface-kicker">RECENT SIGNALS</span><h2>最近告警</h2></div>
+                <el-button text type="primary" @click="$router.push({ path: '/alerts', query: { array_id: array.array_id } })">打开告警中心</el-button>
+              </div>
+              <FoldedAlertList :alerts="recentAlerts" :show-array-id="false" empty-text="暂无告警" @select="openAlertDrawer" @ack="handleAck" @undo-ack="handleUndoAck" @modify-ack="handleModifyAck" />
+            </section>
           </div>
-        </template>
-        
-        <FoldedAlertList
-          :alerts="recentAlerts"
-          :show-array-id="false"
-          empty-text="暂无告警，请刷新以同步"
-          @select="openAlertDrawer"
-          @ack="handleAck"
-          @undo-ack="handleUndoAck"
-          @modify-ack="handleModifyAck"
-        />
-      </el-card>
+        </el-tab-pane>
 
-      <!-- Performance Monitor Tab -->
-      <el-card class="perf-card" v-if="array.state === 'connected'">
-        <template #header>
-          <div class="card-header">
-            <span>性能监控</span>
-            <el-tag type="success" size="small">实时</el-tag>
+        <el-tab-pane label="性能与事件" name="performance">
+          <div class="workspace-stack">
+            <section v-if="array.state === 'connected'" class="surface"><div class="surface-header"><h2>实时性能</h2><el-tag type="success" effect="plain">15s</el-tag></div><PerformanceMonitor :array-id="array.array_id" /></section>
+            <section v-else class="surface disconnected-state"><el-empty description="连接阵列后可查看实时性能" /></section>
+            <section class="surface"><div class="surface-header"><h2>端口流量</h2><span class="surface-note">按端口查看收发带宽</span></div><PortTrafficChart :array-id="array.array_id" /></section>
+            <section class="surface"><div class="surface-header"><h2>事件时间线</h2><span class="surface-note">跨观察点关联</span></div><EventTimeline :array-id="array.array_id" /></section>
           </div>
-        </template>
-        
-        <PerformanceMonitor :array-id="array.array_id" />
-      </el-card>
+        </el-tab-pane>
 
-      <!-- Port Traffic Chart (always show if array exists) -->
-      <el-card class="traffic-card">
-        <template #header>
-          <div class="card-header">
-            <span>端口流量监控</span>
-            <el-tag type="success" size="small">最近2小时</el-tag>
-          </div>
-        </template>
-        
-        <PortTrafficChart :array-id="array.array_id" />
-      </el-card>
+        <el-tab-pane label="在线日志" name="logs">
+          <section class="surface log-surface" v-if="array.state === 'connected'"><LogViewer :array-id="array.array_id" /></section>
+          <section class="surface disconnected-state" v-else><el-empty description="连接阵列后可查看在线日志" /></section>
+        </el-tab-pane>
 
-      <!-- Event Timeline -->
-      <el-card class="timeline-card">
-        <template #header>
-          <div class="card-header">
-            <span>事件时间线</span>
-            <el-tag type="info" size="small">跨观察点</el-tag>
-          </div>
-        </template>
-        
-        <EventTimeline :array-id="array.array_id" />
-      </el-card>
+        <el-tab-pane label="Agent" name="agent">
+          <section class="surface agent-surface">
+            <el-alert
+              v-if="array.deployment_state && array.deployment_state !== 'idle'"
+              :type="deploymentNoticeType"
+              :title="array.deployment_message || getDeploymentStateText(array.deployment_state)"
+              :closable="false"
+              show-icon
+              class="deployment-notice"
+            />
+            <div class="agent-state-panel">
+              <span class="agent-state-mark" :class="{ running: ['running', 'degraded'].includes(array.agent_state) }" />
+              <div>
+                <span>当前状态 · {{ agentEvidenceText }}</span>
+                <strong>{{ array.agent_status_message || `Agent ${getAgentStateText(array.agent_state)}` }}</strong>
+              </div>
+            </div>
+            <el-progress v-if="isOperating" :percentage="100" :indeterminate="true" :duration="2" status="success"><span>{{ operationText }}</span></el-progress>
+            <div class="agent-flow">
+              <el-button type="primary" :loading="deploying" :disabled="array.state !== 'connected'" @click="handleDeployAgent">1. 部署</el-button>
+              <el-button type="success" :loading="starting" :disabled="array.state !== 'connected' || array.agent_running" @click="handleStartAgent">2. 启动</el-button>
+              <el-button :loading="restarting" :disabled="array.state !== 'connected'" @click="handleRestartAgent">重启</el-button>
+              <el-button type="danger" plain :loading="stopping" :disabled="array.state !== 'connected' || !array.agent_running" @click="handleStopAgent">停止</el-button>
+            </div>
+          </section>
+        </el-tab-pane>
 
-      <!-- Snapshot & Diff -->
-      <el-card class="snapshot-card">
-        <template #header>
-          <div class="card-header">
-            <span>状态快照与对比</span>
-            <el-tag type="info" size="small">测试前后对比</el-tag>
-          </div>
-        </template>
-        
-        <SnapshotDiff :array-id="array.array_id" />
-      </el-card>
+        <el-tab-pane label="快照对比" name="snapshots">
+          <section class="surface"><div class="surface-header"><h2>状态快照与对比</h2><span class="surface-note">记录测试前后差异</span></div><SnapshotDiff :array-id="array.array_id" /></section>
+        </el-tab-pane>
+      </el-tabs>
 
-      <!-- Agent Controls -->
-      <el-card class="agent-card">
-        <template #header>
-          <div class="card-header">
-            <span>Agent 控制</span>
-            <el-tag v-if="array.agent_running" type="success">运行中</el-tag>
-            <el-tag v-else-if="array.agent_deployed" type="warning">已部署</el-tag>
-            <el-tag v-else type="info">未部署</el-tag>
-          </div>
-        </template>
-
-        <div class="agent-actions">
-          <el-progress
-            v-if="isOperating"
-            :percentage="100"
-            :indeterminate="true"
-            :duration="2"
-            status="success"
-          >
-            <span>{{ operationText }}</span>
-          </el-progress>
-
-          <div class="agent-buttons">
-            <el-button
-              type="primary"
-              size="small"
-              :loading="deploying"
-              :disabled="array.state !== 'connected'"
-              @click="handleDeployAgent"
-            >
-              部署 Agent
-            </el-button>
-            <el-button
-              type="success"
-              size="small"
-              :loading="starting"
-              :disabled="array.state !== 'connected' || array.agent_running"
-              @click="handleStartAgent"
-            >
-              启动 Agent
-            </el-button>
-            <el-button
-              size="small"
-              :loading="restarting"
-              :disabled="array.state !== 'connected'"
-              @click="handleRestartAgent"
-            >
-              重启 Agent
-            </el-button>
-            <el-button
-              type="danger"
-              size="small"
-              :loading="stopping"
-              :disabled="array.state !== 'connected' || !array.agent_running"
-              @click="handleStopAgent"
-            >
-              停止 Agent
-            </el-button>
-          </div>
-        </div>
-      </el-card>
-
-      <!-- 告警详情抽屉 -->
       <AlertDetailDrawer v-model="drawerVisible" :alert="selectedAlert" @ack-changed="onAckChanged" />
-
-      <!-- Log Viewer -->
-      <el-card class="log-card" v-if="array.state === 'connected'">
-        <template #header>
-          <div class="card-header">
-            <span>在线日志查看器</span>
-            <el-tag type="success" size="small">实时</el-tag>
-          </div>
-        </template>
-        
-        <LogViewer :array-id="array.array_id" />
-      </el-card>
-
-    </div>
+    </template>
 
     <!-- Connect Dialog -->
     <el-dialog v-model="connectDialogVisible" title="连接阵列" width="400px">
@@ -343,25 +198,27 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, watch, onMounted, onUnmounted } from 'vue'
-import { useRoute } from 'vue-router'
+import { ref, reactive, computed, watch, onMounted, onUnmounted, defineAsyncComponent } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { Refresh, ArrowRight, CircleCheck, Check, User, MagicStick, Loading } from '@element-plus/icons-vue'
+import { Refresh, ArrowLeft, CircleCheck, Check, User, MagicStick, Loading } from '@element-plus/icons-vue'
 import { useArrayStore } from '../stores/arrays'
 import { useAlertStore } from '../stores/alerts'
 import api from '../api'
-import LogViewer from '../components/LogViewer.vue'
-import PerformanceMonitor from '../components/PerformanceMonitor.vue'
-import PortTrafficChart from '../components/PortTrafficChart.vue'
-import EventTimeline from '../components/EventTimeline.vue'
-import SnapshotDiff from '../components/SnapshotDiff.vue'
 import AlertDetailDrawer from '@/components/AlertDetailDrawer.vue'
 import FoldedAlertList from '@/components/FoldedAlertList.vue'
 import { translateAlert, getObserverName as getObserverLabel, LEVEL_LABELS, LEVEL_TAG_TYPES } from '@/utils/alertTranslator'
 
 const route = useRoute()
+const router = useRouter()
 const arrayStore = useArrayStore()
 const alertStore = useAlertStore()
+
+const LogViewer = defineAsyncComponent(() => import('../components/LogViewer.vue'))
+const PerformanceMonitor = defineAsyncComponent(() => import('../components/PerformanceMonitor.vue'))
+const PortTrafficChart = defineAsyncComponent(() => import('../components/PortTrafficChart.vue'))
+const EventTimeline = defineAsyncComponent(() => import('../components/EventTimeline.vue'))
+const SnapshotDiff = defineAsyncComponent(() => import('../components/SnapshotDiff.vue'))
 
 const loading = ref(true)
 const refreshing = ref(false)
@@ -372,6 +229,8 @@ const deploying = ref(false)
 const starting = ref(false)
 const stopping = ref(false)
 const restarting = ref(false)
+const validSections = new Set(['overview', 'performance', 'logs', 'agent', 'snapshots'])
+const activeSection = ref(validSections.has(route.query.tab) ? route.query.tab : 'overview')
 
 const connectForm = reactive({
   password: '',
@@ -388,13 +247,63 @@ const aiSummaryLoading = ref(false)
 const aiSummaryError = ref('')
 const aiSummaryText = ref('')
 
+watch(activeSection, (tab) => {
+  const query = { ...route.query }
+  if (tab === 'overview') delete query.tab
+  else query.tab = tab
+  router.replace({ query })
+})
+
 const activeIssues = computed(() => {
   return array.value?.active_issues || []
+})
+
+const arrayEndpoint = computed(() => {
+  if (!array.value) return '--'
+  return array.value.port ? `${array.value.host}:${array.value.port}` : array.value.host
 })
 
 const unackedCount = computed(() => {
   return recentAlerts.value.filter(a => !a.is_acked).length
 })
+
+const agentEvidenceText = computed(() => {
+  const timestamp = array.value?.agent_heartbeat_at || array.value?.agent_observed_at
+  if (!timestamp) return '尚未核验'
+  const source = array.value?.agent_status_source === 'agent_heartbeat' ? '心跳' : '平台探测'
+  return `${source} ${formatRelativeTime(timestamp)}`
+})
+
+const deploymentNoticeType = computed(() => {
+  const state = array.value?.deployment_state
+  if (state === 'failed') return 'error'
+  if (state === 'partial') return 'warning'
+  if (state === 'succeeded') return 'success'
+  return 'info'
+})
+
+function getAgentStateText(state) {
+  return ({
+    unknown: '待确认',
+    not_deployed: '未部署',
+    stopped: '已停止',
+    starting: '启动中',
+    running: '运行中',
+    degraded: '部分异常',
+    error: '异常',
+  })[state] || '待确认'
+}
+
+function getDeploymentStateText(state) {
+  return ({
+    deploying: '正在安装 Agent',
+    configuring: '正在应用配置',
+    verifying: '正在核验部署结果',
+    succeeded: '部署完成',
+    partial: '部署部分完成',
+    failed: '部署失败',
+  })[state] || '部署状态待确认'
+}
 
 function getAlertTranslation(alert) {
   return translateAlert(alert)
@@ -629,6 +538,7 @@ async function loadArray() {
     const arrayId = route.params.id
     const response = await api.getArrayStatus(arrayId, { signal })
     array.value = response.data
+    arrayStore.currentArray = response.data
     await Promise.all([loadRecentAlerts(signal), loadWatchers()])
   } catch (error) {
     if (error?.name === 'CanceledError' || error?.code === 'ERR_CANCELED') return
@@ -712,9 +622,12 @@ async function handleRefresh() {
 async function handleDeployAgent() {
   deploying.value = true
   try {
-    await api.deployAgent(array.value.array_id)
-    ElMessage.success('部署成功')
-    await loadArray()
+    const { data } = await api.deployAgent(array.value.array_id)
+    if (data.status) arrayStore.applyStatusUpdate(array.value.array_id, data.status)
+    if (data.outcome === 'partial') ElMessage.warning(data.message || '部署部分完成')
+    else if (data.outcome === 'pending') ElMessage.info(data.message || '部署结果正在确认')
+    else ElMessage.success(data.message || '部署成功')
+    await reconcileArrayStatus()
   } catch (error) {
     ElMessage.error(errMsg(error, '部署失败'))
   } finally {
@@ -725,9 +638,10 @@ async function handleDeployAgent() {
 async function handleStartAgent() {
   starting.value = true
   try {
-    await api.startAgent(array.value.array_id)
-    ElMessage.success('启动成功')
-    await loadArray()
+    const { data } = await api.startAgent(array.value.array_id)
+    if (data.outcome === 'pending') ElMessage.info(data.message || '启动结果正在确认')
+    else ElMessage.success(data.message || '启动成功')
+    await reconcileArrayStatus()
   } catch (error) {
     ElMessage.error(errMsg(error, '启动失败'))
   } finally {
@@ -738,9 +652,10 @@ async function handleStartAgent() {
 async function handleRestartAgent() {
   restarting.value = true
   try {
-    await api.restartAgent(array.value.array_id)
-    ElMessage.success('重启成功')
-    await loadArray()
+    const { data } = await api.restartAgent(array.value.array_id)
+    if (data.outcome === 'pending') ElMessage.info(data.message || '重启结果正在确认')
+    else ElMessage.success(data.message || '重启成功')
+    await reconcileArrayStatus()
   } catch (error) {
     ElMessage.error(errMsg(error, '重启失败'))
   } finally {
@@ -751,9 +666,10 @@ async function handleRestartAgent() {
 async function handleStopAgent() {
   stopping.value = true
   try {
-    await api.stopAgent(array.value.array_id)
-    ElMessage.success('停止成功')
-    await loadArray()
+    const { data } = await api.stopAgent(array.value.array_id)
+    if (data.outcome === 'pending') ElMessage.info(data.message || '停止结果正在确认')
+    else ElMessage.success(data.message || '停止成功')
+    await reconcileArrayStatus()
   } catch (error) {
     ElMessage.error(errMsg(error, '停止失败'))
   } finally {
@@ -761,36 +677,13 @@ async function handleStopAgent() {
   }
 }
 
-// ───── Auto-refresh (30s silent) ─────
-let refreshTimer = null
-let silentRefreshFails = 0
-const MAX_SILENT_FAILS = 3
-
-async function silentRefresh() {
-  // Skip if page is hidden, a manual operation is in progress, or another refresh is in flight
-  if (document.hidden) return
-  if (isOperating.value || refreshing.value || connecting.value) return
-  if (refreshInFlight) return
-
-  refreshInFlight = true
+async function reconcileArrayStatus() {
   try {
-    const arrayId = route.params.id
-    const signal = pageAbortController?.signal
-    const response = await api.getArrayStatus(arrayId, { signal })
-    array.value = response.data
-    await loadRecentAlerts(signal)
-    silentRefreshFails = 0 // reset on success
-  } catch (err) {
-    if (err?.name === 'CanceledError' || err?.code === 'ERR_CANCELED') return
-    silentRefreshFails++
-    console.warn(`Silent refresh failed (${silentRefreshFails}/${MAX_SILENT_FAILS}):`, err.message)
-    if (silentRefreshFails >= MAX_SILENT_FAILS) {
-      // After repeated failures, show a non-intrusive warning and stop retrying until success
-      ElMessage.warning('自动刷新多次失败，请检查阵列连接状态')
-      silentRefreshFails = 0 // reset to allow future attempts
-    }
-  } finally {
-    refreshInFlight = false
+    const { data } = await api.getArrayStatus(array.value.array_id)
+    arrayStore.applyStatusUpdate(array.value.array_id, data)
+    array.value = arrayStore.currentArray || data
+  } catch (error) {
+    console.debug('Agent operation status reconciliation failed:', error)
   }
 }
 
@@ -811,10 +704,17 @@ watch(
   { deep: true }
 )
 
+watch(
+  () => arrayStore.currentArray,
+  (next) => {
+    if (next?.array_id === route.params.id) array.value = next
+  },
+  { deep: true },
+)
+
 onMounted(() => {
   loadTags()
   loadArray()
-  refreshTimer = setInterval(silentRefresh, 30000) // 30 seconds
 })
 
 onUnmounted(() => {
@@ -822,128 +722,334 @@ onUnmounted(() => {
     pageAbortController.abort()
     pageAbortController = null
   }
-  if (refreshTimer) {
-    clearInterval(refreshTimer)
-    refreshTimer = null
-  }
 })
 </script>
 
 <style scoped>
 .array-detail {
-  padding: 20px;
+  min-height: 100%;
+  padding: 18px 24px 36px;
+  background: #f4f6f8;
+  color: #17202a;
 }
 
-.page-title {
-  font-size: 18px;
-  font-weight: 500;
+.array-command-header {
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 14px;
+  max-width: 1500px;
+  margin: 0 auto 16px;
 }
 
-.content {
-  margin-top: 20px;
+.back-button {
+  width: 34px;
+  height: 34px;
+  border: 1px solid #d9dee5;
+  background: #fff;
 }
 
-.info-card,
-.active-issues-card,
-.agent-card,
-.alerts-card,
-.perf-card {
-  margin-bottom: 20px;
+.array-identity {
+  min-width: 0;
 }
 
-.card-header {
+.identity-line,
+.identity-meta,
+.header-actions,
+.surface-header,
+.surface-header h2,
+.watchers-list,
+.agent-flow,
+.agent-state-panel {
   display: flex;
-  justify-content: space-between;
   align-items: center;
 }
 
-.unacked-hint {
-  font-size: 12px;
-  color: var(--el-text-color-secondary);
-  margin-left: 8px;
+.identity-line {
+  gap: 10px;
 }
 
-.actions {
-  display: flex;
+.identity-line h1 {
+  overflow: hidden;
+  margin: 0;
+  font-size: 21px;
+  font-weight: 680;
+  letter-spacing: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.status-dot {
+  flex: 0 0 auto;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #9aa4b2;
+  box-shadow: 0 0 0 4px #e5e9ee;
+}
+
+.status-dot.is-online {
+  background: #16825d;
+  box-shadow: 0 0 0 4px #dcefe8;
+}
+
+.array-address {
+  padding: 2px 7px;
+  border: 1px solid #d9dee5;
+  border-radius: 3px;
+  color: #566271;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+}
+
+.identity-meta {
+  gap: 14px;
+  margin-top: 4px;
+  color: #748091;
+  font-size: 12px;
+}
+
+.identity-meta span + span::before {
+  content: '';
+  display: inline-block;
+  width: 3px;
+  height: 3px;
+  margin: 0 8px 2px 0;
+  border-radius: 50%;
+  background: #aeb6c1;
+}
+
+.header-actions {
   gap: 8px;
 }
 
-.agent-actions {
-  display: flex;
-  flex-direction: column;
+.signal-strip {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  max-width: 1500px;
+  margin: 0 auto 12px;
+  border: 1px solid #dfe3e8;
+  border-radius: 6px;
+  background: #fff;
+  overflow: hidden;
+}
+
+.signal-item {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 2px 12px;
+  padding: 13px 16px;
+  border: 0;
+  border-right: 1px solid #e7eaee;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.signal-item:last-child {
+  border-right: 0;
+}
+
+.signal-item:not(.signal-static):hover {
+  background: #f8fafb;
+}
+
+.signal-item strong {
+  grid-row: 1 / span 2;
+  grid-column: 2;
+  align-self: center;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 24px;
+  line-height: 1;
+}
+
+.signal-item .signal-state,
+.signal-item .signal-time {
+  font-family: inherit;
+  font-size: 15px;
+}
+
+.signal-label {
+  color: #344050;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.signal-item > span:last-child {
+  color: #8993a1;
+  font-size: 11px;
+}
+
+.signal-danger strong {
+  color: #c43c3c;
+}
+
+.workspace-tabs {
+  max-width: 1500px;
+  margin: 0 auto;
+}
+
+.workspace-tabs :deep(.el-tabs__header) {
+  margin: 0;
+  padding: 0 12px;
+  border: 1px solid #dfe3e8;
+  border-radius: 6px 6px 0 0;
+  background: #fff;
+}
+
+.workspace-tabs :deep(.el-tabs__nav-wrap::after) {
+  display: none;
+}
+
+.workspace-tabs :deep(.el-tabs__item) {
+  height: 46px;
+  padding: 0 18px;
+  color: #596575;
+  font-size: 13px;
+}
+
+.workspace-tabs :deep(.el-tabs__item.is-active) {
+  color: #185c88;
+  font-weight: 650;
+}
+
+.workspace-tabs :deep(.el-tabs__active-bar) {
+  height: 3px;
+  background: #1677a7;
+}
+
+.workspace-tabs :deep(.el-tabs__content) {
+  padding-top: 12px;
+}
+
+.overview-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(280px, 0.8fr);
   gap: 12px;
 }
 
-.agent-buttons {
-  display: flex;
-  gap: 8px;
+.surface {
+  min-width: 0;
+  padding: 18px;
+  border: 1px solid #dfe3e8;
+  border-radius: 6px;
+  background: #fff;
 }
 
-/* Active Issues - compact list with scroll, space for AI below */
+.surface-header {
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 32px;
+  margin-bottom: 14px;
+}
+
+.surface-header.compact {
+  min-height: 28px;
+}
+
+.surface-header h2 {
+  gap: 7px;
+  margin: 0;
+  color: #24303e;
+  font-size: 15px;
+  font-weight: 680;
+}
+
+.surface-kicker {
+  display: block;
+  margin-bottom: 3px;
+  color: #8b95a3;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 9px;
+}
+
+.surface-count {
+  min-width: 30px;
+  color: #697586;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 25px;
+  text-align: right;
+}
+
+.surface-count.has-danger {
+  color: #c43c3c;
+}
+
+.surface-note {
+  color: #8792a0;
+  font-size: 12px;
+}
+
 .issues-list {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  max-height: 300px;
+  gap: 7px;
+  max-height: 340px;
   overflow-y: auto;
 }
 
 .issue-item {
-  padding: 8px 12px;
-  border-radius: 6px;
-  border-left: 4px solid #dcdfe6;
-  background: #fafafa;
+  padding: 11px 12px;
+  border: 1px solid #e4e8ed;
+  border-left: 3px solid #c78a2f;
+  border-radius: 4px;
+  background: #fff;
   cursor: pointer;
-  transition: all 0.2s;
+  transition: border-color 160ms ease, background-color 160ms ease;
 }
 
 .issue-item:hover {
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-  transform: translateX(2px);
+  border-color: #bdc6d1;
+  background: #fafbfc;
 }
 
-.issue-warning { border-left-color: #e6a23c; background: #fdf6ec; }
-.issue-error, .issue-critical { border-left-color: #f56c6c; background: #fef0f0; }
-.issue-suppressed { opacity: 0.75; background: #f5f7fa !important; border-left-color: #909399 !important; }
-.issue-suppressed .issue-title, .issue-suppressed .issue-message { color: #909399; }
-.issue-acked, .issue-expires { font-size: 11px; color: #909399; margin-left: 6px; }
+.issue-error,
+.issue-critical {
+  border-left-color: #c43c3c;
+}
+
+.issue-suppressed {
+  opacity: 0.65;
+  border-left-color: #8b95a3;
+}
 
 .issue-row {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 6px;
-  margin-bottom: 4px;
+  gap: 8px;
+  margin-bottom: 5px;
 }
 
 .issue-title {
-  font-weight: 600;
+  color: #25313f;
   font-size: 13px;
-  color: #303133;
+  font-weight: 680;
 }
 
 .issue-message {
-  font-size: 12px;
-  color: #606266;
-  line-height: 1.4;
-  white-space: nowrap;
   overflow: hidden;
+  color: #657181;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: nowrap;
   text-overflow: ellipsis;
 }
 
 .issue-observer {
-  font-family: monospace;
-  font-size: 11px;
-  background: #f0f2f5;
   padding: 1px 5px;
-  border-radius: 4px;
-  color: #909399;
+  border-radius: 3px;
+  background: #f0f2f5;
+  color: #737e8c;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10px;
 }
 
 .issue-since {
+  color: #8993a1;
   font-size: 11px;
-  font-style: italic;
-  color: #909399;
 }
 
 .issue-ack-btn {
@@ -953,76 +1059,243 @@ onUnmounted(() => {
 
 .issues-empty {
   display: flex;
-  flex-direction: column;
   align-items: center;
-  justify-content: center;
-  padding: 24px 0;
-  color: #67c23a;
+  gap: 12px;
+  min-height: 120px;
+  padding: 20px;
+  color: #16825d;
+  background: #f5faf8;
 }
 
-.issues-empty p {
-  margin-top: 8px;
-  color: #909399;
+.issues-empty strong,
+.issues-empty span {
+  display: block;
+}
+
+.issues-empty strong {
+  margin-bottom: 4px;
+  color: #275044;
   font-size: 14px;
 }
 
-/* AI 综合解读预留区域 */
-.ai-summary-card {
-  margin-bottom: 20px;
+.issues-empty span {
+  color: #71847e;
+  font-size: 12px;
 }
-.ai-summary-card :deep(.el-card__body) {
-  padding: 12px 16px;
-  min-height: 80px;
+
+.context-surface {
+  grid-column: 2;
+  grid-row: 1;
 }
-.ai-summary-loading {
+
+.context-list {
+  margin: 0;
+}
+
+.context-list > div {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr);
+  align-items: center;
+  min-height: 38px;
+  border-bottom: 1px solid #edf0f3;
+}
+
+.context-list dt,
+.context-label {
+  color: #8792a0;
+  font-size: 11px;
+}
+
+.context-list dd {
+  min-width: 0;
+  margin: 0;
+  color: #344050;
+  font-size: 12px;
+}
+
+.context-list :deep(.el-select) {
+  width: 100%;
+}
+
+.watchers-block {
+  margin-top: 18px;
+}
+
+.context-label {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-bottom: 8px;
+}
+
+.watchers-list {
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.ai-surface,
+.alerts-surface {
+  grid-column: 1 / -1;
+}
+
+.ai-surface {
+  border-left: 3px solid #567c96;
+}
+
+.ai-state,
+.ai-placeholder {
+  color: #6f7b89;
+  font-size: 13px;
+}
+
+.ai-state {
   display: flex;
   align-items: center;
   gap: 8px;
-  color: var(--el-text-color-secondary);
-  font-size: 14px;
 }
-.ai-summary-error {
-  font-size: 13px;
+
+.ai-placeholder {
+  margin: 0;
 }
-.ai-summary-content {
-  font-size: 14px;
-  line-height: 1.7;
-}
+
 .ai-summary-text {
+  color: #394657;
+  font-size: 13px;
+  line-height: 1.75;
   white-space: pre-wrap;
   word-break: break-word;
 }
-.ai-summary-trigger {
-  padding: 8px 0;
-}
-.ai-summary-hint {
-  margin-top: 10px;
-  font-size: 12px;
-  color: var(--el-text-color-secondary);
+
+.workspace-stack {
+  display: grid;
+  gap: 12px;
 }
 
-/* Alert list is now in FoldedAlertList.vue component */
-
-/* Performance & Traffic card */
-.perf-card,
-.traffic-card {
-  margin-bottom: 20px;
-}
-
-.log-card {
-  margin-bottom: 20px;
-}
-
-.log-card :deep(.el-card__body) {
-  height: 500px;
+.log-surface {
+  min-height: 560px;
   padding: 0;
+  overflow: hidden;
 }
 
-.config-card {
-  margin-bottom: 20px;
+.log-surface :deep(.log-viewer) {
+  height: 560px;
 }
 
-.config-card :deep(.el-card__body) {
-  padding: 0;
+.disconnected-state {
+  min-height: 220px;
+}
+
+.agent-surface {
+  max-width: 760px;
+}
+
+.deployment-notice {
+  margin-bottom: 18px;
+}
+
+.agent-state-panel {
+  gap: 14px;
+  margin-bottom: 22px;
+  padding-bottom: 18px;
+  border-bottom: 1px solid #e5e8ec;
+}
+
+.agent-state-panel span,
+.agent-state-panel strong {
+  display: block;
+}
+
+.agent-state-panel span {
+  color: #84909f;
+  font-size: 11px;
+}
+
+.agent-state-panel strong {
+  margin-top: 3px;
+  color: #2e3947;
+  font-size: 15px;
+}
+
+.agent-state-mark {
+  width: 12px;
+  height: 40px;
+  border-radius: 2px;
+  background: #aeb6c1;
+}
+
+.agent-state-mark.running {
+  background: #16825d;
+}
+
+.agent-flow {
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 18px;
+}
+
+@media (max-width: 980px) {
+  .array-detail {
+    padding: 14px;
+  }
+
+  .signal-strip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .signal-item:nth-child(2) {
+    border-right: 0;
+  }
+
+  .signal-item:nth-child(-n + 2) {
+    border-bottom: 1px solid #e7eaee;
+  }
+
+  .overview-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .context-surface,
+  .ai-surface,
+  .alerts-surface {
+    grid-column: 1;
+    grid-row: auto;
+  }
+}
+
+@media (max-width: 640px) {
+  .array-command-header {
+    grid-template-columns: 34px minmax(0, 1fr);
+  }
+
+  .header-actions {
+    grid-column: 1 / -1;
+    justify-content: flex-end;
+  }
+
+  .array-address {
+    display: none;
+  }
+
+  .identity-meta {
+    overflow: hidden;
+    white-space: nowrap;
+  }
+
+  .workspace-tabs :deep(.el-tabs__item) {
+    padding: 0 11px;
+    font-size: 12px;
+  }
+
+  .signal-item {
+    padding: 11px 12px;
+  }
+
+  .signal-item strong {
+    font-size: 20px;
+  }
+
+  .surface {
+    padding: 14px;
+  }
 }
 </style>

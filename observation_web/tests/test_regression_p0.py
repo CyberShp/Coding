@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import pytest
 from sqlalchemy import select
 
-from backend.models.array import ArrayModel, ConnectionState
+from backend.models.array import ArrayModel, ArrayStatus, ConnectionState
 from backend.models.card_inventory import CardInventoryModel
 from backend.models.observer_config import ObserverConfigModel
 
@@ -168,7 +168,11 @@ async def test_auto_reconnect_saved_arrays_skips_empty_password_records(app_clie
 
     def fake_get_status(array_id):
         if array_id not in status_map:
-            status_map[array_id] = SimpleNamespace(state=None, last_refresh=None)
+            status_map[array_id] = ArrayStatus(
+                array_id=array_id,
+                name="",
+                host="",
+            )
         return status_map[array_id]
 
     monkeypatch.setattr(main_mod, "get_ssh_pool", lambda: fake_pool)

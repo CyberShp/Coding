@@ -6,7 +6,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import Column, Integer, String, DateTime, Boolean, Text, ForeignKey
 from sqlalchemy.sql import func
 
@@ -19,6 +19,28 @@ class ConnectionState(str, Enum):
     CONNECTING = "connecting"
     CONNECTED = "connected"
     ERROR = "error"
+
+
+class AgentState(str, Enum):
+    """Agent lifecycle state, independent from array SSH connectivity."""
+    UNKNOWN = "unknown"
+    NOT_DEPLOYED = "not_deployed"
+    STOPPED = "stopped"
+    STARTING = "starting"
+    RUNNING = "running"
+    DEGRADED = "degraded"
+    ERROR = "error"
+
+
+class DeploymentState(str, Enum):
+    """Current or most recent deployment operation state."""
+    IDLE = "idle"
+    DEPLOYING = "deploying"
+    CONFIGURING = "configuring"
+    VERIFYING = "verifying"
+    SUCCEEDED = "succeeded"
+    PARTIAL = "partial"
+    FAILED = "failed"
 
 
 # SQLAlchemy Model
@@ -107,8 +129,19 @@ class ArrayStatus(BaseModel):
     host: str
     state: ConnectionState = ConnectionState.DISCONNECTED
     last_error: str = ""
+    connection_observed_at: Optional[datetime] = None
+    connection_status_source: str = "cache"
     agent_deployed: bool = False
     agent_running: bool = False
+    agent_state: AgentState = AgentState.UNKNOWN
+    agent_status_message: str = "尚未核验 Agent 状态"
+    agent_status_source: str = "cache"
+    agent_observed_at: Optional[datetime] = None
+    agent_heartbeat_at: Optional[datetime] = None
+    observer_health: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
+    deployment_state: DeploymentState = DeploymentState.IDLE
+    deployment_message: str = ""
+    deployment_updated_at: Optional[datetime] = None
     has_saved_password: bool = False
     last_refresh: Optional[datetime] = None
     tag_id: Optional[int] = None
@@ -116,10 +149,10 @@ class ArrayStatus(BaseModel):
     tag_color: Optional[str] = None
     tag_l1_name: Optional[str] = None
     tag_l2_name: Optional[str] = None
-    observer_status: Dict[str, Dict[str, str]] = {}
-    active_issues: List[Dict[str, Any]] = []
-    recent_alerts: List[Dict[str, Any]] = []
-    recent_alert_summary: Dict[str, int] = {}
+    observer_status: Dict[str, Dict[str, str]] = Field(default_factory=dict)
+    active_issues: List[Dict[str, Any]] = Field(default_factory=list)
+    recent_alerts: List[Dict[str, Any]] = Field(default_factory=list)
+    recent_alert_summary: Dict[str, int] = Field(default_factory=dict)
 
 
 class Array(ArrayBase):
@@ -131,7 +164,8 @@ class Array(ArrayBase):
     last_error: str = ""
     agent_deployed: bool = False
     agent_running: bool = False
+    agent_state: AgentState = AgentState.UNKNOWN
     last_refresh: Optional[datetime] = None
-    observer_status: Dict[str, Dict[str, str]] = {}
+    observer_status: Dict[str, Dict[str, str]] = Field(default_factory=dict)
 
     model_config = ConfigDict(from_attributes=True)

@@ -180,10 +180,21 @@ function _getAllowedArrayIds() {
   if (!preferencesStore.personalViewActive) return null
   const watchedIds = preferencesStore.watchedArrayIds || []
   const watchedTags = new Set(preferencesStore.watchedTagIds || [])
+  if (watchedIds.length === 0 && watchedTags.size === 0) return null
   return new Set([
     ...watchedIds,
     ...arrayStore.arrays.filter(a => a.tag_id != null && watchedTags.has(a.tag_id)).map(a => a.array_id)
   ])
+}
+
+function _getPersonalQueryParams() {
+  if (!preferencesStore.personalViewActive) return {}
+  const params = {}
+  const allowed = _getAllowedArrayIds()
+  if (allowed) params.array_ids = [...allowed].join(',')
+  const observers = preferencesStore.watchedObservers || []
+  if (observers.length > 0) params.observer_names = observers.join(',')
+  return params
 }
 
 function getLevelType(level) {
@@ -285,7 +296,7 @@ async function loadAlerts() {
   try {
     if (aggregateMode.value) {
       // Aggregated mode
-      const params = { hours: filters.hours, limit: 200 }
+      const params = { hours: filters.hours, limit: 200, ..._getPersonalQueryParams() }
       if (filters.level) params.level = filters.level
       const response = await api.getAggregatedAlerts(params)
       alerts.value = response.data || []
@@ -295,23 +306,19 @@ async function loadAlerts() {
         hours: filters.hours,
         limit: pagination.size,
         offset: (pagination.page - 1) * pagination.size,
+        ..._getPersonalQueryParams(),
       }
       if (filters.level) params.level = filters.level
       if (filters.observer) params.observer_name = filters.observer
       const response = await api.getAlerts(params)
       alerts.value = response.data
-    }
-    
-    // Personal view: client-side filter by watched arrays/tags
-    const allowed = _getAllowedArrayIds()
-    if (allowed) {
-      alerts.value = alerts.value.filter(a => allowed.has(a.array_id))
+      pagination.total = Number(response.headers?.['x-total-count'] || response.data.length)
     }
 
     // Load stats
-    const statsResponse = await api.getAlertStats(filters.hours)
+    const statsResponse = await api.getAlertStats(filters.hours, {}, _getPersonalQueryParams())
     stats.value = statsResponse.data
-    pagination.total = allowed ? alerts.value.length : statsResponse.data.total
+    if (aggregateMode.value) pagination.total = statsResponse.data.total
   } finally {
     loading.value = false
   }
@@ -323,6 +330,7 @@ async function exportAlerts() {
     const params = {
       hours: filters.hours,
       format: 'csv',
+      ..._getPersonalQueryParams(),
     }
     if (filters.level) params.level = filters.level
     if (filters.observer) params.observer_name = filters.observer
@@ -391,6 +399,9 @@ watch(
     // Apply current filter — skip if it doesn't match
     if (filters.level && latest.level !== filters.level) return
     if (filters.observer && latest.observer_name !== filters.observer) return
+
+    const watchedObservers = preferencesStore.watchedObservers || []
+    if (preferencesStore.personalViewActive && watchedObservers.length > 0 && !watchedObservers.includes(latest.observer_name)) return
 
     // Personal view: skip alerts from non-watched arrays
     const allowed = _getAllowedArrayIds()

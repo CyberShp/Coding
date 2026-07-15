@@ -17,6 +17,7 @@ export const useAlertStore = defineStore('alerts', () => {
 
   // Critical event banner state
   const criticalEvents = ref([])  // unacknowledged critical events
+  const seenRealtimeIds = new Set()
 
   // Suppressed observers: after "acknowledge all", new alerts from these observers
   // are auto-suppressed for 24h (no banner, no notification, no sound)
@@ -126,6 +127,34 @@ export const useAlertStore = defineStore('alerts', () => {
   const RECENT_ALERTS_MAX = 50
 
   function handleNewAlert(data) {
+    if (!data || typeof data !== 'object') return
+    if (data.id != null) {
+      const key = String(data.id)
+      if (seenRealtimeIds.has(key)) return
+      seenRealtimeIds.add(key)
+      if (seenRealtimeIds.size > 1000) {
+        const oldest = seenRealtimeIds.values().next().value
+        seenRealtimeIds.delete(oldest)
+      }
+    }
+
+    const prefs = usePreferencesStore()
+    if (prefs.personalViewActive) {
+      const watchedIds = prefs.watchedArrayIds || []
+      const watchedTags = prefs.watchedTagIds || []
+      const watchedObservers = prefs.watchedObservers || []
+      const hasArrayScope = watchedIds.length > 0 || watchedTags.length > 0
+      if (hasArrayScope) {
+        const arrStore = useArrayStore()
+        const allowedArrayIds = new Set([
+          ...watchedIds,
+          ...arrStore.arrays.filter(a => a.tag_id != null && watchedTags.includes(a.tag_id)).map(a => a.array_id)
+        ])
+        if (!allowedArrayIds.has(data.array_id)) return
+      }
+      if (watchedObservers.length > 0 && !watchedObservers.includes(data.observer_name)) return
+    }
+
     // Add to recent list
     recentAlerts.value.unshift(data)
     // Keep only alerts within last 2 hours, cap at 50
@@ -137,20 +166,6 @@ export const useAlertStore = defineStore('alerts', () => {
     // Check if critical
     if (isCriticalAlert(data)) {
       // Personal view: skip banner/notification for alerts outside watched arrays/tags
-      const prefs = usePreferencesStore()
-      if (prefs.personalViewActive) {
-        const watchedIds = prefs.watchedArrayIds || []
-        const watchedTags = prefs.watchedTagIds || []
-        const arrStore = useArrayStore()
-        const allowedArrayIds = new Set([
-          ...watchedIds,
-          ...arrStore.arrays.filter(a => a.tag_id != null && watchedTags.includes(a.tag_id)).map(a => a.array_id)
-        ])
-        if (!allowedArrayIds.has(data.array_id)) {
-          return
-        }
-      }
-
       _cleanupExpiredSuppressions()
       const obs = data.observer_name || 'unknown'
       const expiry = suppressedObservers.value.get(obs)
@@ -168,7 +183,20 @@ export const useAlertStore = defineStore('alerts', () => {
       const title = `关键事件：${data.observer_name || '未知'}`
       const body = (data.message || '').substring(0, 120)
       sendDesktopNotification(title, body, { tag: `critical-${data.id || Date.now()}` })
-      playAlertSound()
+      if (prefs.alertSound && !(prefs.mutedObservers || []).includes(data.observer_name)) {
+        playAlertSound()
+      }
+    }
+  }
+
+  function handleWebSocketMessage(message) {
+    if (!message || typeof message !== 'object') return
+    if (message.type === 'alert') {
+      handleNewAlert(message.data)
+      return
+    }
+    if (message.type === 'batch' && Array.isArray(message.messages)) {
+      message.messages.forEach(handleWebSocketMessage)
     }
   }
 
@@ -229,9 +257,7 @@ export const useAlertStore = defineStore('alerts', () => {
         try {
           const data = JSON.parse(event.data)
           
-          if (data.type === 'alert') {
-            handleNewAlert(data.data)
-          }
+          handleWebSocketMessage(data)
         } catch (e) {
           console.error('Failed to parse WebSocket message:', e)
         }
@@ -278,6 +304,7 @@ export const useAlertStore = defineStore('alerts', () => {
     fetchAlerts,
     fetchRecentAlerts,
     fetchStats,
+    handleWebSocketMessage,
     connectWebSocket,
     disconnectWebSocket,
     acknowledgeCritical,

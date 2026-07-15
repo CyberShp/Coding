@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from ..core.base import BaseObserver, ObserverResult, AlertLevel
-from ..utils.helpers import tail_file
+from ..utils.helpers import tail_file_cursor
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +33,9 @@ class SensitiveInfoObserver(BaseObserver):
     - 支持白名单配置
     - 检测到后立即告警
     """
+    persistent_state_fields = BaseObserver.persistent_state_fields + (
+        '_file_cursors', '_last_alerts', '_first_run',
+    )
     
     # 默认敏感信息模式
     DEFAULT_PATTERNS = {
@@ -144,7 +147,7 @@ class SensitiveInfoObserver(BaseObserver):
         ]
         
         # 文件位置缓存
-        self._file_positions = {}  # type: Dict[str, int]
+        self._file_cursors = {}  # type: Dict[str, Dict[str, int]]
         self._last_alerts = {}  # type: Dict[str, datetime]
         self._first_run = {}  # type: Dict[str, bool]
     
@@ -164,19 +167,19 @@ class SensitiveInfoObserver(BaseObserver):
             
             # 读取新增内容
             position_key = str(log_path)
-            last_position = self._file_positions.get(position_key, 0)
+            cursor = self._file_cursors.get(position_key, {})
             
             # 首次运行时跳过历史数据
             skip_existing = self._first_run.get(position_key, True)
             self._first_run[position_key] = False
             
-            new_lines, new_position = tail_file(
+            new_lines, cursor = tail_file_cursor(
                 log_path,
-                last_position,
+                cursor,
                 self.max_lines_per_check,
                 skip_existing=skip_existing
             )
-            self._file_positions[position_key] = new_position
+            self._file_cursors[position_key] = cursor
             
             # 检查每一行
             for line_num, line in enumerate(new_lines, start=1):
@@ -203,6 +206,12 @@ class SensitiveInfoObserver(BaseObserver):
                         f"[SensitiveInfo] {finding['category']} in {log_path.name}:{line_num}"
                     )
         
+        if not details['files_checked']:
+            return self.create_error_result(
+                "敏感信息监控无可用日志文件",
+                {'log_paths': [str(path) for path in self.log_paths]},
+            )
+
         if alerts:
             # 去重统计
             alert_summary = {}

@@ -25,6 +25,7 @@ class MemoryLeakObserver(BaseObserver):
     - 连续 N 次（默认8次，即12小时）增长则告警
     - 连续 M 次（默认3次）下降则自动恢复
     """
+    persistent_state_fields = BaseObserver.persistent_state_fields + ('_history', '_alert_triggered')
     
     def __init__(self, name: str, config: Dict[str, Any]):
         super().__init__(name, config)
@@ -49,8 +50,7 @@ class MemoryLeakObserver(BaseObserver):
         total_mb = self._get_memory_total()
         
         if used_mb is None:
-            return self.create_result(
-                has_alert=False,
+            return self.create_error_result(
                 message="无法获取内存信息",
                 details={'error': '执行 free -m 失败'},
             )

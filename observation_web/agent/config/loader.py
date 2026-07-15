@@ -23,12 +23,22 @@ class ConfigLoader:
             'max_memory_mb': 50,
             'subprocess_timeout': 10,
             'update_check_interval_seconds': 1800,
+            'max_workers': 4,
+            'health_report_interval_seconds': 30,
+            'state_path': '/var/lib/observation-points/state.json',
         },
         'reporter': {
             'output': 'file',
             'file_path': '/var/log/observation-points/alerts.log',
             'syslog_facility': 'local0',
             'cooldown_seconds': 300,
+            'max_alert_file_size_mb': 100,
+            'alert_backup_count': 3,
+            'push_timeout': 5,
+            'push_queue_max': 10000,
+            'push_batch_size': 100,
+            'outbox_path': '/var/lib/observation-points/outbox.sqlite3',
+            'cooldown_path': '/var/lib/observation-points/cooldown.json',
         },
         'observers': {
             'error_code': {
@@ -83,7 +93,7 @@ class ConfigLoader:
             'card_info': {
                 'enabled': True,
                 'interval': 120,
-                'command': '',
+                'command': 'anytest intfboardallinfo',
                 'running_state_expect': 'RUNNING',
                 'health_state_expect': 'NORMAL',
             },
@@ -95,12 +105,12 @@ class ConfigLoader:
                 'ports': [],
             },
             'controller_state': {
-                'enabled': True,
+                'enabled': False,
                 'interval': 60,
                 'command': '',
             },
             'disk_state': {
-                'enabled': True,
+                'enabled': False,
                 'interval': 60,
                 'command': '',
             },
@@ -183,6 +193,12 @@ class ConfigLoader:
             raise
 
         merged = cls._deep_merge(cls.DEFAULT_CONFIG.copy(), user_config)
+        card_info = merged.get('observers', {}).get('card_info', {})
+        if isinstance(card_info, dict) and not str(card_info.get('command', '')).strip():
+            card_info['command'] = 'anytest intfboardallinfo'
+        errors = cls.validate(merged)
+        if errors:
+            raise ValueError("配置校验失败: " + "; ".join(errors))
         logger.info("配置加载成功: %s", config_path)
         return merged
 
@@ -206,6 +222,17 @@ class ConfigLoader:
             errors.append("global.check_interval 必须 >= 1")
         if global_cfg.get('subprocess_timeout', 0) < 1:
             errors.append("global.subprocess_timeout 必须 >= 1")
+        if global_cfg.get('max_memory_mb', 50) < 1:
+            errors.append("global.max_memory_mb 必须 >= 1")
+        if not 1 <= global_cfg.get('max_workers', 4) <= 16:
+            errors.append("global.max_workers 必须在 1 到 16 之间")
+        reporter = config.get('reporter', {})
+        if reporter.get('push_enabled') and not reporter.get('push_url'):
+            errors.append("reporter.push_enabled=true 时必须配置 push_url")
+        if reporter.get('push_enabled') and not str(reporter.get('array_id', '')).strip():
+            errors.append("reporter.push_enabled=true 时必须配置 array_id")
+        if reporter.get('push_timeout', 5) <= 0:
+            errors.append("reporter.push_timeout 必须 > 0")
         observers = config.get('observers', {})
         for name, obs_config in observers.items():
             if not isinstance(obs_config, dict):
@@ -214,4 +241,7 @@ class ConfigLoader:
             interval = obs_config.get('interval', 0)
             if interval and interval < 1:
                 errors.append("observers.%s.interval 必须 >= 1" % name)
+            if name in ('card_info', 'controller_state', 'disk_state'):
+                if obs_config.get('enabled') and not str(obs_config.get('command', '')).strip():
+                    errors.append("observers.%s 启用时必须配置 command" % name)
         return errors

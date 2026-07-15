@@ -64,10 +64,13 @@ class PortErrorCodeObserver(BaseObserver):
             'command_get_errors',
             'anytest portgeterr -p {port_id} -n 0'
         )
+        self._last_list_query_ok = True
 
     def check(self) -> ObserverResult:
         ports_0x2, ports_0x11 = self._get_port_list()
         if not ports_0x2 and not ports_0x11:
+            if not self._last_list_query_ok:
+                return self.create_error_result("端口误码: 端口列表查询失败")
             return self.create_result(
                 has_alert=False,
                 message="端口误码: 无 0x2/0x11 端口",
@@ -110,7 +113,8 @@ class PortErrorCodeObserver(BaseObserver):
         # Query Ethernet ports (-t 2)
         cmd_eth = f"{self.cmd_list_ports} | grep -iE 'portId' | grep -aiE '0x2|0x11'"
         ret, stdout, stderr = run_command(cmd_eth, shell=True, timeout=15)
-        if ret == 0:
+        eth_ok = ret == 0
+        if eth_ok:
             for line in stdout.strip().split('\n'):
                 line = line.strip()
                 if not line:
@@ -126,7 +130,8 @@ class PortErrorCodeObserver(BaseObserver):
         # Query FC ports (-t 1)
         cmd_fc = f"{self.cmd_list_ports_fc} | grep -iE 'portId' | grep -aiE '0x2|0x11'"
         ret, stdout, stderr = run_command(cmd_fc, shell=True, timeout=15)
-        if ret != 0:
+        fc_ok = ret == 0
+        if not fc_ok:
             logger.info(f"[port_error_code] FC 端口列表不可用，跳过 FC 检查: {stderr[:200]}")
         else:
             for line in stdout.strip().split('\n'):
@@ -143,6 +148,7 @@ class PortErrorCodeObserver(BaseObserver):
                         if port_id not in ports_0x2:
                             ports_0x2.append(port_id)
 
+        self._last_list_query_ok = eth_ok or fc_ok
         return ports_0x2, ports_0x11
 
     def _get_fc_errors(self, port_id: str) -> List[Tuple[str, int]]:

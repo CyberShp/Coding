@@ -37,9 +37,38 @@ class TestAgentDeployer:
 
     def test_check_running_no_pid_file(self):
         deployer, conn = self._make_deployer(True)
-        conn.execute.side_effect = [(1, "", ""), (1, "", "No such file"), (1, "", "")]
+        conn.execute.side_effect = [
+            (1, "", ""),
+            (1, "", "systemd unavailable"),
+            (1, "", "No such file"),
+            (1, "", ""),
+        ]
         result = deployer.check_running()
         assert result is False
+
+    def test_get_agent_status_uses_systemd_as_authoritative_source(self):
+        deployer, conn = self._make_deployer(True)
+
+        def execute(command):
+            if command.startswith("test -d"):
+                return (0, "deployed\n", "")
+            if command.startswith("command -v systemctl"):
+                return (0, "", "")
+            if command.startswith("systemctl show"):
+                return (
+                    0,
+                    "LoadState=loaded\nActiveState=active\nSubState=running\nMainPID=2468\n",
+                    "",
+                )
+            return (1, "", "unexpected command")
+
+        conn.execute.side_effect = execute
+        status = deployer.get_agent_status()
+
+        assert status["deployed"] is True
+        assert status["running"] is True
+        assert status["pid"] == 2468
+        assert status["source"] == "systemd"
 
     def test_get_agent_status(self):
         deployer, conn = self._make_deployer(True)
@@ -61,9 +90,10 @@ class TestAgentDeployer:
             pass  # Expected
 
     @patch.object(AgentDeployer, "_build_package", return_value="/tmp/test.tar.gz")
+    @patch.object(AgentDeployer, "start_agent", return_value={"ok": True})
     @patch("builtins.open")
     @patch("pathlib.Path.exists", return_value=False)
-    def test_deploy_installs_systemd_service(self, _exists, mock_open, _build):
+    def test_deploy_installs_systemd_service(self, _exists, mock_open, _start, _build):
         deployer, conn = self._make_deployer(True)
         mock_open.return_value.__enter__.return_value.read.return_value = b"pkg"
         conn.upload_content.return_value = True
@@ -73,7 +103,10 @@ class TestAgentDeployer:
         assert result["ok"] is True
         commands = [call.args[0] for call in conn.execute.call_args_list]
         assert any("/etc/systemd/system/observation-points.service" in cmd for cmd in commands)
-        assert any("backend.local" in cmd for cmd in commands)
+        service_commands = [cmd for cmd in commands if "/etc/systemd/system/observation-points.service" in cmd]
+        assert service_commands
+        assert "alerts.log" not in next(line for line in service_commands[0].splitlines() if "ExecStart=" in line)
+        assert "until ping" not in service_commands[0]
         assert "systemctl daemon-reload" in commands
         assert "systemctl enable observation-points" in commands
 
@@ -104,9 +137,10 @@ class TestAgentDeployer:
         assert "systemctl stop observation-points" in commands
 
     @patch.object(AgentDeployer, "_build_package", return_value="/tmp/test.tar.gz")
+    @patch.object(AgentDeployer, "start_agent", return_value={"ok": True})
     @patch("builtins.open")
     @patch("pathlib.Path.exists", return_value=False)
-    def test_deploy_does_not_require_run_sh(self, _exists, mock_open, _build):
+    def test_deploy_does_not_require_run_sh(self, _exists, mock_open, _start, _build):
         deployer, conn = self._make_deployer(True)
         mock_open.return_value.__enter__.return_value.read.return_value = b"pkg"
         conn.upload_content.return_value = True
@@ -116,6 +150,22 @@ class TestAgentDeployer:
         assert result["ok"] is True
         commands = [call.args[0] for call in conn.execute.call_args_list]
         assert not any("run.sh" in cmd for cmd in commands)
+
+    @patch.object(AgentDeployer, "_build_package", return_value="/tmp/test.tar.gz")
+    @patch.object(AgentDeployer, "start_agent", return_value={"ok": True})
+    @patch("builtins.open")
+    @patch("pathlib.Path.exists", return_value=False)
+    def test_deploy_can_install_without_starting(self, _exists, mock_open, start, _build):
+        deployer, conn = self._make_deployer(True)
+        mock_open.return_value.__enter__.return_value.read.return_value = b"pkg"
+        conn.upload_content.return_value = True
+
+        result = deployer.deploy(start=False)
+
+        assert result["ok"] is True
+        start.assert_not_called()
+        commands = [call.args[0] for call in conn.execute.call_args_list]
+        assert any("/etc/observation-points/config.json" in cmd for cmd in commands)
 
     def test_validate_deploy_layout_requires_package_entrypoints(self):
         deployer, conn = self._make_deployer(True)

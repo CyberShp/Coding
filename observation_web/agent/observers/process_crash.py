@@ -6,13 +6,13 @@
 """
 
 import logging
+import hashlib
 import re
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List
 
 from ..core.base import BaseObserver, ObserverResult, AlertLevel
-from ..utils.helpers import run_command
+from ..utils.helpers import run_command, tail_file
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +41,9 @@ class ProcessCrashObserver(BaseObserver):
     def __init__(self, name: str, config: Dict[str, Any]):
         super().__init__(name, config)
         self.log_paths = config.get('log_paths', ['/var/log/messages', '/var/log/syslog'])
-        self._last_positions = {}  # path -> byte offset
+        self._log_cursors = {}  # path -> {offset, inode}
+        self._seen_dmesg = []
+        self._dmesg_initialized = False
 
     def check(self, reporter=None) -> ObserverResult:
         all_crashes = []
@@ -52,8 +54,14 @@ class ProcessCrashObserver(BaseObserver):
             all_crashes.extend(crashes)
 
         # Method 2: Check dmesg
-        dmesg_crashes = self._scan_dmesg()
+        dmesg_crashes, dmesg_ok = self._scan_dmesg()
         all_crashes.extend(dmesg_crashes)
+
+        if not dmesg_ok and not any(Path(path).exists() for path in self.log_paths):
+            return self.create_error_result(
+                "进程崩溃监控无可用日志源",
+                {'log_paths': self.log_paths},
+            )
 
         if all_crashes:
             msgs = [f"{c['process'] or '?'}: {c['type']}" for c in all_crashes[:5]]
@@ -65,7 +73,7 @@ class ProcessCrashObserver(BaseObserver):
                     'crashes': all_crashes[:20],
                     'log_path': self.log_paths[0] if self.log_paths else '',
                 },
-                sticky=True,
+                sticky=False,
             )
 
         return self.create_result(
@@ -80,20 +88,21 @@ class ProcessCrashObserver(BaseObserver):
             return []
 
         crashes = []
-        last_pos = self._last_positions.get(log_path, 0)
+        cursor = self._log_cursors.get(log_path)
 
         try:
-            size = path.stat().st_size
-            if size < last_pos:
-                # Log rotated
-                last_pos = 0
+            stat = path.stat()
+            inode = getattr(stat, 'st_ino', 0)
+            if cursor is None:
+                lines, position = tail_file(path, 0, max_lines=500, skip_existing=True)
+            else:
+                last_pos = int(cursor.get('offset', 0))
+                if cursor.get('inode') != inode:
+                    last_pos = 0
+                lines, position = tail_file(path, last_pos, max_lines=500)
+            self._log_cursors[log_path] = {'offset': position, 'inode': inode}
 
-            with open(path, 'r', errors='ignore') as f:
-                f.seek(last_pos)
-                new_lines = f.readlines()
-                self._last_positions[log_path] = f.tell()
-
-            for line in new_lines[-500:]:  # Only check last 500 new lines
+            for line in lines:
                 for pattern, crash_type in CRASH_PATTERNS:
                     if re.search(pattern, line, re.IGNORECASE):
                         process = self._extract_process(line)
@@ -109,16 +118,22 @@ class ProcessCrashObserver(BaseObserver):
 
         return crashes
 
-    def _scan_dmesg(self) -> List[Dict]:
+    def _scan_dmesg(self):
         """Scan dmesg for recent crash events."""
         ret, stdout, stderr = run_command('dmesg -T 2>/dev/null | tail -200', shell=True, timeout=10)
         if ret != 0:
-            return []
+            return [], False
 
         crashes = []
+        seen = set(self._seen_dmesg)
+        current_hashes = []
         for line in stdout.split('\n'):
             for pattern, crash_type in CRASH_PATTERNS:
                 if re.search(pattern, line, re.IGNORECASE):
+                    fingerprint = hashlib.sha256(line.strip().encode('utf-8')).hexdigest()
+                    current_hashes.append(fingerprint)
+                    if fingerprint in seen or not self._dmesg_initialized:
+                        break
                     process = self._extract_process(line)
                     crashes.append({
                         'type': crash_type,
@@ -127,8 +142,9 @@ class ProcessCrashObserver(BaseObserver):
                         'source': 'dmesg',
                     })
                     break
-
-        return crashes
+        self._dmesg_initialized = True
+        self._seen_dmesg = (self._seen_dmesg + current_hashes)[-2000:]
+        return crashes, True
 
     def _extract_process(self, line: str) -> str:
         """Try to extract process name from log line."""
@@ -141,3 +157,6 @@ class ProcessCrashObserver(BaseObserver):
         if m2:
             return f"{m2.group(2)}[{m2.group(1)}]"
         return ''
+    persistent_state_fields = BaseObserver.persistent_state_fields + (
+        '_log_cursors', '_seen_dmesg', '_dmesg_initialized',
+    )

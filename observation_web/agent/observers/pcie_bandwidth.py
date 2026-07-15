@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 
 
 class PcieBandwidthObserver(BaseObserver):
+    persistent_state_fields = BaseObserver.persistent_state_fields + ('_last_link', '_first_run')
     """
     PCIe 带宽 downgrade 监测
 
@@ -67,8 +68,7 @@ class PcieBandwidthObserver(BaseObserver):
             current_link, cap_downgrades = self._collect_via_lspci()
 
         if not current_link:
-            return self.create_result(
-                has_alert=False,
+            return self.create_error_result(
                 message="PCIe 带宽查询无数据（可能 lspci 不可用）",
             )
 

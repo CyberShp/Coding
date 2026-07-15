@@ -254,10 +254,27 @@
             </el-option>
           </el-select>
         </el-form-item>
+        <el-alert
+          v-if="connectionTest"
+          class="connection-result"
+          :type="connectionTest.ok ? 'success' : 'error'"
+          :title="connectionTest.ok ? `连接成功 · ${connectionTest.latency_ms} ms` : '连接失败'"
+          :description="connectionTest.message"
+          :closable="false"
+          show-icon
+        />
       </el-form>
       <template #footer>
-        <el-button @click="dialogVisible = false">取消</el-button>
-        <el-button type="primary" @click="handleAdd" :loading="submitting">确定</el-button>
+        <div class="dialog-footer">
+          <el-button @click="handleTestConnection" :loading="testingConnection">
+            <el-icon><Connection /></el-icon>
+            测试连接
+          </el-button>
+          <div>
+            <el-button @click="dialogVisible = false">取消</el-button>
+            <el-button type="primary" @click="handleAdd" :loading="submitting">确定</el-button>
+          </div>
+        </div>
       </template>
     </el-dialog>
 
@@ -335,16 +352,18 @@ import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
-  Plus, Search, Collection, MoreFilled, Edit, Delete, Upload, Download, ArrowRight
+  Plus, Search, Collection, MoreFilled, Edit, Delete, Upload, Download, ArrowRight, Connection
 } from '@element-plus/icons-vue'
 import api from '../api'
+import { useArrayStore } from '../stores/arrays'
 
 const router = useRouter()
 const route = useRoute()
+const arrayStore = useArrayStore()
 
 const loading = ref(false)
 const tags = ref([])
-const allStatuses = ref([])
+const allStatuses = computed(() => arrayStore.arrays)
 const searchIp = ref('')
 const activeSearchIp = ref('')
 const searchResult = ref({})
@@ -354,6 +373,8 @@ const dialogVisible = ref(false)
 const tagDialogVisible = ref(false)
 const untaggedDialogVisible = ref(false)
 const submitting = ref(false)
+const testingConnection = ref(false)
+const connectionTest = ref(null)
 const tagSubmitting = ref(false)
 const loadingUntagged = ref(false)
 const formRef = ref(null)
@@ -385,6 +406,11 @@ const rules = {
   host: [{ required: true, message: '请输入地址', trigger: 'blur' }],
   username: [{ required: true, message: '请输入用户名', trigger: 'blur' }],
 }
+
+watch(
+  () => [form.host, form.port, form.username, form.password, form.key_path],
+  () => { connectionTest.value = null },
+)
 
 const tagRules = {
   name: [{ required: true, message: '请输入标签名称', trigger: 'blur' }],
@@ -489,8 +515,7 @@ async function loadTags() {
 
 async function loadStatuses() {
   try {
-    const res = await api.getArrayStatuses()
-    allStatuses.value = res.data || []
+    await arrayStore.fetchArrays()
   } catch (e) {
     console.error('Failed to load statuses:', e)
   }
@@ -620,7 +645,37 @@ function showAddDialog() {
     key_path: '',
     tag_id: null,
   })
+  connectionTest.value = null
   dialogVisible.value = true
+}
+
+async function handleTestConnection() {
+  try {
+    await formRef.value.validateField(['host', 'username'])
+  } catch {
+    return
+  }
+
+  testingConnection.value = true
+  connectionTest.value = null
+  try {
+    const res = await api.testArrayConnection({
+      host: form.host,
+      port: form.port,
+      username: form.username,
+      password: form.password,
+      key_path: form.key_path,
+    })
+    connectionTest.value = res.data
+  } catch (error) {
+    connectionTest.value = {
+      ok: false,
+      latency_ms: 0,
+      message: error.response?.data?.detail || '连接测试请求失败',
+    }
+  } finally {
+    testingConnection.value = false
+  }
 }
 
 async function handleAdd() {
@@ -717,6 +772,17 @@ onMounted(async () => {
   display: flex;
   justify-content: space-between;
   align-items: center;
+}
+
+.dialog-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+}
+
+.connection-result {
+  margin-top: 4px;
 }
 
 .header-actions {

@@ -2,7 +2,7 @@
 import os
 import tempfile
 import pytest
-from observation_points.utils.helpers import (
+from agent.utils.helpers import (
     run_command, tail_file, parse_key_value,
     safe_int, safe_float, read_sysfs,
 )

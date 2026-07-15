@@ -11,7 +11,7 @@ from datetime import datetime
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from sqlalchemy import select, func, and_, delete
+from sqlalchemy import select, func, and_, delete, case
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..db.database import get_db
@@ -306,6 +306,88 @@ async def get_task_summary(task_id: int, db: AsyncSession = Depends(get_db)):
         by_observer=by_observer,
         critical_events=critical_events[:50],
     )
+
+
+@router.get("/{task_id}/live-status")
+async def get_task_live_status(task_id: int, db: AsyncSession = Depends(get_db)):
+    """Return per-array ingestion freshness and alert counts for a test task."""
+    from ..models.array import ArrayModel
+    from ..models.lifecycle import SyncStateModel
+
+    task = await db.get(TaskSessionModel, task_id)
+    if not task:
+        raise HTTPException(404, "Task not found")
+
+    array_ids = _parse_array_ids(task.array_ids)
+    arrays_query = select(ArrayModel.array_id, ArrayModel.name)
+    if array_ids:
+        arrays_query = arrays_query.where(ArrayModel.array_id.in_(array_ids))
+    arrays_result = await db.execute(arrays_query.order_by(ArrayModel.name))
+    arrays = arrays_result.all()
+    effective_ids = [row.array_id for row in arrays]
+
+    sync_map = {}
+    alert_map = {}
+    if effective_ids:
+        sync_result = await db.execute(
+            select(SyncStateModel).where(SyncStateModel.array_id.in_(effective_ids))
+        )
+        sync_map = {row.array_id: row for row in sync_result.scalars().all()}
+
+        alert_result = await db.execute(
+            select(
+                AlertModel.array_id,
+                func.count(AlertModel.id).label("alert_count"),
+                func.sum(case(
+                    (AlertModel.level.in_(["error", "critical"]), 1),
+                    else_=0,
+                )).label("critical_count"),
+                func.max(AlertModel.timestamp).label("last_alert_at"),
+            )
+            .where(
+                AlertModel.array_id.in_(effective_ids),
+                AlertModel.task_id == task.id,
+            )
+            .group_by(AlertModel.array_id)
+        )
+        alert_map = {row.array_id: row for row in alert_result.all()}
+
+    now = datetime.now()
+    array_statuses = []
+    for array in arrays:
+        sync = sync_map.get(array.array_id)
+        alert_stats = alert_map.get(array.array_id)
+        last_sync_at = sync.last_sync_at if sync else None
+        sync_age = max(0, int((now - last_sync_at).total_seconds())) if last_sync_at else None
+        freshness = (
+            "never" if sync_age is None else
+            "fresh" if sync_age <= 90 else
+            "delayed" if sync_age <= 300 else
+            "stale"
+        )
+        array_statuses.append({
+            "array_id": array.array_id,
+            "array_name": array.name,
+            "freshness": freshness,
+            "last_sync_at": last_sync_at.isoformat() if last_sync_at else None,
+            "sync_age_seconds": sync_age,
+            "alert_count": int(alert_stats.alert_count or 0) if alert_stats else 0,
+            "critical_count": int(alert_stats.critical_count or 0) if alert_stats else 0,
+            "last_alert_at": (
+                alert_stats.last_alert_at.isoformat()
+                if alert_stats and alert_stats.last_alert_at else None
+            ),
+        })
+
+    return {
+        "task_id": task.id,
+        "task_name": task.name,
+        "task_status": task.status,
+        "server_time": now.isoformat(),
+        "arrays": array_statuses,
+        "fresh_count": sum(1 for item in array_statuses if item["freshness"] == "fresh"),
+        "attention_count": sum(1 for item in array_statuses if item["freshness"] != "fresh"),
+    }
 
 
 def _parse_array_ids(raw: str) -> List[str]:

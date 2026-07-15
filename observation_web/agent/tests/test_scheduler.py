@@ -1,8 +1,8 @@
 """Tests for core/scheduler.py — Scheduler lifecycle."""
 import pytest
 from unittest.mock import patch, MagicMock
-from observation_points.core.scheduler import Scheduler
-from observation_points.core.base import ObserverResult, AlertLevel
+from agent.core.scheduler import Scheduler
+from agent.core.base import ObserverResult, AlertLevel
 from datetime import datetime
 import time
 

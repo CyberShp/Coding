@@ -162,11 +162,11 @@ class TestFeature7Import:
 
 
 class TestFeature10CardInventory:
-    """Feature 10: Card inventory CRUD + fuzzy search."""
+    """Feature 10: Read-only card inventory synced from arrays."""
 
     @pytest.mark.asyncio
-    async def test_create_card(self, app_client):
-        """Should create card entry."""
+    async def test_inventory_rejects_manual_creation(self, app_client):
+        """Inventory entries are owned by array synchronization."""
         response = await app_client.post(
             "/api/card-inventory",
             json={
@@ -176,10 +176,7 @@ class TestFeature10CardInventory:
                 "description": "Test card",
             },
         )
-        assert response.status_code == 201
-        data = response.json()
-        assert data["name"] == "Card-A"
-        assert data["model"] == "ModelX"
+        assert response.status_code == 405
 
     @pytest.mark.asyncio
     async def test_list_cards_empty(self, app_client):
@@ -189,44 +186,30 @@ class TestFeature10CardInventory:
         assert response.json() == []
 
     @pytest.mark.asyncio
-    async def test_search_multi_keyword_and(self, app_client):
+    async def test_search_multi_keyword_and(self, app_client_with_db):
         """Multi-keyword search should AND match."""
-        await app_client.post(
+        from backend.models.card_inventory import CardInventoryModel
+
+        app_client, db = app_client_with_db
+        db.add_all([
+            CardInventoryModel(
+                array_id="array-1", card_no="Card-Alpha", board_id="Beta", model="M1"
+            ),
+            CardInventoryModel(
+                array_id="array-1", card_no="Card-Gamma", board_id="Delta", model="M2"
+            ),
+        ])
+        await db.commit()
+        response = await app_client.get(
             "/api/card-inventory",
-            json={"name": "Card Alpha Beta", "device_type": "controller", "model": "M1", "description": ""},
+            params={"q": "Card Alpha"},
         )
-        await app_client.post(
-            "/api/card-inventory",
-            json={"name": "Card Gamma", "device_type": "controller", "model": "M2", "description": ""},
-        )
-        response = await app_client.get("/api/card-inventory?q=Card+Alpha")
         assert response.status_code == 200
         cards = response.json()
-        assert len(cards) >= 1
-        assert any("Alpha" in (c.get("name") or "") for c in cards)
+        assert [card["card_no"] for card in cards] == ["Card-Alpha"]
 
     @pytest.mark.asyncio
-    async def test_crud_card(self, app_client):
-        """Full CRUD cycle."""
-        create = await app_client.post(
-            "/api/card-inventory",
-            json={"name": "CRUD-Card", "device_type": "disk", "model": "X", "description": ""},
-        )
-        assert create.status_code == 201
-        cid = create.json()["id"]
-
-        get_resp = await app_client.get(f"/api/card-inventory/{cid}")
-        assert get_resp.status_code == 200
-
-        update = await app_client.put(
-            f"/api/card-inventory/{cid}",
-            json={"description": "Updated"},
-        )
-        assert update.status_code == 200
-        assert update.json()["description"] == "Updated"
-
-        delete = await app_client.delete(f"/api/card-inventory/{cid}")
-        assert delete.status_code == 204
-
-        get_after = await app_client.get(f"/api/card-inventory/{cid}")
-        assert get_after.status_code == 404
+    async def test_inventory_rejects_manual_mutation(self, app_client):
+        """Synced card rows cannot be edited or deleted through the API."""
+        assert (await app_client.put("/api/card-inventory/1", json={})).status_code == 404
+        assert (await app_client.delete("/api/card-inventory/1")).status_code == 404

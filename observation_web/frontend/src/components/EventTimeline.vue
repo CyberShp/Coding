@@ -53,9 +53,14 @@
 
 <script setup>
 import { ref, onMounted, nextTick, watch, onBeforeUnmount } from 'vue'
-import * as echarts from 'echarts'
+import * as echarts from 'echarts/core'
+import { ScatterChart } from 'echarts/charts'
+import { GridComponent, TooltipComponent, DataZoomComponent, MarkAreaComponent } from 'echarts/components'
+import { CanvasRenderer } from 'echarts/renderers'
 import api from '@/api'
 import { getObserverName } from '@/utils/alertTranslator'
+
+echarts.use([CanvasRenderer, ScatterChart, GridComponent, TooltipComponent, DataZoomComponent, MarkAreaComponent])
 
 const props = defineProps({
   arrayId: { type: String, required: true },
@@ -93,7 +98,7 @@ async function fetchData(resetOffset = false) {
     taskWindows.value = res.data.task_windows || []
     total.value = res.data.total ?? 0
     await nextTick()
-    renderChart()
+    window.requestAnimationFrame(renderChart)
   } catch (e) {
     console.error('Timeline fetch error:', e)
   } finally {
@@ -119,7 +124,7 @@ function nextPage() {
 }
 
 function renderChart() {
-  if (!chartContainer.value) return
+  if (!chartContainer.value || chartContainer.value.clientWidth === 0 || chartContainer.value.clientHeight === 0) return
   if (!chartInstance) {
     chartInstance = echarts.init(chartContainer.value)
   }
