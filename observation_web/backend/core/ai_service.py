@@ -6,6 +6,9 @@ Gracefully degrades when API is unavailable - never affects core functionality.
 
 import json
 import logging
+import os
+import ssl
+from pathlib import Path
 from typing import Optional
 
 import httpx
@@ -45,13 +48,36 @@ LEVEL_NAMES = {
 
 
 def _get_httpx_client_kwargs() -> dict:
-    """Build httpx AsyncClient kwargs based on AI proxy mode."""
+    """Build shared HTTPX settings for every AI request."""
     config = get_config()
+    kwargs = {}
     proxy_mode = (getattr(config.ai, "proxy_mode", "system") or "system").lower()
     if proxy_mode == "none":
         # Disable environment proxy usage for direct connection.
-        return {"proxy": None, "trust_env": False}
-    return {}
+        kwargs.update({"proxy": None, "trust_env": False})
+    pem_cert_path = (getattr(config.ai, "pem_cert_path", "") or "").strip()
+    if pem_cert_path:
+        kwargs["verify"] = ssl.create_default_context(cafile=pem_cert_path)
+    return kwargs
+
+
+def validate_ai_pem_path(value: str) -> str:
+    """Normalize and validate a user-provided server-side CA PEM path."""
+    raw_path = (value or "").strip()
+    if not raw_path:
+        return ""
+    path = Path(raw_path).expanduser()
+    if not path.is_absolute():
+        raise ValueError("PEM 证书路径必须是后端服务器上的绝对路径")
+    if not path.is_file():
+        raise ValueError("PEM 证书文件不存在")
+    if not os.access(path, os.R_OK):
+        raise ValueError("PEM 证书文件不可读")
+    try:
+        ssl.create_default_context(cafile=str(path))
+    except (OSError, ssl.SSLError) as exc:
+        raise ValueError(f"PEM 证书无法加载: {exc}") from exc
+    return str(path)
 
 
 def _build_prompt(observer_name: str, level: str, message: str, details: dict) -> str:

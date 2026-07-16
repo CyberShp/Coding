@@ -64,6 +64,7 @@ class AIConfig:
     timeout: int = 15
     max_tokens: int = 800
     proxy_mode: str = "system"
+    pem_cert_path: str = ""
 
 
 @dataclass
@@ -120,6 +121,7 @@ class AppConfig:
                         timeout=ai_data.get('timeout', 15),
                         max_tokens=ai_data.get('max_tokens', 800),
                         proxy_mode=ai_data.get('proxy_mode', 'system'),
+                        pem_cert_path=ai_data.get('pem_cert_path', ''),
                     )
             except Exception as e:
                 print(f"Warning: Failed to load config: {e}")
@@ -168,6 +170,7 @@ class AppConfig:
                 'timeout': self.ai.timeout,
                 'max_tokens': self.ai.max_tokens,
                 'proxy_mode': self.ai.proxy_mode,
+                'pem_cert_path': self.ai.pem_cert_path,
             },
         }
         
