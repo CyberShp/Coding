@@ -490,28 +490,55 @@ class DataLifecycleManager:
                 
                 archived_count += len(group['alerts'])
             
-            # Delete archived alerts from main table
-            alert_ids = [a.id for a in alerts_to_archive]
-            await db.execute(
-                delete(AlertModel).where(AlertModel.id.in_(alert_ids))
-            )
-            await db.commit()
-        
-        # Delete old archives (older than archive_retention_days)
+        # Delete from the main table EVERYTHING older than the active window —
+        # both the rows just archived AND anything older than the archive window
+        # (which we deliberately don't archive).  Using a range predicate instead
+        # of IN (ids) stops the main table from growing unbounded when old data
+        # exists, and avoids a giant/again-unbounded IN clause.
+        await db.execute(
+            delete(AlertModel).where(AlertModel.timestamp < active_cutoff)
+        )
+        await db.commit()
+
+        # Delete/trim old archives precisely.  Whole buckets strictly before the
+        # boundary month are dropped; the boundary month itself is trimmed at the
+        # record level so we neither over-delete (still-retained records) nor
+        # under-delete (expired records lingering in a half-old month).
         deleted_count = 0
         if config.auto_cleanup:
-            # Find archives older than retention
-            old_year_month = archive_cutoff.strftime('%Y-%m')
-            result = await db.execute(
+            boundary = archive_cutoff.strftime('%Y-%m')
+            cutoff_iso = archive_cutoff.isoformat()
+
+            old_archives = (await db.execute(
                 select(AlertsArchiveModel)
-                .where(AlertsArchiveModel.year_month < old_year_month)
-            )
-            old_archives = result.scalars().all()
-            
+                .where(AlertsArchiveModel.year_month < boundary)
+            )).scalars().all()
             for archive in old_archives:
                 deleted_count += archive.record_count
                 await db.delete(archive)
-            
+
+            boundary_rows = (await db.execute(
+                select(AlertsArchiveModel)
+                .where(AlertsArchiveModel.year_month == boundary)
+            )).scalars().all()
+            for archive in boundary_rows:
+                try:
+                    records = json.loads(gzip.decompress(archive.data_compressed).decode())
+                except Exception:
+                    continue
+                kept = [r for r in records if str(r.get('timestamp', '')) >= cutoff_iso]
+                removed = len(records) - len(kept)
+                if removed <= 0:
+                    continue
+                deleted_count += removed
+                if kept:
+                    archive.data_compressed = gzip.compress(
+                        json.dumps(kept, ensure_ascii=False).encode()
+                    )
+                    archive.record_count = len(kept)
+                else:
+                    await db.delete(archive)
+
             await db.commit()
         
         if archived_count > 0 or deleted_count > 0:

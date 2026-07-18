@@ -1,9 +1,11 @@
 #!/bin/bash
 # 测试数据注入脚本
 # 用法: ./test_data.sh [后端地址]
-# 默认: http://localhost:8001
+# 默认: 从 config.json 读取后端端口（缺省 8002）
 
-BASE_URL="${1:-http://localhost:8001}"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+DEFAULT_PORT="$(python3 -c "import json; print(json.load(open('$SCRIPT_DIR/config.json')).get('server',{}).get('port',8002))" 2>/dev/null || echo 8002)"
+BASE_URL="${1:-http://localhost:$DEFAULT_PORT}"
 echo "后端地址: $BASE_URL"
 echo "========================================="
 

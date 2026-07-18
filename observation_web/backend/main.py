@@ -234,8 +234,15 @@ async def _health_checker():
                                     asyncio.get_running_loop().run_in_executor(None, deployer.check_deployed),
                                     timeout=10,
                                 ):
+                                    # wait_for_ready() drives BLOCKING conn.execute
+                                    # internally; await-ing it directly froze the
+                                    # event loop for up to its full timeout. Run it
+                                    # in a worker thread (same pattern as
+                                    # start_agent's asyncio.run at agent_deployer.py:259).
                                     ready = await asyncio.wait_for(
-                                        deployer.wait_for_ready(),
+                                        asyncio.get_running_loop().run_in_executor(
+                                            None, lambda: asyncio.run(deployer.wait_for_ready())
+                                        ),
                                         timeout=1210,
                                     )
                                     if ready:

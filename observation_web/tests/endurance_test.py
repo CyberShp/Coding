@@ -24,7 +24,7 @@ from collections import defaultdict
 from pathlib import Path
 
 # ───── Configuration ─────
-BASE_URL = "http://localhost:8001"
+BASE_URL = "http://localhost:8002"
 TEST_DURATION_HOURS = 4
 HUMAN_DELAY_MIN = 0.3  # seconds
 HUMAN_DELAY_MAX = 0.7  # seconds

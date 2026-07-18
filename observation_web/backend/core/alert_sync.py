@@ -25,6 +25,7 @@ logger = logging.getLogger(__name__)
 _scheduler: Optional[AsyncIOScheduler] = None
 _sync_interval_seconds = 20
 _max_concurrent = 5
+_sync_round = 0  # for periodic maintenance (stale-ack cleanup)
 
 
 async def _sync_one_array(array_id: str, semaphore: asyncio.Semaphore) -> Tuple[str, Optional[int]]:
@@ -79,6 +80,20 @@ async def _sync_one_array(array_id: str, semaphore: asyncio.Semaphore) -> Tuple[
 
 async def _run_sync():
     """Sync alerts from all connected arrays."""
+    global _sync_round
+    _sync_round += 1
+    # Periodic maintenance (~every 10 min): physically remove expired acks that
+    # GET status endpoints no longer delete inline.
+    if _sync_round % 30 == 0:
+        try:
+            async with _db_module.AsyncSessionLocal() as db:
+                from ..api.array_status import cleanup_stale_acks
+                removed = await cleanup_stale_acks(db)
+                if removed:
+                    logger.info("Cleaned %d stale ack rows", removed)
+        except Exception as e:
+            logger.warning("Stale ack cleanup failed: %s", e)
+
     from ..models.array import ConnectionState
 
     ssh_pool = get_ssh_pool()
@@ -110,6 +125,13 @@ def start_alert_sync():
         seconds=_sync_interval_seconds,
         id="alert_sync",
         replace_existing=True,
+        # Without these, APScheduler's defaults (max_instances=1,
+        # misfire_grace_time=1s) silently DROP a whole cycle whenever the
+        # previous run overruns the 20s interval — which is exactly what happens
+        # at 50-array scale.  coalesce collapses a backlog into one run.
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=_sync_interval_seconds,
     )
     _scheduler.start()
     logger.info(f"Alert sync started (interval={_sync_interval_seconds}s, max_concurrent={_max_concurrent})")

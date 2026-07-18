@@ -71,17 +71,41 @@ class TestSystemAlertStore:
 
 
 class TestConvenienceFunctions:
+    """The sys_* helpers must record into the global SystemAlertStore."""
+
+    def setup_method(self):
+        # Start from a clean global store so assertions are deterministic.
+        get_system_alert_store().clear()
+
+    def _latest(self):
+        alerts = get_system_alert_store().get_all()
+        assert alerts, "expected at least one alert to be recorded"
+        return alerts[0]  # get_all() returns most-recent first
+
     def test_sys_info(self):
         sys_info("test", "info message")
+        alert = self._latest()
+        assert alert["level"] == "info"
+        assert alert["module"] == "test"
+        assert alert["message"] == "info message"
 
     def test_sys_warning(self):
         sys_warning("test", "warning message")
+        alert = self._latest()
+        assert alert["level"] == "warning"
+        assert alert["message"] == "warning message"
 
     def test_sys_error(self):
         sys_error("test", "error message")
+        alert = self._latest()
+        assert alert["level"] == "error"
+        assert alert["message"] == "error message"
 
     def test_sys_critical(self):
         sys_critical("test", "critical message")
+        alert = self._latest()
+        assert alert["level"] == "critical"
+        assert alert["message"] == "critical message"
 
 
 class TestSystemAlert:

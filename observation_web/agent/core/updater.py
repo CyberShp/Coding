@@ -63,13 +63,13 @@ class AgentUpdater:
     def _restart_self(self):
         runtime = self.config.get("_runtime", {}) or {}
         python_exe = runtime.get("python_executable") or sys.executable
-        argv = runtime.get("argv") or [
-            "-m", "observation_points", "-c", "/etc/observation-points/config.json"
-        ]
-        if argv and argv[0] != "-m":
-            exec_args = [python_exe] + argv
-        else:
-            exec_args = [python_exe] + argv
+        # runtime["argv"] 是 sys.argv[1:]，即模块名之后的参数（如 -c <config>）。
+        # 解释器已吞掉 "-m observation_points"，所以必须显式重建，否则 execv 会把
+        # 配置文件路径当成 `python -c '<config>'` 的代码执行，更新即自杀。
+        argv = runtime.get("argv")
+        if argv is None:
+            argv = ["-c", "/etc/observation-points/config.json"]
+        exec_args = [python_exe, "-m", "observation_points", *argv]
         os.execv(python_exe, exec_args)
 
     def check_and_apply_update(self) -> bool:

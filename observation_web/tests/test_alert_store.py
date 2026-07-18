@@ -30,8 +30,35 @@ class TestAlertStore:
             )
             for i in range(5)
         ]
-        count, _ = await store.create_alerts_batch(db_session, alerts)
+        count, created = await store.create_alerts_batch(db_session, alerts)
         assert count == 5
+        assert len(created) == 5
+        assert all(a.id is not None for a in created)
+
+    async def test_create_alerts_batch_persists_duplicates(self, db_session):
+        """AlertStore.create_alerts_batch does NOT dedupe — every row is stored.
+
+        Deduplication is an import-layer concern (see TestAlertDeduplication);
+        the store layer must faithfully persist each alert it is given, even when
+        the alerts are byte-identical.
+        """
+        store = AlertStore()
+        ts = datetime(2024, 1, 15, 10, 0, 0)
+
+        def _dup():
+            return AlertCreate(
+                array_id="arr-dup", observer_name="cpu_usage",
+                level=AlertLevel.WARNING, message="same message",
+                details={}, timestamp=ts,
+            )
+
+        count, created = await store.create_alerts_batch(
+            db_session, [_dup(), _dup(), _dup()]
+        )
+        assert count == 3
+        assert len({a.id for a in created}) == 3  # three distinct rows
+        stored = await store.get_alert_count(db_session, array_id="arr-dup")
+        assert stored == 3
 
     async def test_create_alerts_batch_empty(self, db_session):
         store = AlertStore()
@@ -119,3 +146,78 @@ class TestAlertStore:
         ))
         deleted = await store.delete_old_alerts(db_session, days=30)
         assert deleted == 1
+
+
+@pytest.mark.asyncio
+class TestAlertDeduplication:
+    """Exercise the REAL alert-import dedup interface.
+
+    Deduplication of imported log alerts is performed by
+    ``DataLifecycleManager`` using a (timestamp | observer | message) hash.
+    These tests run that real hashing logic against rows created through the
+    real ``AlertStore`` — no hand-rolled dedup simulation.
+    """
+
+    async def test_duplicate_alert_hash_is_detected_against_stored_rows(self, db_session):
+        from backend.core.data_lifecycle import DataLifecycleManager
+
+        store = AlertStore()
+        lifecycle = DataLifecycleManager()  # SSH not needed for the hashing helpers
+        ts = datetime(2024, 1, 15, 10, 0, 0)
+
+        await store.create_alert(db_session, AlertCreate(
+            array_id="arr-dedup", observer_name="memory_leak",
+            level=AlertLevel.ERROR, message="Memory leak detected",
+            details={}, timestamp=ts,
+        ))
+
+        existing = await lifecycle._get_existing_hashes(
+            db_session, "arr-dedup", ts - timedelta(days=1)
+        )
+
+        # A byte-identical alert hashes to a value already present → it would be
+        # skipped by import_history (dedup works).
+        dup_hash = lifecycle._compute_message_hash(
+            ts.isoformat(), "memory_leak", "Memory leak detected"
+        )
+        assert dup_hash in existing
+
+        # A genuinely different alert is NOT considered a duplicate.
+        other_hash = lifecycle._compute_message_hash(
+            ts.isoformat(), "memory_leak", "A different message"
+        )
+        assert other_hash not in existing
+
+    async def test_existing_hashes_scoped_by_array_and_time(self, db_session):
+        """Dedup lookup must be scoped to the array and the cutoff window."""
+        from backend.core.data_lifecycle import DataLifecycleManager
+
+        store = AlertStore()
+        lifecycle = DataLifecycleManager()
+        ts = datetime(2024, 1, 15, 10, 0, 0)
+
+        await store.create_alert(db_session, AlertCreate(
+            array_id="arr-A", observer_name="cpu_usage",
+            level=AlertLevel.WARNING, message="cpu high",
+            details={}, timestamp=ts,
+        ))
+
+        target_hash = lifecycle._compute_message_hash(ts.isoformat(), "cpu_usage", "cpu high")
+
+        # Different array → not seen.
+        other_array = await lifecycle._get_existing_hashes(
+            db_session, "arr-B", ts - timedelta(days=1)
+        )
+        assert target_hash not in other_array
+
+        # Same array but cutoff after the alert → outside window, not seen.
+        outside_window = await lifecycle._get_existing_hashes(
+            db_session, "arr-A", ts + timedelta(days=1)
+        )
+        assert target_hash not in outside_window
+
+        # Same array, cutoff before the alert → seen.
+        inside_window = await lifecycle._get_existing_hashes(
+            db_session, "arr-A", ts - timedelta(days=1)
+        )
+        assert target_hash in inside_window

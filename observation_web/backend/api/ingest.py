@@ -74,6 +74,29 @@ def _resolve_array_id(payload_array_id: Optional[str], source_ip: str) -> Option
     return None
 
 
+async def touch_heartbeat(db: AsyncSession, array_id: str) -> None:
+    """Stamp arrays.last_heartbeat_at with a fresh collection signal.
+
+    This is the single writer of last_heartbeat_at.  It must be called whenever
+    we get positive evidence that collection is alive — an agent HTTP push here,
+    or a successful SSH pull in array_alert_sync.  Without it the health window
+    never sees a fresh signal and every running array is stuck at
+    degraded / no_heartbeat (which is what the frontend was papering over).
+    """
+    if not array_id:
+        return
+    from sqlalchemy import update
+    from ..models.array import ArrayModel
+    try:
+        await db.execute(
+            update(ArrayModel)
+            .where(ArrayModel.array_id == array_id)
+            .values(last_heartbeat_at=datetime.now())
+        )
+    except Exception:
+        logger.debug("heartbeat touch failed for %s", array_id, exc_info=True)
+
+
 @router.post("/ingest")
 async def ingest_data(
     payload: IngestPayload,
@@ -91,7 +114,7 @@ async def ingest_data(
     if payload.type == "alert":
         return await _handle_alert(payload, source_ip, db)
     elif payload.type == "metrics":
-        return await _handle_metrics(payload, source_ip)
+        return await _handle_metrics(payload, source_ip, db)
     else:
         raise HTTPException(status_code=400, detail=f"Unknown type: {payload.type}")
 
@@ -120,7 +143,7 @@ async def ingest_batch(
                 await _handle_alert(payload, source_ip, db)
                 results["alerts"] += 1
             elif payload.type == "metrics":
-                await _handle_metrics(payload, source_ip)
+                await _handle_metrics(payload, source_ip, db)
                 results["metrics"] += 1
         except Exception:
             results["errors"] += 1
@@ -172,6 +195,9 @@ async def _handle_alert(payload: IngestPayload, source_ip: str, db: AsyncSession
         alert_store = get_alert_store()
         db_alert = await alert_store.create_alert(db, alert_create)
 
+        # Push is positive evidence the agent is alive and collecting.
+        await touch_heartbeat(db, real_array_id)
+
         # Broadcast via WebSocket (include id for AI auto-translation)
         await broadcast_alert({
             'id': db_alert.id,
@@ -201,7 +227,7 @@ async def _handle_alert(payload: IngestPayload, source_ip: str, db: AsyncSession
         raise HTTPException(status_code=500, detail=str(e))
 
 
-async def _handle_metrics(payload: IngestPayload, source_ip: str):
+async def _handle_metrics(payload: IngestPayload, source_ip: str, db: AsyncSession = None):
     """Process incoming metrics from agent push"""
     try:
         # Resolve real array_id for metrics storage
@@ -223,7 +249,11 @@ async def _handle_metrics(payload: IngestPayload, source_ip: str):
         if store_key not in _metrics_store:
             _metrics_store[store_key] = deque(maxlen=MAX_METRICS_PER_ARRAY)
         _metrics_store[store_key].append(record)
-        
+
+        # Metrics push is also a liveness signal for the agent.
+        if db is not None and real_array_id:
+            await touch_heartbeat(db, real_array_id)
+
         return {"ok": True}
         
     except Exception as e:

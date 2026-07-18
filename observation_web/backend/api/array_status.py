@@ -127,8 +127,56 @@ _OBSERVER_TITLES = {
     'port_error_code': '端口误码',
 }
 
+async def cleanup_stale_acks(db) -> int:
+    """Physically remove expired dismiss acks. Safe to call from a background task.
+
+    Replaces the state-mutation that used to happen inside GET status endpoints.
+    """
+    from sqlalchemy import delete as sa_delete
+    now = datetime.now()
+    result = await db.execute(
+        sa_delete(AlertAckModel).where(
+            AlertAckModel.ack_type == "dismiss",
+            AlertAckModel.ack_expires_at.is_not(None),
+            AlertAckModel.ack_expires_at < now,
+        )
+    )
+    await db.commit()
+    return result.rowcount or 0
+
+
 # Recovery tracking — "recovery invalidates ack"
 _recovery_timestamps: Dict[str, Dict[str, str]] = {}  # array_id -> {issue_key -> iso_ts}
+_MAX_RECOVERY_ENTRIES = 5000  # cap to prevent unbounded growth of the in-memory map
+
+
+def _apply_built_status(status_obj, built: Dict[str, Any], array) -> None:
+    """Copy a build_runtime_status() result onto the cached ArrayStatus.
+
+    Single source of truth for this mapping — used by both list_array_statuses
+    and get_array_status so the two endpoints can never drift out of sync (they
+    previously carried two identical ~20-line copies of this block).
+    """
+    status_obj.name = array.name
+    status_obj.host = array.host
+    status_obj.state = ConnectionState(built["state"]) if built["state"] in [e.value for e in ConnectionState] else status_obj.state
+    status_obj.transport_connected = built["transport_connected"]
+    status_obj.agent_healthy = built["agent_healthy"]
+    status_obj.collect_status = built["collect_status"]
+    status_obj.health_source = built["health_source"]
+    status_obj.has_saved_password = built["has_saved_password"]
+    status_obj.tag_id = built["tag_id"]
+    status_obj.tag_name = built["tag_name"]
+    status_obj.tag_color = built["tag_color"]
+    status_obj.tag_l1_name = built["tag_l1_name"]
+    status_obj.tag_l2_name = built["tag_l2_name"]
+    status_obj.last_error = built["last_error"]
+    status_obj.active_issues = built["active_issues"]
+    status_obj.observer_status = built["observer_status"]
+    status_obj.recent_alert_summary = built["recent_alert_summary"]
+    status_obj.last_heartbeat_at = array.last_heartbeat_at
+    status_obj.status_version = built["status_version"]
+    status_obj.updated_at = datetime.fromisoformat(built["updated_at"])
 
 
 def _record_recovery(array_id: str, keys: List[str], timestamp: str):
@@ -136,6 +184,11 @@ def _record_recovery(array_id: str, keys: List[str], timestamp: str):
     bucket = _recovery_timestamps.setdefault(array_id, {})
     for key in keys:
         bucket[key] = timestamp
+    # Bound the map: recovery keys that are never matched by _pop_recovery would
+    # otherwise accumulate forever.  Keep the most recent half when over cap.
+    if len(bucket) > _MAX_RECOVERY_ENTRIES:
+        newest = sorted(bucket.items(), key=lambda kv: kv[1], reverse=True)
+        _recovery_timestamps[array_id] = dict(newest[: _MAX_RECOVERY_ENTRIES // 2])
 
 
 def _pop_recovery(array_id: str, key: str) -> Optional[str]:
@@ -559,9 +612,12 @@ async def _derive_active_issues_from_db_batch(
         issues_by_array[array_id] = issues
 
     if stale_ack_ids:
-        await db.execute(sa_delete(AlertAckModel).where(AlertAckModel.id.in_(set(stale_ack_ids))))
-        await db.flush()
-        logger.info("Auto-invalidated %s stale ack rows", len(set(stale_ack_ids)))
+        # Do NOT delete here: this runs inside GET status endpoints, and a GET
+        # must not mutate state — it breaks idempotency and races real ack
+        # writes.  Expired acks are already treated as invalid by the issue
+        # derivation above; physical removal is handled by the background sweep
+        # cleanup_stale_acks().
+        logger.debug("%s stale ack rows pending background cleanup", len(set(stale_ack_ids)))
 
     ack_ips = list(
         {
@@ -791,26 +847,7 @@ async def list_array_statuses(
             observer_status=obs_dict,
         )
 
-        status_obj.name = array.name
-        status_obj.host = array.host
-        status_obj.state = ConnectionState(built["state"]) if built["state"] in [e.value for e in ConnectionState] else status_obj.state
-        status_obj.transport_connected = built["transport_connected"]
-        status_obj.agent_healthy = built["agent_healthy"]
-        status_obj.collect_status = built["collect_status"]
-        status_obj.health_source = built["health_source"]
-        status_obj.has_saved_password = built["has_saved_password"]
-        status_obj.tag_id = built["tag_id"]
-        status_obj.tag_name = built["tag_name"]
-        status_obj.tag_color = built["tag_color"]
-        status_obj.tag_l1_name = built["tag_l1_name"]
-        status_obj.tag_l2_name = built["tag_l2_name"]
-        status_obj.last_error = built["last_error"]
-        status_obj.active_issues = built["active_issues"]
-        status_obj.observer_status = built["observer_status"]
-        status_obj.recent_alert_summary = built["recent_alert_summary"]
-        status_obj.last_heartbeat_at = array.last_heartbeat_at
-        status_obj.status_version = built["status_version"]
-        status_obj.updated_at = datetime.fromisoformat(built["updated_at"])
+        _apply_built_status(status_obj, built, array)
 
         statuses.append(status_obj)
 
@@ -928,26 +965,7 @@ async def get_array_status(
         observer_status=obs_dict,
     )
 
-    status_obj.name = array.name
-    status_obj.host = array.host
-    status_obj.state = ConnectionState(built["state"]) if built["state"] in [e.value for e in ConnectionState] else status_obj.state
-    status_obj.transport_connected = built["transport_connected"]
-    status_obj.agent_healthy = built["agent_healthy"]
-    status_obj.collect_status = built["collect_status"]
-    status_obj.health_source = built["health_source"]
-    status_obj.has_saved_password = built["has_saved_password"]
-    status_obj.tag_id = built["tag_id"]
-    status_obj.tag_name = built["tag_name"]
-    status_obj.tag_color = built["tag_color"]
-    status_obj.tag_l1_name = built["tag_l1_name"]
-    status_obj.tag_l2_name = built["tag_l2_name"]
-    status_obj.last_error = built["last_error"]
-    status_obj.active_issues = built["active_issues"]
-    status_obj.observer_status = built["observer_status"]
-    status_obj.recent_alert_summary = built["recent_alert_summary"]
-    status_obj.last_heartbeat_at = array.last_heartbeat_at
-    status_obj.status_version = built["status_version"]
-    status_obj.updated_at = datetime.fromisoformat(built["updated_at"])
+    _apply_built_status(status_obj, built, array)
 
     return status_obj
 

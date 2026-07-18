@@ -34,6 +34,12 @@ def test_models_import():
     from backend.models.lifecycle import SyncState, ImportRequest
     from backend.models.scheduler import ScheduledTaskModel, ScheduledTaskResponse
 
+    # Key symbols must actually resolve to classes, not be missing/None.
+    for symbol in (Alert, AlertCreate, AlertResponse, Array, ArrayCreate,
+                   QueryTemplate, QueryTemplateCreate, SyncState, ImportRequest,
+                   ScheduledTaskModel, ScheduledTaskResponse):
+        assert isinstance(symbol, type), f"{symbol!r} is not a class"
+
 
 def test_core_modules_import():
     """Test: 核心模块可以正确导入"""
@@ -45,9 +51,16 @@ def test_core_modules_import():
     from backend.core.data_lifecycle import DataLifecycleManager
     from backend.core.scheduler import get_scheduler
 
+    for cls in (SSHPool, SSHConnection, AgentDeployer, AlertStore,
+                QueryEngine, DataLifecycleManager):
+        assert isinstance(cls, type), f"{cls!r} is not a class"
+    for fn in (get_ssh_pool, sys_error, sys_warning, get_alert_store, get_scheduler):
+        assert callable(fn), f"{fn!r} is not callable"
+
 
 def test_api_routers_import():
     """Test: API 路由器可以正确导入"""
+    from fastapi import APIRouter
     from backend.api.arrays import router as arrays_router
     from backend.api.alerts import router as alerts_router
     from backend.api.query import router as query_router
@@ -56,6 +69,14 @@ def test_api_routers_import():
     from backend.api.scheduler import router as scheduler_router
     from backend.api.system_alerts import router as system_alerts_router
     from backend.api.websocket import router as ws_router
+
+    routers = [arrays_router, alerts_router, query_router, ingest_router,
+               data_lifecycle_router, scheduler_router, system_alerts_router,
+               ws_router]
+    for r in routers:
+        assert isinstance(r, APIRouter), f"{r!r} is not an APIRouter"
+    # Each router must actually register at least one route.
+    assert all(len(r.routes) >= 1 for r in routers)
 
 
 def test_database_import():

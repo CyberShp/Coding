@@ -71,6 +71,59 @@
   </div>
 </template>
 
+<script>
+// Pure, testable helpers extracted so unit tests exercise the REAL logic
+// the component uses (rather than a re-implemented copy). These are shared
+// with <script setup> below (same module scope) and re-exported for tests.
+
+/**
+ * Map a CPU0 percentage to a status CSS class.
+ * NOTE: 0% CPU is a legitimate value, so we must use `== null` here — using
+ * `!cpu0` would incorrectly treat 0 as "no data" and return '' instead of
+ * 'status-ok'.
+ */
+export function getStatusClass(cpu0) {
+  if (cpu0 == null) return ''
+  if (cpu0 >= 90) return 'status-error'
+  if (cpu0 >= 70) return 'status-warning'
+  return 'status-ok'
+}
+
+export function formatTime(ts) {
+  if (!ts) return ''
+  const d = new Date(ts)
+  return d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+}
+
+export function buildCpuData(metrics) {
+  return (metrics || [])
+    .filter(m => m.cpu0 != null)
+    .map(m => ({ ts: formatTime(m.ts), value: m.cpu0 }))
+}
+
+export function buildMemData(metrics) {
+  return (metrics || [])
+    .filter(m => m.mem_used_mb != null)
+    .map(m => ({ ts: formatTime(m.ts), used: m.mem_used_mb, total: m.mem_total_mb || 0 }))
+}
+
+export function computeLatestMetrics(metrics) {
+  if (!metrics || metrics.length === 0) return null
+  // Find latest CPU and memory values
+  const latest = {}
+  for (let i = metrics.length - 1; i >= 0; i--) {
+    const m = metrics[i]
+    if (m.cpu0 != null && latest.cpu0 == null) latest.cpu0 = m.cpu0
+    if (m.mem_used_mb != null && latest.mem_used_mb == null) {
+      latest.mem_used_mb = m.mem_used_mb
+      latest.mem_total_mb = m.mem_total_mb
+    }
+    if (latest.cpu0 != null && latest.mem_used_mb != null) break
+  }
+  return Object.keys(latest).length > 0 ? latest : null
+}
+</script>
+
 <script setup>
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { use } from 'echarts/core'
@@ -99,49 +152,15 @@ const autoRefresh = ref(true)  // Default to auto-refresh enabled
 const metrics = ref([])
 let refreshTimer = null
 
-const cpuData = computed(() => {
-  return metrics.value
-    .filter(m => m.cpu0 != null)
-    .map(m => ({
-      ts: formatTime(m.ts),
-      value: m.cpu0,
-    }))
-})
+const cpuData = computed(() => buildCpuData(metrics.value))
 
-const memData = computed(() => {
-  return metrics.value
-    .filter(m => m.mem_used_mb != null)
-    .map(m => ({
-      ts: formatTime(m.ts),
-      used: m.mem_used_mb,
-      total: m.mem_total_mb || 0,
-    }))
-})
+const memData = computed(() => buildMemData(metrics.value))
 
-const latestMetrics = computed(() => {
-  if (metrics.value.length === 0) return null
-  // Find latest CPU and memory values
-  let latest = {}
-  for (let i = metrics.value.length - 1; i >= 0; i--) {
-    const m = metrics.value[i]
-    if (m.cpu0 != null && latest.cpu0 == null) latest.cpu0 = m.cpu0
-    if (m.mem_used_mb != null && latest.mem_used_mb == null) {
-      latest.mem_used_mb = m.mem_used_mb
-      latest.mem_total_mb = m.mem_total_mb
-    }
-    if (latest.cpu0 != null && latest.mem_used_mb != null) break
-  }
-  return Object.keys(latest).length > 0 ? latest : null
-})
+const latestMetrics = computed(() => computeLatestMetrics(metrics.value))
 
 const totalDataPoints = computed(() => metrics.value.length)
 
-const cpuStatusClass = computed(() => {
-  if (!latestMetrics.value?.cpu0) return ''
-  if (latestMetrics.value.cpu0 >= 90) return 'status-error'
-  if (latestMetrics.value.cpu0 >= 70) return 'status-warning'
-  return 'status-ok'
-})
+const cpuStatusClass = computed(() => getStatusClass(latestMetrics.value?.cpu0))
 
 const cpuChartOption = computed(() => ({
   tooltip: {
@@ -228,12 +247,6 @@ const memChartOption = computed(() => ({
     data: memData.value.map(d => d.used),
   }],
 }))
-
-function formatTime(ts) {
-  if (!ts) return ''
-  const d = new Date(ts)
-  return d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
-}
 
 async function loadMetrics() {
   loading.value = true
