@@ -54,7 +54,7 @@ class AlertV2Model(Base):
     """Unified alert database model v2"""
     __tablename__ = "alerts_v2"
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True)
     array_id = Column(String(64), ForeignKey("arrays.array_id"), index=True, nullable=False)
     category = Column(String(64), index=True, nullable=False)
     object_type = Column(String(64), default="")

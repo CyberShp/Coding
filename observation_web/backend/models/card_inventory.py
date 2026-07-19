@@ -14,7 +14,7 @@ class CardInventoryModel(Base):
     """Card inventory - one row per physical card across all arrays."""
     __tablename__ = "card_inventory"
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True)
     array_id = Column(String(64), nullable=False, index=True)
     card_no = Column(String(32), default="")
     board_id = Column(String(64), default="", index=True)

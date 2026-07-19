@@ -7,11 +7,13 @@ Cleanup runs every 2 minutes to delete expired records.
 
 import json
 import logging
+import math
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 from sqlalchemy import select, delete, func, distinct, and_
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from ..models.traffic import PortTrafficModel
 
@@ -97,19 +99,51 @@ class TrafficStore:
         minutes = min(minutes, 120)
         cutoff = datetime.now() - timedelta(minutes=minutes)
 
-        query = (
-            select(PortTrafficModel)
-            .where(and_(
-                PortTrafficModel.array_id == array_id,
-                PortTrafficModel.port_name == port_name,
-                PortTrafficModel.timestamp >= cutoff,
-            ))
-            .order_by(PortTrafficModel.timestamp.asc())
-            .limit(MAX_QUERY_POINTS)
+        base_where = and_(
+            PortTrafficModel.array_id == array_id,
+            PortTrafficModel.port_name == port_name,
+            PortTrafficModel.timestamp >= cutoff,
         )
 
-        result = await db.execute(query)
-        rows = result.scalars().all()
+        total = (await db.execute(
+            select(func.count(PortTrafficModel.id)).where(base_where)
+        )).scalar() or 0
+
+        if total <= MAX_QUERY_POINTS:
+            # Small enough to return in full — no sampling needed.
+            result = await db.execute(
+                select(PortTrafficModel)
+                .where(base_where)
+                .order_by(PortTrafficModel.timestamp.asc())
+            )
+            rows = result.scalars().all()
+        else:
+            # Uniformly downsample across the WHOLE window instead of silently
+            # truncating to the oldest 500 points. Pick every `stride`-th row by
+            # timestamp order so the returned series spans the full time range.
+            stride = math.ceil(total / MAX_QUERY_POINTS)
+            numbered = (
+                select(
+                    PortTrafficModel,
+                    func.row_number()
+                    .over(order_by=PortTrafficModel.timestamp.asc())
+                    .label("rn"),
+                )
+                .where(base_where)
+                .subquery()
+            )
+            sampled_model = aliased(PortTrafficModel, numbered)
+            result = await db.execute(
+                select(sampled_model)
+                .where(((numbered.c.rn - 1) % stride) == 0)
+                .order_by(numbered.c.timestamp.asc())
+                .limit(MAX_QUERY_POINTS)
+            )
+            rows = result.scalars().all()
+            logger.info(
+                "Traffic query downsampled %s/%s: %d points -> %d (stride %d)",
+                array_id, port_name, total, len(rows), stride,
+            )
 
         return [
             {

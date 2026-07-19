@@ -19,7 +19,7 @@ class UserSessionModel(Base):
     """User session database model"""
     __tablename__ = "user_sessions"
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True)
     ip = Column(String(64), unique=True, index=True, nullable=False)
     nickname = Column(String(64), default="")
     previous_ips = Column(Text, default="[]")  # JSON array of historical IPs after claim

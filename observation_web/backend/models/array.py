@@ -44,7 +44,7 @@ class ArrayModel(Base):
     """Array database model"""
     __tablename__ = "arrays"
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True)
     array_id = Column(String(64), unique=True, index=True, nullable=False)
     name = Column(String(128), nullable=False)
     host = Column(String(256), nullable=False, unique=True, index=True)

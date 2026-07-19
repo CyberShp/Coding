@@ -18,7 +18,7 @@ class ScheduledTaskModel(Base):
     """Scheduled task model"""
     __tablename__ = "scheduled_tasks"
     
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True)
     name = Column(String(128), nullable=False)
     description = Column(Text, nullable=True)
     query_template_id = Column(Integer, nullable=True)  # Reference to query template
@@ -36,7 +36,7 @@ class TaskResultModel(Base):
     """Task execution result"""
     __tablename__ = "task_results"
     
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True)
     task_id = Column(Integer, index=True, nullable=False)
     task_name = Column(String(128), nullable=True)
     array_id = Column(String(64), index=True, nullable=True)

@@ -9,6 +9,7 @@ Supports two data types:
 import json
 import logging
 import threading
+import time
 from collections import deque
 from datetime import datetime
 from typing import Any, Dict, List, Optional
@@ -27,6 +28,22 @@ router = APIRouter(tags=["ingest"])
 # Each entry stores a deque of recent metrics (last 24 hours worth)
 MAX_METRICS_PER_ARRAY = 8640  # 24h * 60min * 6 (every 10s) = ~8640 points per day
 _metrics_store: Dict[str, deque] = {}
+
+# Last time each array pushed data (monotonic-ish wall clock). Used by the SSH
+# alert-sync loop to skip the redundant pull for arrays whose push channel is
+# active (both read the same alerts.log).
+_last_push_at: Dict[str, float] = {}
+
+
+def mark_pushed(array_id: str) -> None:
+    """Record that *array_id* just pushed data."""
+    if array_id:
+        _last_push_at[array_id] = time.time()
+
+
+def get_last_push_at(array_id: str) -> float:
+    """Wall-clock time of the last push for *array_id* (0.0 if never)."""
+    return _last_push_at.get(array_id, 0.0)
 
 
 class IngestPayload(BaseModel):
@@ -170,6 +187,8 @@ async def _handle_alert(payload: IngestPayload, source_ip: str, db: AsyncSession
                        "Agent must include a real array_id in the payload.",
             )
 
+        mark_pushed(real_array_id)
+
         level_str = (payload.level or "info").lower()
         level = AlertLevel(level_str) if level_str in [l.value for l in AlertLevel] else AlertLevel.INFO
         
@@ -250,6 +269,8 @@ async def _handle_metrics(payload: IngestPayload, source_ip: str, db: AsyncSessi
         # Resolve real array_id for metrics storage
         real_array_id = _resolve_array_id(payload.array_id, source_ip)
         store_key = real_array_id or source_ip  # fallback to IP for metrics (non-critical)
+        if real_array_id:
+            mark_pushed(real_array_id)
 
         # Build metrics record
         record = {

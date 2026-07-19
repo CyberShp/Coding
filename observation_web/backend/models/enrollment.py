@@ -17,7 +17,7 @@ class ArrayImportJobModel(Base):
     """Batch import job record"""
     __tablename__ = "array_import_jobs"
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True)
     source = Column(String(64), nullable=False)
     total_count = Column(Integer, default=0)
     success_count = Column(Integer, default=0)
@@ -32,7 +32,7 @@ class ArrayEnrollmentJobModel(Base):
     """Per-array enrollment step tracking"""
     __tablename__ = "array_enrollment_jobs"
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True)
     import_job_id = Column(Integer, ForeignKey("array_import_jobs.id"), nullable=True)
     array_id = Column(String(64), index=True, nullable=False)
     step = Column(String(64), default="")
@@ -48,7 +48,7 @@ class AgentRegistrationModel(Base):
     """Agent registration record"""
     __tablename__ = "agent_registrations"
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True)
     array_id = Column(String(64), unique=True, index=True, nullable=False)
     registration_token = Column(String(256), default="")
     agent_version = Column(String(32), default="")

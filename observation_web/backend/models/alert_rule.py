@@ -20,7 +20,7 @@ class AlertExpectationRuleModel(Base):
     """Alert expectation rule database model"""
     __tablename__ = "alert_expectation_rules"
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True)
     name = Column(String(128), nullable=False)
     description = Column(Text, default="")
     task_types = Column(Text, default="[]")  # JSON array of task_type strings

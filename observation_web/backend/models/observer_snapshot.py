@@ -17,7 +17,7 @@ class ObserverSnapshotModel(Base):
     """Observer snapshot database model"""
     __tablename__ = "observer_snapshots"
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True)
     array_id = Column(String(64), index=True, nullable=False)
     observer_name = Column(String(64), nullable=False)
     last_run_at = Column(DateTime)

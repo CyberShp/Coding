@@ -15,7 +15,7 @@ class ObserverConfigModel(Base):
     """Global override settings for built-in observers"""
     __tablename__ = "observer_configs"
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True)
     observer_name = Column(String(64), nullable=False, unique=True, index=True)
     enabled = Column(Boolean, default=True)
     interval = Column(Integer, nullable=True)

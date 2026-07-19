@@ -17,7 +17,7 @@ class ViewerProfileModel(Base):
     """Browser-based viewer identity"""
     __tablename__ = "viewer_profiles"
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True)
     viewer_id = Column(String(64), unique=True, index=True, nullable=False)
     nickname = Column(String(64), default="")
     ip_address = Column(String(64), default="")
@@ -29,7 +29,7 @@ class ViewerFollowTagModel(Base):
     """Viewer tag follow relationship"""
     __tablename__ = "viewer_follow_tags"
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True)
     viewer_id = Column(String(64), index=True, nullable=False)
     tag_id = Column(Integer, ForeignKey("tags.id", ondelete="CASCADE"), nullable=False)
 
@@ -42,7 +42,7 @@ class ViewerFollowArrayModel(Base):
     """Viewer array follow relationship"""
     __tablename__ = "viewer_follow_arrays"
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True)
     viewer_id = Column(String(64), index=True, nullable=False)
     array_id = Column(String(64), nullable=False)
 
@@ -55,7 +55,7 @@ class ViewerPreferenceModel(Base):
     """Viewer UI preferences"""
     __tablename__ = "viewer_preferences"
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True)
     viewer_id = Column(String(64), unique=True, index=True, nullable=False)
     default_time_window = Column(String(16), default="24h")
     default_tag_filter = Column(Text, default="[]")
@@ -69,7 +69,7 @@ class ViewerSavedViewModel(Base):
     """Viewer saved filter views"""
     __tablename__ = "viewer_saved_views"
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True)
     viewer_id = Column(String(64), index=True, nullable=False)
     name = Column(String(128), nullable=False)
     filters_json = Column(Text, nullable=False)

@@ -16,7 +16,7 @@ class PortTrafficModel(Base):
     """端口流量数据（仅保留 2 小时原始数据）"""
     __tablename__ = "port_traffic"
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True)
     array_id = Column(String(64), nullable=False)
     port_name = Column(String(64), nullable=False)
     timestamp = Column(DateTime, nullable=False)

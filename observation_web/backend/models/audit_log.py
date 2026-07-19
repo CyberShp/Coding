@@ -18,7 +18,7 @@ class AuditLogModel(Base):
     """Audit log database model"""
     __tablename__ = "audit_logs"
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True)
     timestamp = Column(DateTime, server_default=func.now(), index=True)
     user_ip = Column(String(64), index=True)
     user_nickname = Column(String(64), default="")

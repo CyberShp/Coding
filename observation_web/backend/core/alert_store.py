@@ -6,10 +6,10 @@ Handles storing, querying, and analyzing alerts.
 
 import json
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
-from sqlalchemy import select, func, desc, and_
+from sqlalchemy import select, func, desc, and_, cast, delete, Integer
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models.alert import AlertModel, AlertCreate, AlertResponse, AlertStats, AlertLevel
@@ -156,42 +156,46 @@ class AlertStore:
         db: AsyncSession,
         hours: int = 24,
     ) -> AlertStats:
-        """Get alert statistics"""
+        """Get alert statistics.
+
+        All aggregation is done with a handful of GROUP BY queries instead of
+        looping per-level/per-bucket COUNTs (previously ~100 serial queries).
+        """
         start_time = datetime.now() - timedelta(hours=hours)
-        
+
         # Total count
         total = await self.get_alert_count(db, start_time=start_time)
-        
-        # By level
-        by_level = {}
-        for level in AlertLevel:
-            count = await self.get_alert_count(db, level=level.value, start_time=start_time)
-            by_level[level.value] = count
-        
+
+        # By level — single GROUP BY, pre-seeded with all levels at 0 so the
+        # response shape stays stable regardless of which levels have data.
+        by_level = {level.value: 0 for level in AlertLevel}
+        level_result = await db.execute(
+            select(AlertModel.level, func.count(AlertModel.id))
+            .where(AlertModel.timestamp >= start_time)
+            .group_by(AlertModel.level)
+        )
+        for level_name, count in level_result.all():
+            by_level[level_name] = count
+
         # By observer
-        query = select(
-            AlertModel.observer_name,
-            func.count(AlertModel.id)
-        ).where(
-            AlertModel.timestamp >= start_time
-        ).group_by(AlertModel.observer_name)
-        
-        result = await db.execute(query)
+        result = await db.execute(
+            select(AlertModel.observer_name, func.count(AlertModel.id))
+            .where(AlertModel.timestamp >= start_time)
+            .group_by(AlertModel.observer_name)
+        )
         by_observer = {row[0]: row[1] for row in result.all()}
-        
+
         # By array
-        query = select(
-            AlertModel.array_id,
-            func.count(AlertModel.id)
-        ).where(
-            AlertModel.timestamp >= start_time
-        ).group_by(AlertModel.array_id)
-        
-        result = await db.execute(query)
+        result = await db.execute(
+            select(AlertModel.array_id, func.count(AlertModel.id))
+            .where(AlertModel.timestamp >= start_time)
+            .group_by(AlertModel.array_id)
+        )
         by_array = {row[0]: row[1] for row in result.all()}
-        
-        # Dynamic trend: for <=4 hours use 10-min buckets, otherwise hourly
-        trend = []
+
+        # Dynamic trend: for <=4 hours use 10-min buckets, otherwise hourly.
+        # Computed with ONE GROUP BY over a time-bucket expression rather than
+        # two COUNTs per bucket.
         now = datetime.now()
         if hours <= 4:
             num_buckets = hours * 6          # 10-min intervals
@@ -200,17 +204,32 @@ class AlertStore:
             num_buckets = min(hours, 48)     # hourly, cap at 48
             bucket_minutes = 60
 
+        bucket_seconds = bucket_minutes * 60
+        base = now - timedelta(minutes=bucket_minutes * num_buckets)
+        # Interpret the naive base as UTC to match SQLite's strftime('%s', ...),
+        # which also treats stored naive datetimes as UTC — keeps bucket edges
+        # aligned regardless of the server's local timezone.
+        base_epoch = int(base.replace(tzinfo=timezone.utc).timestamp())
+
+        # Integer bucket index relative to `base`.
+        bucket_expr = cast(
+            (cast(func.strftime('%s', AlertModel.timestamp), Integer) - base_epoch)
+            / bucket_seconds,
+            Integer,
+        )
+        trend_result = await db.execute(
+            select(bucket_expr.label('bucket'), func.count(AlertModel.id))
+            .where(AlertModel.timestamp >= base)
+            .group_by('bucket')
+        )
+        bucket_counts = {row[0]: row[1] for row in trend_result.all()}
+
+        trend = []
         for i in range(num_buckets):
-            bucket_start = now - timedelta(minutes=bucket_minutes * (num_buckets - i))
-            bucket_end   = now - timedelta(minutes=bucket_minutes * (num_buckets - i - 1))
-
-            count_from_start = await self.get_alert_count(db, start_time=bucket_start)
-            count_from_end   = await self.get_alert_count(db, start_time=bucket_end)
-            bucket_count = count_from_start - count_from_end if i < num_buckets - 1 else count_from_start
-
+            bucket_start = base + timedelta(minutes=bucket_minutes * i)
             trend.append({
                 'hour': bucket_start.strftime('%H:%M'),
-                'count': max(0, bucket_count),
+                'count': max(0, bucket_counts.get(i, 0)),
             })
 
         return AlertStats(
@@ -226,18 +245,18 @@ class AlertStore:
         db: AsyncSession,
         days: int = 30,
     ) -> int:
-        """Delete alerts older than specified days"""
+        """Delete alerts older than specified days.
+
+        Uses a single range DELETE instead of loading every expired row into
+        memory and deleting one at a time.
+        """
         cutoff = datetime.now() - timedelta(days=days)
-        
-        query = select(AlertModel).where(AlertModel.timestamp < cutoff)
-        result = await db.execute(query)
-        alerts = result.scalars().all()
-        
-        for alert in alerts:
-            await db.delete(alert)
-        
+
+        result = await db.execute(
+            delete(AlertModel).where(AlertModel.timestamp < cutoff)
+        )
         await db.commit()
-        return len(alerts)
+        return result.rowcount or 0
 
 
 # Global instance

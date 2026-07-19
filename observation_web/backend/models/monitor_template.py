@@ -24,7 +24,7 @@ class MonitorTemplateModel(Base):
     """Monitor template database model"""
     __tablename__ = "monitor_templates"
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True)
     name = Column(String(128), nullable=False)
     description = Column(Text, default="")
     category = Column(String(32), default="custom")

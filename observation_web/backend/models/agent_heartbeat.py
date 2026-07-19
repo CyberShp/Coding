@@ -17,7 +17,7 @@ class AgentHeartbeatModel(Base):
     """Agent heartbeat database model"""
     __tablename__ = "agent_heartbeats"
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True)
     array_id = Column(String(64), unique=True, index=True, nullable=False)
     agent_version = Column(String(32), default="")
     config_version = Column(String(32), default="")
