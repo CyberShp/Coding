@@ -30,16 +30,31 @@ def get_async_engine():
 
 
 def get_database_url() -> str:
-    """Get database URL with absolute path"""
+    """Get database URL.
+
+    If ``config.database.url`` is set (e.g. postgresql+asyncpg://…) it wins and
+    switches the engine off SQLite. Otherwise fall back to the SQLite path.
+    An ``OBSERVATION_DB_URL`` env var overrides both (handy for staging/prod).
+    """
+    env_url = os.environ.get("OBSERVATION_DB_URL")
+    if env_url:
+        return env_url
+
     config = get_config()
+    if getattr(config.database, "url", ""):
+        return config.database.url
+
     db_path = config.database.path
-    
     # If path is relative, make it relative to the config directory
     if not os.path.isabs(db_path):
         config_dir = Path(__file__).parent.parent.parent  # observation_web directory
         db_path = str(config_dir / db_path)
-    
+
     return f"sqlite+aiosqlite:///{db_path}"
+
+
+def _is_sqlite(url: str) -> bool:
+    return url.startswith("sqlite")
 
 
 def init_db():
@@ -64,25 +79,27 @@ def init_db():
         pool_pre_ping=True, # Verify connections before use
     )
 
-    @event.listens_for(_async_engine.sync_engine, "connect")
-    def set_sqlite_pragma(dbapi_conn, connection_record):
-        """Configure SQLite pragmas for optimal performance"""
-        cursor = dbapi_conn.cursor()
-        # WAL mode for better concurrent read/write
-        cursor.execute("PRAGMA journal_mode=WAL")
-        # Increased busy timeout for multi-user access
-        cursor.execute("PRAGMA busy_timeout=10000")
-        # Synchronous mode - NORMAL is faster than FULL, still safe with WAL
-        cursor.execute("PRAGMA synchronous=NORMAL")
-        # Cache size in KB (negative = KB, positive = pages)
-        cursor.execute("PRAGMA cache_size=-64000")  # 64MB cache
-        # Memory-mapped I/O for faster reads
-        cursor.execute("PRAGMA mmap_size=268435456")  # 256MB mmap
-        # Temp storage in memory
-        cursor.execute("PRAGMA temp_store=MEMORY")
-        # Enable foreign key constraints
-        cursor.execute("PRAGMA foreign_keys=ON")
-        cursor.close()
+    # SQLite-only pragmas — skipped entirely on Postgres/other backends.
+    if _is_sqlite(database_url):
+        @event.listens_for(_async_engine.sync_engine, "connect")
+        def set_sqlite_pragma(dbapi_conn, connection_record):
+            """Configure SQLite pragmas for optimal performance"""
+            cursor = dbapi_conn.cursor()
+            # WAL mode for better concurrent read/write
+            cursor.execute("PRAGMA journal_mode=WAL")
+            # Increased busy timeout for multi-user access
+            cursor.execute("PRAGMA busy_timeout=10000")
+            # Synchronous mode - NORMAL is faster than FULL, still safe with WAL
+            cursor.execute("PRAGMA synchronous=NORMAL")
+            # Cache size in KB (negative = KB, positive = pages)
+            cursor.execute("PRAGMA cache_size=-64000")  # 64MB cache
+            # Memory-mapped I/O for faster reads
+            cursor.execute("PRAGMA mmap_size=268435456")  # 256MB mmap
+            # Temp storage in memory
+            cursor.execute("PRAGMA temp_store=MEMORY")
+            # Enable foreign key constraints
+            cursor.execute("PRAGMA foreign_keys=ON")
+            cursor.close()
 
     AsyncSessionLocal = sessionmaker(
         _async_engine,
@@ -120,6 +137,11 @@ def _reconcile_orphan_version(cfg):
     """
     from alembic.script import ScriptDirectory
     from sqlalchemy import create_engine, text as _text
+
+    # This heals a SQLite-only legacy residue; on Postgres/other backends the
+    # orphan-revision situation doesn't apply and the sync driver differs.
+    if not _is_sqlite(get_database_url()):
+        return
 
     known = {sc.revision for sc in ScriptDirectory.from_config(cfg).walk_revisions()}
 
@@ -185,6 +207,10 @@ def _stamp_head_if_needed():
     """
     from alembic import command
     from sqlalchemy import create_engine, text as _text
+
+    # SQLite-only safety net (pre-Alembic residue + sqlite sync driver).
+    if not _is_sqlite(get_database_url()):
+        return
 
     db_url = get_database_url().replace("sqlite+aiosqlite://", "sqlite://")
     engine = create_engine(db_url)

@@ -24,6 +24,11 @@ class DatabaseConfig:
     """Database configuration"""
     path: str = "observation_web.db"
     echo: bool = False
+    # Optional full SQLAlchemy async URL. When set (e.g.
+    # "postgresql+asyncpg://user:pass@host/db") it overrides `path` and switches
+    # the engine off SQLite — the write-serialization ceiling's real fix.
+    # Requires `asyncpg` installed. Leave empty to use the SQLite `path`.
+    url: str = ""
 
 
 @dataclass

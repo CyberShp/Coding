@@ -8,6 +8,10 @@ paramiko>=2.7.0
 # Database
 sqlalchemy>=2.0,<2.1
 aiosqlite>=0.17.0
+# Optional PostgreSQL backend: set config.database.url (or OBSERVATION_DB_URL) to
+# "postgresql+asyncpg://user:pass@host/db" and install these. Leave unset for SQLite.
+#   asyncpg>=0.29          # async driver used by the app engine
+#   psycopg2-binary>=2.9   # sync driver used by Alembic migrations
 alembic>=1.13
 
 # Data validation (code uses pydantic v2 APIs: ConfigDict/field_validator/model_dump)
