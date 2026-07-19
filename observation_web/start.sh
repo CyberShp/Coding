@@ -67,7 +67,12 @@ BACKEND_PORT=$($PYTHON_CMD -c "import json; c=json.load(open('config.json')); pr
 
 # Start backend
 echo -e "${GREEN}启动后端服务 (FastAPI)...${NC}"
-$PYTHON_CMD -m uvicorn backend.main:app --host 0.0.0.0 --port "$BACKEND_PORT" --reload &
+if [ "$PROD_MODE" = true ]; then
+    # 生产模式禁用 --reload：热重载是开发特性，生产会带来文件监听开销与意外重启
+    $PYTHON_CMD -m uvicorn backend.main:app --host 0.0.0.0 --port "$BACKEND_PORT" &
+else
+    $PYTHON_CMD -m uvicorn backend.main:app --host 0.0.0.0 --port "$BACKEND_PORT" --reload &
+fi
 BACKEND_PID=$!
 echo -e "  后端 PID: $BACKEND_PID"
 

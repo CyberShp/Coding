@@ -179,7 +179,7 @@ async def create_template(
         rule_type=template.rule.rule_type.value,
         pattern=template.rule.pattern,
         expect_match=template.rule.expect_match,
-        extract_fields=json.dumps([f.dict() for f in template.rule.extract_fields]),
+        extract_fields=json.dumps([f.model_dump() for f in template.rule.extract_fields]),
         is_builtin=False,
         auto_monitor=template.auto_monitor,
         monitor_interval=template.monitor_interval,

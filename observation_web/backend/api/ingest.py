@@ -14,7 +14,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..core.system_alert import sys_info, sys_error
@@ -44,8 +44,7 @@ class IngestPayload(BaseModel):
     mem_used_mb: Optional[float] = None
     mem_total_mb: Optional[float] = None
     # Allow extra fields
-    class Config:
-        extra = "allow"
+    model_config = ConfigDict(extra="allow")
 
 
 # ── Source IP → array_id mapping for backward compatibility ──────────────
@@ -193,6 +192,24 @@ async def _handle_alert(payload: IngestPayload, source_ip: str, db: AsyncSession
         )
         
         alert_store = get_alert_store()
+
+        # Dedup: push and SSH-pull read the SAME alerts.log line, so the same
+        # alert can arrive via both paths (mixed mode). Skip if an identical one
+        # (same array/observer/timestamp/message) already exists.
+        from sqlalchemy import select as _select
+        from ..models.alert import AlertModel as _AlertModel
+        dup = await db.execute(
+            _select(_AlertModel.id).where(
+                _AlertModel.array_id == real_array_id,
+                _AlertModel.observer_name == alert_create.observer_name,
+                _AlertModel.timestamp == timestamp,
+                _AlertModel.message == alert_create.message,
+            ).limit(1)
+        )
+        if dup.scalar_one_or_none() is not None:
+            await touch_heartbeat(db, real_array_id)
+            return {"ok": True, "message": "Duplicate alert skipped", "array_id": real_array_id}
+
         db_alert = await alert_store.create_alert(db, alert_create)
 
         # Push is positive evidence the agent is alive and collecting.
@@ -242,7 +259,7 @@ async def _handle_metrics(payload: IngestPayload, source_ip: str, db: AsyncSessi
         }
         
         # Extract known metrics fields
-        extra = payload.dict(exclude={"type", "ts", "array_id"}, exclude_none=True)
+        extra = payload.model_dump(exclude={"type", "ts", "array_id"}, exclude_none=True)
         record.update(extra)
         
         # Store in memory keyed by real array_id when available

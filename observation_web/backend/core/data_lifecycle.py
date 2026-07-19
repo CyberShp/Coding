@@ -7,6 +7,7 @@ Handles:
 - Data archiving and cleanup
 """
 
+import asyncio
 import gzip
 import hashlib
 import json
@@ -54,7 +55,10 @@ class DataLifecycleManager:
         try:
             # List files matching alerts.log*
             cmd = f"ls -la {log_dir}/alerts.log* 2>/dev/null || true"
-            output = self.ssh_conn.exec_command(cmd)
+            # exec_command is blocking; run off the event loop.
+            output = await asyncio.get_running_loop().run_in_executor(
+                None, self.ssh_conn.exec_command, cmd
+            )
             
             files = []
             for line in output.strip().split('\n'):
@@ -210,7 +214,9 @@ class DataLifecycleManager:
                 else:
                     cmd = f"cat {file_path} 2>/dev/null || true"
                 
-                content = self.ssh_conn.exec_command(cmd)
+                content = await asyncio.get_running_loop().run_in_executor(
+                    None, self.ssh_conn.exec_command, cmd
+                )
                 if not content:
                     continue
                 

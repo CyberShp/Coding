@@ -100,7 +100,7 @@ async def sync_traffic(
 
     try:
         # Read last 200 lines (covers ~33 min at 30s interval with 48 ports)
-        exit_code, content, _ = conn.execute(
+        exit_code, content, _ = await conn.execute_async(
             f"tail -n 200 {traffic_path} 2>/dev/null", timeout=10
         )
 
@@ -163,7 +163,7 @@ async def get_traffic_diagnostic(
 
     try:
         # Check for RDMA/InfiniBand devices
-        exit_code, rdma_output, _ = conn.execute(
+        exit_code, rdma_output, _ = await conn.execute_async(
             "ls -la /sys/class/infiniband/ 2>/dev/null | grep -v '^total'", timeout=10
         )
         if exit_code == 0 and rdma_output and rdma_output.strip():
@@ -182,7 +182,7 @@ async def get_traffic_diagnostic(
         if result.has_rdma:
             for dev in result.rdma_devices:
                 dev_name = dev['name']
-                exit_code, link_layer, _ = conn.execute(
+                exit_code, link_layer, _ = await conn.execute_async(
                     f"cat /sys/class/infiniband/{dev_name}/ports/1/link_layer 2>/dev/null",
                     timeout=5
                 )
@@ -195,7 +195,7 @@ async def get_traffic_diagnostic(
                         notes.append(f"检测到 InfiniBand 设备: {dev_name}")
 
         # Check for TOE support
-        exit_code, interfaces, _ = conn.execute(
+        exit_code, interfaces, _ = await conn.execute_async(
             "ls /sys/class/net/ | grep -v lo", timeout=5
         )
         if exit_code == 0 and interfaces:
@@ -203,7 +203,7 @@ async def get_traffic_diagnostic(
                 iface = iface.strip()
                 if not iface:
                     continue
-                exit_code, toe_output, _ = conn.execute(
+                exit_code, toe_output, _ = await conn.execute_async(
                     f"ethtool -k {iface} 2>/dev/null | grep -E 'tcp-segmentation-offload|large-receive-offload'",
                     timeout=5
                 )

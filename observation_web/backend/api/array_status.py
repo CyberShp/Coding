@@ -12,7 +12,7 @@ Owns:
 import json
 import logging
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status as http_status
@@ -35,6 +35,10 @@ status_router = APIRouter()
 # ---------------------------------------------------------------------------
 
 _array_status_cache: Dict[str, ArrayStatus] = {}
+
+# observer_status only reflects recent activity; bound the derivation query to
+# this window so it never scans the full alert history into memory.
+OBSERVER_STATUS_WINDOW_HOURS = 24
 
 
 def _get_array_status(array_id: str) -> ArrayStatus:
@@ -770,9 +774,14 @@ async def list_array_statuses(
 
     obs_status_map: Dict[str, Dict] = {}
     if need_observer_status:
+        # Bound to a recent window instead of scanning ALL history into memory —
+        # observer status only reflects recent activity, and the old unbounded
+        # query loaded hundreds of thousands of rows at 50-array scale.
+        obs_cutoff = datetime.now() - timedelta(hours=OBSERVER_STATUS_WINDOW_HOURS)
         obs_result = await db.execute(
             select(AlertModel.array_id, AlertModel.observer_name, AlertModel.level, AlertModel.message)
             .where(AlertModel.array_id.in_(need_observer_status))
+            .where(AlertModel.timestamp >= obs_cutoff)
             .order_by(AlertModel.timestamp.desc())
         )
         _level_rank = {'critical': 4, 'error': 3, 'warning': 2, 'info': 1}
@@ -874,9 +883,11 @@ async def get_array_status(
 
     obs_dict = dict(status_obj.observer_status)
     if not obs_dict:
+        obs_cutoff = datetime.now() - timedelta(hours=OBSERVER_STATUS_WINDOW_HOURS)
         stmt = (
             select(AlertModel.observer_name, AlertModel.level, AlertModel.message, AlertModel.timestamp)
             .where(AlertModel.array_id == array_id)
+            .where(AlertModel.timestamp >= obs_cutoff)
             .order_by(AlertModel.timestamp.desc())
         )
         alert_rows = await db.execute(stmt)

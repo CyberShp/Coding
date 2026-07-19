@@ -1,17 +1,17 @@
 # FastAPI Web Framework
-fastapi>=0.68.0
+fastapi>=0.110,<1.0
 uvicorn[standard]>=0.15.0
 
 # SSH Connection
 paramiko>=2.7.0
 
 # Database
-sqlalchemy>=1.4.0
+sqlalchemy>=2.0,<2.1
 aiosqlite>=0.17.0
 alembic>=1.13
 
-# Data validation
-pydantic>=1.8.0
+# Data validation (code uses pydantic v2 APIs: ConfigDict/field_validator/model_dump)
+pydantic>=2.0,<3
 
 # Async support
 aiofiles>=0.8.0
