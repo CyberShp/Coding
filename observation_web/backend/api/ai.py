@@ -13,7 +13,12 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import get_config
-from ..core.ai_service import interpret_alert, is_ai_available, _get_httpx_client_kwargs
+from ..core.ai_service import (
+    _get_httpx_client_kwargs,
+    interpret_alert,
+    is_ai_available,
+    validate_ai_pem_path,
+)
 from ..api.auth import require_admin
 from ..db.database import get_db
 from ..models.alert import AlertModel
@@ -50,6 +55,7 @@ class AIConfigResponse(BaseModel):
     timeout: int
     max_tokens: int
     proxy_mode: str
+    pem_cert_path: str
 
 
 class AIConfigUpdateRequest(BaseModel):
@@ -61,6 +67,7 @@ class AIConfigUpdateRequest(BaseModel):
     timeout: Optional[int] = None
     max_tokens: Optional[int] = None
     proxy_mode: Optional[str] = None
+    pem_cert_path: Optional[str] = None
 
 
 class AIModelInfo(BaseModel):
@@ -94,6 +101,7 @@ async def get_ai_config(admin: dict = Depends(require_admin)):
         timeout=config.ai.timeout,
         max_tokens=config.ai.max_tokens,
         proxy_mode=getattr(config.ai, "proxy_mode", "system"),
+        pem_cert_path=getattr(config.ai, "pem_cert_path", ""),
     )
 
 
@@ -108,6 +116,12 @@ async def update_ai_config(
     Persists to config.json.
     """
     config = get_config()
+    pem_cert_path = None
+    if body.pem_cert_path is not None:
+        try:
+            pem_cert_path = validate_ai_pem_path(body.pem_cert_path)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     if body.enabled is not None:
         config.ai.enabled = body.enabled
@@ -124,6 +138,8 @@ async def update_ai_config(
     if body.proxy_mode is not None:
         mode = body.proxy_mode.lower()
         config.ai.proxy_mode = mode if mode in ("system", "none") else "system"
+    if pem_cert_path is not None:
+        config.ai.pem_cert_path = pem_cert_path
 
     try:
         config.save()
@@ -139,6 +155,7 @@ async def update_ai_config(
         timeout=config.ai.timeout,
         max_tokens=config.ai.max_tokens,
         proxy_mode=getattr(config.ai, "proxy_mode", "system"),
+        pem_cert_path=getattr(config.ai, "pem_cert_path", ""),
     )
 
 

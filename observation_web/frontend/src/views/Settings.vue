@@ -208,6 +208,14 @@
               </el-radio-group>
               <span class="form-help">设置 AI API 请求的代理方式</span>
             </el-form-item>
+            <el-form-item label="PEM 证书路径">
+              <el-input
+                v-model="aiConfig.pem_cert_path"
+                placeholder="例如 /etc/observation/ai-ca.pem"
+                clearable
+              />
+              <span class="form-help">填写后端服务器上的 CA PEM 绝对路径；留空则使用系统 CA</span>
+            </el-form-item>
             <el-form-item label="模型">
               <el-select
                 v-model="aiConfig.model"
@@ -398,6 +406,7 @@ const aiConfig = reactive({
   api_url: '',
   api_key: '',
   proxy_mode: 'system',
+  pem_cert_path: '',
   model: '',
   timeout: 15,
   max_tokens: 800,
@@ -429,6 +438,7 @@ async function fetchModels() {
       api_url: aiConfig.api_url,
       api_key: aiConfig.api_key,
       proxy_mode: aiConfig.proxy_mode,
+      pem_cert_path: aiConfig.pem_cert_path,
     })
     const { data } = await api.getAIModels()
     availableModels.value = data || []
@@ -454,6 +464,7 @@ async function saveAIConfig() {
       api_url: aiConfig.api_url,
       api_key: aiConfig.api_key,
       proxy_mode: aiConfig.proxy_mode,
+      pem_cert_path: aiConfig.pem_cert_path,
       model: aiConfig.model,
       timeout: aiConfig.timeout,
       max_tokens: aiConfig.max_tokens,
@@ -479,6 +490,7 @@ async function testAIConnection() {
       api_url: aiConfig.api_url,
       api_key: aiConfig.api_key,
       proxy_mode: aiConfig.proxy_mode,
+      pem_cert_path: aiConfig.pem_cert_path,
     })
     const { data } = await api.getAIModels()
     if (data && data.length >= 0) {

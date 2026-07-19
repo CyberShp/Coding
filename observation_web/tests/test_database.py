@@ -291,6 +291,55 @@ class TestAlembicCatchupMigration:
         self._run_upgrade_head(db_path)
 
 
+def test_array_enrollment_columns_are_added_to_legacy_database(tmp_path):
+    db_path = str(tmp_path / "legacy_arrays.db")
+    engine = sa.create_engine(f"sqlite:///{db_path}")
+    with engine.begin() as conn:
+        conn.execute(sa.text("""
+            CREATE TABLE arrays (
+                id INTEGER PRIMARY KEY,
+                array_id VARCHAR(64) NOT NULL,
+                name VARCHAR(128) NOT NULL,
+                host VARCHAR(256) NOT NULL,
+                port INTEGER DEFAULT 22,
+                username VARCHAR(64) DEFAULT 'root',
+                key_path VARCHAR(512) DEFAULT '',
+                folder VARCHAR(128) DEFAULT '',
+                tag_id INTEGER,
+                saved_password VARCHAR(512) DEFAULT '',
+                version INTEGER DEFAULT 1,
+                created_at DATETIME,
+                updated_at DATETIME
+            )
+        """))
+        conn.execute(sa.text("""
+            CREATE TABLE tags (
+                id INTEGER PRIMARY KEY,
+                name VARCHAR(64) NOT NULL,
+                color VARCHAR(32),
+                description TEXT,
+                parent_id INTEGER,
+                level INTEGER,
+                created_at DATETIME,
+                updated_at DATETIME
+            )
+        """))
+    engine.dispose()
+
+    TestAlembicCatchupMigration()._run_upgrade_head(db_path)
+
+    engine = sa.create_engine(f"sqlite:///{db_path}")
+    with engine.connect() as conn:
+        columns = {item[1] for item in conn.execute(sa.text("PRAGMA table_info(arrays)"))}
+        tag_columns = {item[1] for item in conn.execute(sa.text("PRAGMA table_info(tags)"))}
+    engine.dispose()
+    assert {
+        "display_name", "mgmt_ip", "owner_team", "enrollment_status",
+        "connection_mode", "last_heartbeat_at", "last_error",
+    }.issubset(columns)
+    assert "tag_type" in tag_columns
+
+
 @pytest.mark.asyncio
 class TestSessionManagement:
     async def test_session_rollback_on_error(self, db_session):

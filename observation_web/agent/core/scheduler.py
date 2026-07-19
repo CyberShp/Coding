@@ -42,6 +42,7 @@ class Scheduler:
         self.reporter = reporter
         self._running = False
         self._observers = []  # type: List[Tuple[BaseObserver, float]]
+        self._load_errors: List[Dict[str, str]] = []
         self._start_work_ready = True
         self._updater = AgentUpdater(config)
         self._next_update_check = time.time() + 60
@@ -106,6 +107,7 @@ class Scheduler:
             obs_class = observer_classes.get(name)
             if obs_class is None:
                 logger.warning(f"未知观察点: {name}")
+                self._load_errors.append({"name": name, "error": "未知观察点"})
                 continue
             
             try:
@@ -114,6 +116,7 @@ class Scheduler:
                 logger.debug(f"注册: {name} (间隔 {observer.get_interval()}s)")
             except Exception as e:
                 logger.error(f"初始化失败 {name}: {e}")
+                self._load_errors.append({"name": name, "error": str(e)})
 
         # Load custom_monitors (from admin-deployed templates)
         from ..observers.custom_monitor import CustomMonitorObserver as CustomMonCls
@@ -131,6 +134,14 @@ class Scheduler:
                 logger.debug(f"注册自定义监控: {name} (间隔 {observer.get_interval()}s)")
             except Exception as e:
                 logger.error(f"自定义监控 {name} 初始化失败: {e}")
+                self._load_errors.append({"name": name, "error": str(e)})
+
+    def get_runtime_load_state(self) -> Dict[str, Any]:
+        """Return the observers that were actually constructed at startup."""
+        return {
+            "loaded_observers": [observer.name for observer, _ in self._observers],
+            "load_errors": list(self._load_errors),
+        }
     
     def _get_observer_classes(self) -> Dict[str, type]:
         """获取所有观察点类的映射"""

@@ -3,10 +3,10 @@
     <el-card>
       <template #header>
         <div class="page-header">
-          <span>告警管理</span>
+          <span>观察点管理</span>
           <el-button type="primary" size="small" @click="openCreateDrawer">
             <el-icon><Plus /></el-icon>
-            新建自定义模板
+            创建自定义观察点
           </el-button>
         </div>
       </template>
@@ -63,6 +63,15 @@
         <el-table-column label="间隔" width="75">
           <template #default="{ row }">{{ row.interval }}s</template>
         </el-table-column>
+        <el-table-column label="版本 / 范围" width="125">
+          <template #default="{ row }">
+            <span v-if="row.isBuiltin" class="text-muted">内置</span>
+            <template v-else>
+              <code class="obs-code">v{{ row.version || 1 }}</code>
+              <span class="scope-label">{{ { private: '个人', team: '团队', global: '全局' }[row.visibility] || '团队' }}</span>
+            </template>
+          </template>
+        </el-table-column>
         <el-table-column label="开关" width="70">
           <template #default="{ row }">
             <el-switch
@@ -80,12 +89,18 @@
             </el-button>
             <template v-if="!row.isBuiltin">
               <el-button size="small" text type="danger" @click.stop="handleDelete(row)">删除</el-button>
-              <el-button size="small" text type="success" @click.stop="openDeployDialog([row.id])">下发</el-button>
+              <el-button size="small" text type="success" @click.stop="openStudio(row)">运行状态</el-button>
             </template>
           </template>
         </el-table-column>
       </el-table>
     </el-card>
+
+    <CustomObserverStudio
+      v-model="studioVisible"
+      :template="studioTemplate"
+      @saved="handleStudioSaved"
+    />
 
     <!-- 详情 / 编辑 抽屉 -->
     <el-drawer
@@ -95,7 +110,7 @@
       destroy-on-close
     >
       <!-- 内置观察点表单 -->
-      <template v-if="drawerIsBuiltin">
+      <template>
         <el-form
           :model="drawerForm"
           label-width="110px"
@@ -133,132 +148,11 @@
         </div>
       </template>
 
-      <!-- 自定义模板表单 -->
-      <template v-else>
-        <el-form
-          :model="drawerForm"
-          label-width="110px"
-          label-position="left"
-          class="drawer-form"
-        >
-          <el-divider content-position="left">基本信息</el-divider>
-          <el-form-item label="名称">
-            <el-input v-model="drawerForm.name" />
-          </el-form-item>
-          <el-form-item label="描述">
-            <el-input v-model="drawerForm.description" type="textarea" :rows="2" />
-          </el-form-item>
-          <el-form-item label="分类">
-            <el-select v-model="drawerForm.category" style="width: 100%">
-              <el-option label="端口级" value="port" />
-              <el-option label="卡件级" value="card" />
-              <el-option label="系统级" value="system" />
-              <el-option label="自定义" value="custom" />
-            </el-select>
-          </el-form-item>
-          <el-form-item label="开关">
-            <el-switch v-model="drawerForm.enabled" />
-          </el-form-item>
-
-          <el-divider content-position="left">执行配置</el-divider>
-          <el-form-item label="命令">
-            <el-input v-model="drawerForm.command" type="textarea" :rows="3" />
-          </el-form-item>
-          <el-form-item label="命令类型">
-            <el-select v-model="drawerForm.command_type" style="width: 100%">
-              <el-option label="Shell" value="shell" />
-              <el-option label="Curl" value="curl" />
-            </el-select>
-          </el-form-item>
-          <el-form-item label="执行间隔">
-            <el-input-number v-model="drawerForm.interval" :min="10" :max="3600" />
-            <span class="form-unit">秒</span>
-          </el-form-item>
-          <el-form-item label="超时">
-            <el-input-number v-model="drawerForm.timeout" :min="5" :max="120" />
-            <span class="form-unit">秒</span>
-          </el-form-item>
-
-          <el-divider content-position="left">匹配规则</el-divider>
-          <el-form-item label="匹配类型">
-            <el-select v-model="drawerForm.match_type" style="width: 100%">
-              <el-option label="正则" value="regex" />
-              <el-option label="JSONPath" value="jsonpath" />
-              <el-option label="包含" value="contains" />
-              <el-option label="退出码" value="exit_code" />
-            </el-select>
-          </el-form-item>
-          <el-form-item label="匹配表达式">
-            <el-input v-model="drawerForm.match_expression" />
-          </el-form-item>
-          <el-form-item label="匹配条件">
-            <el-select v-model="drawerForm.match_condition" style="width: 100%">
-              <el-option label="找到" value="found" />
-              <el-option label="未找到" value="not_found" />
-              <el-option label="大于" value="gt" />
-              <el-option label="小于" value="lt" />
-              <el-option label="等于" value="eq" />
-              <el-option label="不等于" value="ne" />
-            </el-select>
-          </el-form-item>
-          <el-form-item label="阈值" v-if="['gt','lt','eq','ne'].includes(drawerForm.match_condition)">
-            <el-input v-model="drawerForm.match_threshold" />
-          </el-form-item>
-
-          <el-divider content-position="left">告警配置</el-divider>
-          <el-form-item label="告警级别">
-            <el-select v-model="drawerForm.alert_level" style="width: 100%">
-              <el-option label="信息" value="info" />
-              <el-option label="警告" value="warning" />
-              <el-option label="错误" value="error" />
-              <el-option label="严重" value="critical" />
-            </el-select>
-          </el-form-item>
-          <el-form-item label="消息模板">
-            <el-input v-model="drawerForm.alert_message_template" placeholder="{value} {command} {match}" />
-          </el-form-item>
-          <el-form-item label="冷却时间">
-            <el-input-number v-model="drawerForm.cooldown" :min="60" :max="3600" />
-            <span class="form-unit">秒</span>
-          </el-form-item>
-        </el-form>
-      </template>
-
       <template #footer>
         <el-button @click="drawerVisible = false">取消</el-button>
-        <el-button type="primary" @click="submitDrawerForm">
-          {{ drawerIsBuiltin ? '保存配置' : (drawerEditingId ? '保存' : '创建') }}
-        </el-button>
+        <el-button type="primary" @click="submitBuiltinConfig">保存配置</el-button>
       </template>
     </el-drawer>
-
-    <!-- 下发配置对话框 -->
-    <el-dialog v-model="deployDialogVisible" title="下发配置" width="520px" @close="resetDeployForm">
-      <el-form :model="deployForm" label-width="100px">
-        <el-form-item label="目标类型">
-          <el-radio-group v-model="deployForm.target_type">
-            <el-radio label="tag">按标签</el-radio>
-            <el-radio label="array">按阵列</el-radio>
-          </el-radio-group>
-        </el-form-item>
-        <el-form-item label="选择目标" v-if="deployForm.target_type === 'tag'">
-          <el-select v-model="deployForm.target_ids" multiple placeholder="选择标签" style="width: 100%">
-            <el-option v-for="t in tags" :key="t.id" :label="t.name" :value="t.id" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="选择目标" v-else>
-          <el-select v-model="deployForm.target_ids" multiple placeholder="选择阵列" style="width: 100%">
-            <el-option v-for="a in arrays" :key="a.id" :label="`${a.name} (${a.array_id})`" :value="a.id" />
-          </el-select>
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="deployDialogVisible = false">取消</el-button>
-        <el-button type="primary" @click="doDeploy" :loading="deploying">
-          下发并重启 Agent
-        </el-button>
-      </template>
-    </el-dialog>
   </div>
 </template>
 
@@ -267,6 +161,7 @@ import { ref, reactive, computed, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus } from '@element-plus/icons-vue'
 import api from '@/api'
+import CustomObserverStudio from '@/components/admin/CustomObserverStudio.vue'
 
 const CATEGORY_LABELS = { port: '端口级', card: '卡件级', system: '系统级', custom: '自定义' }
 const CATEGORY_TAG_TYPE = { port: '', card: 'warning', system: 'success', custom: 'info' }
@@ -304,29 +199,16 @@ const templates = ref([])
 const observerOverrides = ref({})
 const filterCategory = ref('')
 const searchText = ref('')
+const studioVisible = ref(false)
+const studioTemplate = ref(null)
 
 // Drawer state
 const drawerVisible = ref(false)
-const drawerIsBuiltin = ref(false)
-const drawerEditingId = ref(null)
 const drawerForm = reactive({
-  name: '', obs_name: '', description: '', category: 'custom', enabled: true,
-  command: '', command_type: 'shell', interval: 60, timeout: 30,
-  match_type: 'regex', match_expression: '', match_condition: 'found', match_threshold: '',
-  alert_level: 'warning', alert_message_template: '{value}', cooldown: 300,
+  name: '', obs_name: '', description: '', category: 'system', enabled: true, interval: 60,
 })
 
-// Deploy state
-const deployDialogVisible = ref(false)
-const deploying = ref(false)
-const tags = ref([])
-const arrays = ref([])
-const deployForm = reactive({ template_ids: [], target_type: 'tag', target_ids: [] })
-
-const drawerTitle = computed(() => {
-  if (drawerIsBuiltin.value) return `配置: ${drawerForm.name}`
-  return drawerEditingId.value ? `编辑: ${drawerForm.name}` : '新建自定义模板'
-})
+const drawerTitle = computed(() => `配置: ${drawerForm.name}`)
 
 const allRows = computed(() => {
   const ov = observerOverrides.value
@@ -387,95 +269,33 @@ function handleRowClick(row) {
 // ── Drawer ──
 
 function openCreateDrawer() {
-  drawerEditingId.value = null
-  drawerIsBuiltin.value = false
-  Object.assign(drawerForm, {
-    name: '', obs_name: '', description: '', category: 'custom', enabled: true,
-    command: '', command_type: 'shell', interval: 60, timeout: 30,
-    match_type: 'regex', match_expression: '', match_condition: 'found', match_threshold: '',
-    alert_level: 'warning', alert_message_template: '{value}', cooldown: 300,
-  })
-  drawerVisible.value = true
+  openStudio(null)
+}
+
+function openStudio(template) {
+  studioTemplate.value = template ? { ...template } : null
+  studioVisible.value = true
+}
+
+function handleStudioSaved() {
+  loadTemplates()
 }
 
 function openDetailDrawer(row) {
-  if (row.isBuiltin) {
-    drawerIsBuiltin.value = true
-    drawerEditingId.value = null
-    const override = observerOverrides.value[row.name]
-    Object.assign(drawerForm, {
-      name: row.label,
-      obs_name: row.name,
-      description: row.description || '',
-      category: row.category,
-      enabled: override ? override.enabled : true,
-      interval: override?.interval ?? row.interval,
-    })
-  } else {
-    drawerIsBuiltin.value = false
-    drawerEditingId.value = row.id
-    Object.assign(drawerForm, {
-      name: row.name || row.label,
-      obs_name: '',
-      description: row.description || '',
-      category: row.category || 'custom',
-      enabled: row.is_enabled !== false,
-      command: row.command || '',
-      command_type: row.command_type || 'shell',
-      interval: row.interval || 60,
-      timeout: row.timeout || 30,
-      match_type: row.match_type || 'regex',
-      match_expression: row.match_expression || '',
-      match_condition: row.match_condition || 'found',
-      match_threshold: row.match_threshold || '',
-      alert_level: row.alert_level || 'warning',
-      alert_message_template: row.alert_message_template || '{value}',
-      cooldown: row.cooldown || 300,
-    })
-  }
-  drawerVisible.value = true
-}
-
-async function submitDrawerForm() {
-  if (drawerIsBuiltin.value) {
-    await submitBuiltinConfig()
+  if (!row.isBuiltin) {
+    openStudio(row)
     return
   }
-  if (!drawerForm.name?.trim()) { ElMessage.warning('请输入名称'); return }
-  if (!drawerForm.command?.trim()) { ElMessage.warning('请输入命令'); return }
-  if (!drawerForm.match_expression?.trim() && drawerForm.match_type !== 'exit_code') {
-    ElMessage.warning('请输入匹配表达式'); return
-  }
-  const payload = {
-    name: drawerForm.name,
-    description: drawerForm.description,
-    category: drawerForm.category,
-    command: drawerForm.command,
-    command_type: drawerForm.command_type,
-    interval: drawerForm.interval,
-    timeout: drawerForm.timeout,
-    match_type: drawerForm.match_type,
-    match_expression: drawerForm.match_expression,
-    match_condition: drawerForm.match_condition,
-    match_threshold: drawerForm.match_threshold || null,
-    alert_level: drawerForm.alert_level,
-    alert_message_template: drawerForm.alert_message_template,
-    cooldown: drawerForm.cooldown,
-    is_enabled: drawerForm.enabled,
-  }
-  try {
-    if (drawerEditingId.value) {
-      await api.updateMonitorTemplate(drawerEditingId.value, payload)
-      ElMessage.success('已保存')
-    } else {
-      await api.createMonitorTemplate(payload)
-      ElMessage.success('已创建')
-    }
-    drawerVisible.value = false
-    loadTemplates()
-  } catch (e) {
-    ElMessage.error('操作失败: ' + (e.response?.data?.detail || e.message))
-  }
+  const override = observerOverrides.value[row.name]
+  Object.assign(drawerForm, {
+    name: row.label,
+    obs_name: row.name,
+    description: row.description || '',
+    category: row.category,
+    enabled: override ? override.enabled : true,
+    interval: override?.interval ?? row.interval,
+  })
+  drawerVisible.value = true
 }
 
 async function submitBuiltinConfig() {
@@ -531,41 +351,6 @@ async function handleDelete(row) {
   }
 }
 
-// ── Deploy ──
-
-function openDeployDialog(templateIds) {
-  deployForm.template_ids = templateIds || templates.value.filter(t => t.is_enabled).map(t => t.id)
-  deployForm.target_type = 'tag'
-  deployForm.target_ids = []
-  deployDialogVisible.value = true
-  loadTagsAndArrays()
-}
-
-function resetDeployForm() {
-  deployForm.template_ids = []
-  deployForm.target_type = 'tag'
-  deployForm.target_ids = []
-}
-
-async function doDeploy() {
-  if (!deployForm.target_ids?.length) { ElMessage.warning('请选择目标'); return }
-  if (!deployForm.template_ids?.length) { ElMessage.warning('请选择要下发的模板'); return }
-  deploying.value = true
-  try {
-    const res = await api.deployMonitorTemplates(deployForm.template_ids, deployForm.target_type, deployForm.target_ids)
-    const results = res.data?.results || []
-    const okCount = results.filter(r => r.ok).length
-    const failCount = results.length - okCount
-    if (failCount === 0) ElMessage.success(`已下发到 ${okCount} 个阵列`)
-    else ElMessage.warning(`成功 ${okCount} 个，失败 ${failCount} 个`)
-    deployDialogVisible.value = false
-  } catch (e) {
-    ElMessage.error('下发失败: ' + (e.response?.data?.detail || e.message))
-  } finally {
-    deploying.value = false
-  }
-}
-
 // ── Data loading ──
 
 async function loadTemplates() {
@@ -595,14 +380,6 @@ async function loadObserverOverrides() {
   } catch {
     // Admin not logged in or API not available — use defaults
   }
-}
-
-async function loadTagsAndArrays() {
-  try {
-    const [tagsRes, arraysRes] = await Promise.all([api.getTags(), api.getArrays()])
-    tags.value = tagsRes.data || []
-    arrays.value = arraysRes.data || []
-  } catch (e) { console.error('Load tags/arrays:', e) }
 }
 
 onMounted(() => {
@@ -638,6 +415,11 @@ onMounted(() => {
   background: var(--el-fill-color-light);
   padding: 0 5px;
   border-radius: 3px;
+}
+.scope-label {
+  margin-left: 6px;
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
 }
 .text-muted {
   color: var(--el-text-color-placeholder);

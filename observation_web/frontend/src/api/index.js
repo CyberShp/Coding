@@ -121,8 +121,17 @@ export default {
   createMonitorTemplate: (data) => http.post('/admin/monitor-templates', data),
   updateMonitorTemplate: (id, data) => http.put(`/admin/monitor-templates/${id}`, data),
   deleteMonitorTemplate: (id) => http.delete(`/admin/monitor-templates/${id}`),
+  getMonitorTemplateVersions: (id) => http.get(`/admin/monitor-templates/${id}/versions`),
+  restoreMonitorTemplateVersion: (id, version) => http.post(`/admin/monitor-templates/${id}/versions/${version}/restore`),
+  getMonitorAssignments: (id) => http.get(`/admin/monitor-templates/${id}/assignments`),
+  saveMonitorAssignments: (id, targetType, targetIds) =>
+    http.put(`/admin/monitor-templates/${id}/assignments`, {
+      target_type: targetType,
+      target_ids: targetIds,
+    }),
+  getMonitorDeployments: (id) => http.get(`/admin/monitor-templates/${id}/deployments`),
   deployMonitorTemplates: (templateIds, targetType, targetIds) =>
-    http.post('/admin/monitor-templates/deploy', {
+    httpLong.post('/admin/monitor-templates/deploy', {
       template_ids: templateIds,
       target_type: targetType,
       target_ids: targetIds,

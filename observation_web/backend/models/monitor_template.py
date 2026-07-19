@@ -4,7 +4,17 @@ Monitor template model for admin-defined custom monitors.
 Templates can be deployed to arrays via SSH config.json.
 """
 
-from sqlalchemy import Column, Integer, String, DateTime, Text, Boolean
+from sqlalchemy import (
+    Boolean,
+    Column,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.sql import func
 
 from ..db.database import Base
@@ -41,5 +51,92 @@ class MonitorTemplateModel(Base):
     is_enabled = Column(Boolean, default=True)
     is_builtin = Column(Boolean, default=False)
     created_by = Column(String(64), default="")
+    template_key = Column(String(64), unique=True, index=True, nullable=True)
+    version = Column(Integer, default=1, nullable=False)
+    visibility = Column(String(16), default="team", nullable=False)
+    team_scope = Column(String(128), default="")
+    config_fingerprint = Column(String(80), default="")
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+
+class MonitorTemplateVersionModel(Base):
+    """Immutable snapshot of one custom observer template revision."""
+
+    __tablename__ = "monitor_template_versions"
+
+    id = Column(Integer, primary_key=True)
+    template_id = Column(
+        Integer,
+        ForeignKey("monitor_templates.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    version = Column(Integer, nullable=False)
+    snapshot = Column(Text, nullable=False)
+    config_fingerprint = Column(String(80), nullable=False)
+    created_by = Column(String(64), default="")
+    created_at = Column(DateTime, server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("template_id", "version", name="uq_monitor_template_version"),
+    )
+
+
+class MonitorAssignmentModel(Base):
+    """Persistent desired assignment to one array or tag."""
+
+    __tablename__ = "monitor_assignments"
+
+    id = Column(Integer, primary_key=True)
+    template_id = Column(
+        Integer,
+        ForeignKey("monitor_templates.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    target_type = Column(String(16), nullable=False)
+    target_id = Column(Integer, nullable=False)
+    desired_version = Column(Integer, nullable=False)
+    is_enabled = Column(Boolean, default=True, nullable=False)
+    status = Column(String(16), default="pending", nullable=False)
+    status_message = Column(Text, default="")
+    created_by = Column(String(64), default="")
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        UniqueConstraint(
+            "template_id", "target_type", "target_id",
+            name="uq_monitor_assignment_target",
+        ),
+        Index("ix_monitor_assignment_target", "target_type", "target_id"),
+    )
+
+
+class MonitorDeploymentModel(Base):
+    """Observed deployment state for one template on one resolved array."""
+
+    __tablename__ = "monitor_deployments"
+
+    id = Column(Integer, primary_key=True)
+    assignment_id = Column(
+        Integer,
+        ForeignKey("monitor_assignments.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    template_id = Column(Integer, nullable=False, index=True)
+    array_id = Column(String(64), nullable=False, index=True)
+    desired_version = Column(Integer, nullable=False)
+    desired_hash = Column(String(80), default="")
+    loaded_hash = Column(String(80), default="")
+    status = Column(String(16), default="pending", nullable=False)
+    status_message = Column(Text, default="")
+    attempted_at = Column(DateTime, nullable=True)
+    confirmed_at = Column(DateTime, nullable=True)
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("assignment_id", "array_id", name="uq_monitor_deployment_array"),
+    )

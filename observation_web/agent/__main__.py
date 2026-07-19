@@ -13,6 +13,11 @@ from typing import Optional
 from .config.loader import ConfigLoader
 from .core.scheduler import Scheduler
 from .core.reporter import Reporter
+from .core.runtime_receipt import (
+    DEFAULT_RUNTIME_RECEIPT_PATH,
+    build_runtime_receipt,
+    write_runtime_receipt,
+)
 
 
 def setup_logging(log_level: str, log_file: Optional[str] = None):
@@ -104,6 +109,14 @@ def main():
     
     # 创建调度器并注册观察点
     scheduler = Scheduler(config, reporter)
+    runtime_state = scheduler.get_runtime_load_state()
+    try:
+        write_runtime_receipt(
+            DEFAULT_RUNTIME_RECEIPT_PATH,
+            build_runtime_receipt(config, **runtime_state),
+        )
+    except Exception as exc:
+        logger.error(f"写入运行回执失败: {exc}")
     
     # 信号处理
     def signal_handler(signum, frame):

@@ -5,7 +5,6 @@ CRUD for custom monitor templates and deploy to arrays.
 Admin-only (require_admin).
 """
 
-import asyncio
 import json
 import logging
 from typing import Any, Dict, List, Optional
@@ -15,11 +14,18 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..config import get_config
-from ..core.ssh_pool import get_ssh_pool
 from ..db.database import get_db
-from ..models.monitor_template import MonitorTemplateModel
-from ..models.array import ArrayModel
+from ..models.monitor_template import (
+    MonitorAssignmentModel,
+    MonitorTemplateModel,
+    MonitorTemplateVersionModel,
+)
+from ..core.monitor_template_service import (
+    CONFIG_FIELDS,
+    add_version_snapshot,
+    ensure_template_identity,
+    template_to_agent_config,
+)
 from .auth import require_admin
 
 logger = logging.getLogger(__name__)
@@ -47,6 +53,8 @@ class MonitorTemplateCreate(BaseModel):
     cooldown: int = 300
     consecutive_threshold: int = 1
     is_enabled: bool = True
+    visibility: str = "team"
+    team_scope: str = ""
 
 
 class MonitorTemplateUpdate(BaseModel):
@@ -65,31 +73,14 @@ class MonitorTemplateUpdate(BaseModel):
     alert_message_template: Optional[str] = None
     cooldown: Optional[int] = None
     is_enabled: Optional[bool] = None
-
-
-class DeployRequest(BaseModel):
-    template_ids: List[int]
-    target_type: str  # "tag" | "array"
-    target_ids: List[int]  # tag ids or array ids (array.id from DB, we need array_id string)
+    visibility: Optional[str] = None
+    team_scope: Optional[str] = None
+    consecutive_threshold: Optional[int] = None
 
 
 def _template_to_agent_config(t: MonitorTemplateModel) -> Dict[str, Any]:
     """Convert template to agent custom_monitors item format."""
-    return {
-        "name": t.name,
-        "command": t.command,
-        "command_type": t.command_type or "shell",
-        "interval": t.interval or 60,
-        "timeout": t.timeout or 30,
-        "match_type": t.match_type or "regex",
-        "match_expression": t.match_expression,
-        "match_condition": t.match_condition or "found",
-        "match_threshold": t.match_threshold,
-        "alert_level": t.alert_level or "warning",
-        "alert_message_template": t.alert_message_template or "",
-        "cooldown": t.cooldown or 300,
-        "consecutive_threshold": t.consecutive_threshold if t.consecutive_threshold is not None else 1,
-    }
+    return template_to_agent_config(t)
 
 
 def _model_to_dict(m: MonitorTemplateModel) -> dict:
@@ -113,6 +104,11 @@ def _model_to_dict(m: MonitorTemplateModel) -> dict:
         "is_enabled": m.is_enabled if m.is_enabled is not None else True,
         "is_builtin": m.is_builtin or False,
         "created_by": m.created_by or "",
+        "template_key": m.template_key or "",
+        "version": m.version or 1,
+        "visibility": m.visibility or "team",
+        "team_scope": m.team_scope or "",
+        "config_fingerprint": m.config_fingerprint or "",
         "created_at": m.created_at.isoformat() if m.created_at else None,
         "updated_at": m.updated_at.isoformat() if m.updated_at else None,
     }
@@ -130,6 +126,27 @@ async def list_templates(
     """List all monitor templates."""
     result = await db.execute(select(MonitorTemplateModel).order_by(MonitorTemplateModel.id))
     rows = result.scalars().all()
+    if rows:
+        version_result = await db.execute(
+            select(MonitorTemplateVersionModel.template_id).where(
+                MonitorTemplateVersionModel.template_id.in_([row.id for row in rows]),
+                MonitorTemplateVersionModel.version == 1,
+            )
+        )
+        versioned_ids = set(version_result.scalars().all())
+        repaired = False
+        for row in rows:
+            if not row.template_key:
+                ensure_template_identity(row)
+                repaired = True
+            if row.id not in versioned_ids:
+                row.version = row.version or 1
+                add_version_snapshot(db, row, row.created_by or "migration")
+                repaired = True
+        if repaired:
+            await db.commit()
+            for row in rows:
+                await db.refresh(row)
     return [_model_to_dict(r) for r in rows]
 
 
@@ -141,9 +158,9 @@ async def create_template(
     db: AsyncSession = Depends(get_db),
 ):
     """Create a new monitor template."""
-    created_by = ""
-    if request.client:
-        created_by = request.client.host
+    created_by = _payload.get("sub") or (request.client.host if request.client else "")
+    if body.visibility not in {"private", "team", "global"}:
+        raise HTTPException(status_code=400, detail="visibility must be private, team or global")
     m = MonitorTemplateModel(
         name=body.name,
         description=body.description,
@@ -163,8 +180,14 @@ async def create_template(
         is_enabled=body.is_enabled,
         is_builtin=False,
         created_by=created_by,
+        visibility=body.visibility,
+        team_scope=body.team_scope,
+        version=1,
     )
+    ensure_template_identity(m)
     db.add(m)
+    await db.flush()
+    add_version_snapshot(db, m, created_by)
     await db.commit()
     await db.refresh(m)
     return _model_to_dict(m)
@@ -183,11 +206,91 @@ async def update_template(
     if not m:
         raise HTTPException(status_code=404, detail="Template not found")
     updates = body.model_dump(exclude_unset=True)
+    visibility = updates.get("visibility")
+    if visibility is not None and visibility not in {"private", "team", "global"}:
+        raise HTTPException(status_code=400, detail="visibility must be private, team or global")
     for k, v in updates.items():
         setattr(m, k, v)
+    m.version = (m.version or 1) + 1
+    await db.flush()
+    add_version_snapshot(db, m, _payload.get("sub", ""))
+    assignment_result = await db.execute(
+        select(MonitorAssignmentModel).where(MonitorAssignmentModel.template_id == m.id)
+    )
+    for assignment in assignment_result.scalars().all():
+        assignment.desired_version = m.version
+        assignment.status = "pending"
+        assignment.status_message = "模板已更新，等待重新下发"
     await db.commit()
     await db.refresh(m)
     return _model_to_dict(m)
+
+
+@router.get("/{template_id}/versions", response_model=List[dict])
+async def list_template_versions(
+    template_id: int,
+    _payload: dict = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(
+        select(MonitorTemplateVersionModel)
+        .where(MonitorTemplateVersionModel.template_id == template_id)
+        .order_by(MonitorTemplateVersionModel.version.desc())
+    )
+    return [
+        {
+            "id": row.id,
+            "template_id": row.template_id,
+            "version": row.version,
+            "snapshot": json.loads(row.snapshot),
+            "config_fingerprint": row.config_fingerprint,
+            "created_by": row.created_by or "",
+            "created_at": row.created_at.isoformat() if row.created_at else None,
+        }
+        for row in result.scalars().all()
+    ]
+
+
+@router.post("/{template_id}/versions/{version}/restore", response_model=dict)
+async def restore_template_version(
+    template_id: int,
+    version: int,
+    _payload: dict = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Restore a historical snapshot as a new immutable version."""
+    template_result = await db.execute(
+        select(MonitorTemplateModel).where(MonitorTemplateModel.id == template_id)
+    )
+    template = template_result.scalar_one_or_none()
+    if not template:
+        raise HTTPException(status_code=404, detail="Template not found")
+    version_result = await db.execute(
+        select(MonitorTemplateVersionModel).where(
+            MonitorTemplateVersionModel.template_id == template_id,
+            MonitorTemplateVersionModel.version == version,
+        )
+    )
+    historical = version_result.scalar_one_or_none()
+    if not historical:
+        raise HTTPException(status_code=404, detail="Template version not found")
+    snapshot = json.loads(historical.snapshot)
+    for field in CONFIG_FIELDS:
+        if field in snapshot:
+            setattr(template, field, snapshot[field])
+    template.version = (template.version or 1) + 1
+    await db.flush()
+    add_version_snapshot(db, template, _payload.get("sub", ""))
+    assignment_result = await db.execute(
+        select(MonitorAssignmentModel).where(MonitorAssignmentModel.template_id == template.id)
+    )
+    for assignment in assignment_result.scalars().all():
+        assignment.desired_version = template.version
+        assignment.status = "pending"
+        assignment.status_message = f"已恢复 v{version}，等待重新下发"
+    await db.commit()
+    await db.refresh(template)
+    return _model_to_dict(template)
 
 
 @router.delete("/{template_id}")
@@ -203,160 +306,11 @@ async def delete_template(
         raise HTTPException(status_code=404, detail="Template not found")
     if m.is_builtin:
         raise HTTPException(status_code=400, detail="Builtin templates cannot be deleted")
-    removed_name = m.name
     await db.delete(m)
     await db.commit()
-
-    # Best-effort: drop this monitor from every connected array's agent config so
-    # a deleted template stops running (otherwise it lingers as a zombie until the
-    # next manual redeploy).
-    try:
-        loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, _remove_monitor_from_connected_arrays, removed_name)
-    except Exception:
-        logger.warning("Zombie-monitor recovery failed for %s", removed_name, exc_info=True)
-
     return {"ok": True}
 
 
-def _remove_monitor_from_connected_arrays(monitor_name: str) -> None:
-    """Remove a custom monitor by name from every connected array and restart it.
+from .monitor_deployments import router as monitor_deployments_router
 
-    Synchronous (SSH) — run via run_in_executor.  Idempotent: arrays that don't
-    have the monitor are skipped.
-    """
-    import base64
-    from ..core.agent_deployer import AgentDeployer
-
-    config = get_config()
-    config_path = config.remote.agent_config_path
-    ssh_pool = get_ssh_pool()
-    for array_id, conn in list(ssh_pool._connections.items()):
-        try:
-            if not conn or not conn.is_connected():
-                continue
-            content = conn.read_file(config_path)
-            if not content:
-                continue
-            config_data = json.loads(content)
-            existing = config_data.get("custom_monitors", [])
-            filtered = [
-                m for m in existing
-                if not (isinstance(m, dict) and m.get("name") == monitor_name)
-            ]
-            if len(filtered) == len(existing):
-                continue  # this array didn't have it
-            config_data["custom_monitors"] = filtered
-            payload = json.dumps(config_data, indent=2, ensure_ascii=False)
-            encoded = base64.b64encode(payload.encode("utf-8")).decode("ascii")
-            conn.execute(f"echo '{encoded}' | base64 -d > {config_path}")
-            AgentDeployer(conn, config).restart_agent()
-            logger.info("Removed deleted monitor '%s' from %s", monitor_name, array_id)
-        except Exception:
-            logger.warning("Failed removing monitor '%s' from %s", monitor_name, array_id, exc_info=True)
-
-
-# ---------------------------------------------------------------------------
-# Deploy endpoint
-# ---------------------------------------------------------------------------
-
-@router.post("/deploy")
-async def deploy_templates(
-    body: DeployRequest,
-    _payload: dict = Depends(require_admin),
-    db: AsyncSession = Depends(get_db),
-):
-    """
-    Deploy selected templates to target arrays.
-    target_type: "tag" -> target_ids are tag IDs; "array" -> target_ids are array.id (DB primary key)
-    """
-    if not body.template_ids:
-        raise HTTPException(status_code=400, detail="template_ids required")
-    if not body.target_ids:
-        raise HTTPException(status_code=400, detail="target_ids required")
-
-    # Resolve array_ids
-    if body.target_type == "tag":
-        result = await db.execute(
-            select(ArrayModel.array_id).where(ArrayModel.tag_id.in_(body.target_ids))
-        )
-        array_ids = [row[0] for row in result.all() if row[0]]
-    elif body.target_type == "array":
-        result = await db.execute(
-            select(ArrayModel.array_id).where(ArrayModel.id.in_(body.target_ids))
-        )
-        array_ids = [row[0] for row in result.all() if row[0]]
-    else:
-        raise HTTPException(status_code=400, detail="target_type must be 'tag' or 'array'")
-
-    if not array_ids:
-        raise HTTPException(status_code=400, detail="No arrays found for target")
-
-    # Fetch templates
-    result = await db.execute(
-        select(MonitorTemplateModel).where(
-            MonitorTemplateModel.id.in_(body.template_ids),
-            MonitorTemplateModel.is_enabled == True,
-        )
-    )
-    templates = result.scalars().all()
-    if not templates:
-        raise HTTPException(status_code=400, detail="No enabled templates found")
-
-    custom_monitors = [_template_to_agent_config(t) for t in templates]
-
-    from .observer_configs import get_all_observer_overrides
-    observer_overrides = await get_all_observer_overrides(db)
-
-    ssh_pool = get_ssh_pool()
-    config = get_config()
-    # Must write the config the agent actually reads (/etc/...), not the code
-    # deploy directory — otherwise the agent never loads these custom_monitors.
-    config_path = config.remote.agent_config_path
-
-    results = []
-    for array_id in array_ids:
-        conn = ssh_pool.get_connection(array_id)
-        if not conn or not conn.is_connected():
-            results.append({"array_id": array_id, "ok": False, "error": "Array not connected"})
-            continue
-        try:
-            content = conn.read_file(config_path)
-            config_data = json.loads(content) if content else {}
-            # Merge by name (upsert) instead of overwriting the whole list, so
-            # deploying template-set B doesn't wipe template-set A already on the
-            # array.  Same-name templates are updated; others are preserved.
-            existing = config_data.get("custom_monitors", [])
-            by_name = {
-                m.get("name"): m for m in existing
-                if isinstance(m, dict) and m.get("name")
-            }
-            for m in custom_monitors:
-                by_name[m["name"]] = m
-            config_data["custom_monitors"] = list(by_name.values())
-
-            if observer_overrides:
-                observers = config_data.setdefault("observers", {})
-                for obs_name, overrides in observer_overrides.items():
-                    obs = observers.setdefault(obs_name, {})
-                    obs.update(overrides)
-            config_json = json.dumps(config_data, indent=2, ensure_ascii=False)
-            import base64
-            encoded = base64.b64encode(config_json.encode("utf-8")).decode("ascii")
-            backup_cmd = f"cp {config_path} {config_path}.bak 2>/dev/null || true"
-            conn.execute(backup_cmd)
-            write_cmd = f"echo '{encoded}' | base64 -d > {config_path}"
-            conn.execute(write_cmd)
-            from ..core.agent_deployer import AgentDeployer
-            deployer = AgentDeployer(conn, config)
-            restart_result = deployer.restart_agent()
-            results.append({
-                "array_id": array_id,
-                "ok": True,
-                "restart_ok": restart_result.get("ok", False),
-            })
-        except Exception as e:
-            logger.exception("Deploy failed for %s", array_id)
-            results.append({"array_id": array_id, "ok": False, "error": str(e)})
-
-    return {"results": results}
+router.include_router(monitor_deployments_router)
