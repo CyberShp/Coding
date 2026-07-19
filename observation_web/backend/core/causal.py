@@ -1,18 +1,33 @@
 """
-F200: Causal Inference Engine.
+F200: Temporal Association / Co-occurrence Engine.
 
 Mines temporal co-occurrence patterns from alert history to build a
-per-array causal DAG.  At query time, overlays the learned DAG onto
-a set of concurrent alerts to identify root causes vs consequences.
+per-array association graph.  At query time, overlays the learned graph onto
+a set of concurrent alerts to order likely antecedents vs. followers.
+
+IMPORTANT — these are associations, not proven causes.
+  The rules describe *statistical co-occurrence with temporal precedence*
+  ("A tends to fire shortly before B"), which is suggestive of a causal link
+  but does not establish one. High counts alone are misleading: two observers
+  that both fire frequently will co-occur often even when unrelated. We
+  therefore rank edges by association strength, not raw frequency, and the
+  learned graph should be read as a ranked hypothesis for triage, not proof.
 
 Algorithm:
   1. For each array, scan alert windows (30-day rolling).
   2. Find "episodes" — bursts of alerts within EPISODE_GAP seconds.
   3. Within each episode, record all ordered observer pairs (A before B).
-  4. Accumulate counts and average lags → upsert into causal_rules.
-  5. Compute confidence = P(B follows A within episode) / P(A in any episode).
+  4. Accumulate counts and average lags.
+  5. Score each pair with three association metrics and keep only pairs that
+     clear every threshold:
+       - support    = co-occurrences / total episodes  (filters rare pairs)
+       - confidence = P(B follows A | A)                (directional strength)
+       - lift       = P(B|A) / P(B)                     (association vs. chance;
+                      lift ~= 1 means independent, > 1 positively associated)
+  6. Upsert survivors into the ``causal_rules`` table (name kept for schema /
+     API / frontend compatibility; the contents are association metrics).
 
-Runtime DAG construction:
+Runtime graph construction:
   Given a set of alerts in a time window, look up learned edges,
   build a DAG, find root nodes (in-degree 0), and return tree structure.
 """
@@ -33,10 +48,55 @@ from ..models.causal import CausalRuleModel
 logger = logging.getLogger("causal")
 
 # ── Config ─────────────────────────────────────────────────────
+# NOTE: the thresholds below are empirical heuristics, not theoretically
+# derived. They trade recall for precision to suppress spurious edges; tune
+# against real alert history rather than treating them as ground truth.
 WINDOW_DAYS = 30          # Mining lookback window
 EPISODE_GAP_SEC = 60      # Max gap between alerts in one episode
 MIN_CO_OCCURRENCE = 2     # Minimum times A→B must be seen to keep the edge
-CONFIDENCE_FLOOR = 0.15   # Drop edges below this confidence
+CONFIDENCE_FLOOR = 0.15   # Drop edges below this directional confidence
+MIN_SUPPORT = 0.05        # Drop pairs seen in < 5% of episodes (rare/incidental)
+LIFT_FLOOR = 1.0          # Keep only positively-associated pairs (lift > chance).
+                          # lift == 1 => A and B independent; < 1 => negatively
+                          # associated; both are dropped as non-informative.
+
+
+def score_pair(
+    co_occurrence: int,
+    antecedent_episodes: int,
+    consequent_episodes: int,
+    total_episodes: int,
+) -> Dict[str, float]:
+    """
+    Compute association metrics for an ordered pair A->B.
+
+    Args:
+        co_occurrence:       episodes where A fired before B
+        antecedent_episodes: episodes containing A
+        consequent_episodes: episodes containing B
+        total_episodes:      total episodes in the mining window
+
+    Returns dict with:
+        confidence = P(B follows A | A) = co_occurrence / antecedent_episodes
+        support    = co_occurrence / total_episodes
+        lift       = confidence / P(B), where P(B) = consequent_episodes / total
+                     lift ~= 1 -> independent, > 1 -> positive association
+    """
+    confidence = co_occurrence / antecedent_episodes if antecedent_episodes else 0.0
+    support = co_occurrence / total_episodes if total_episodes else 0.0
+    p_consequent = consequent_episodes / total_episodes if total_episodes else 0.0
+    lift = (confidence / p_consequent) if p_consequent > 0 else 0.0
+    return {"confidence": confidence, "support": support, "lift": lift}
+
+
+def _pair_passes_thresholds(scores: Dict[str, float], co_occurrence: int) -> bool:
+    """Apply all association thresholds; True means keep the edge."""
+    return (
+        co_occurrence >= MIN_CO_OCCURRENCE
+        and scores["support"] >= MIN_SUPPORT
+        and scores["confidence"] >= CONFIDENCE_FLOOR
+        and scores["lift"] >= LIFT_FLOOR
+    )
 
 
 # ── Episode detection ──────────────────────────────────────────
@@ -87,10 +147,15 @@ def _mine_pairs(
 
 async def mine_causal_rules():
     """
-    Periodic job: scan alert history and upsert causal rules.
-    Runs after compute_baselines in the scheduler.
+    Periodic job: scan alert history and upsert association (co-occurrence)
+    rules. Runs after compute_baselines in the scheduler.
+
+    Function/table names retain the "causal" label for schema, API and
+    frontend compatibility; the mined relationships are temporal associations,
+    not proven causal links.
     """
-    logger.info("Starting causal rule mining (window=%d days)", WINDOW_DAYS)
+    logger.info("Starting association rule mining (co-occurrence, window=%d days)",
+                WINDOW_DAYS)
     cutoff = datetime.now() - timedelta(days=WINDOW_DAYS)
 
     async with _db_module.AsyncSessionLocal() as db:
@@ -101,7 +166,7 @@ async def mine_causal_rules():
             .distinct()
         )
         array_ids = [row[0] for row in arr_result.all()]
-        logger.info("Mining causal rules for %d arrays", len(array_ids))
+        logger.info("Mining association rules for %d arrays", len(array_ids))
 
         total_upserts = 0
         for array_id in array_ids:
@@ -118,8 +183,9 @@ async def mine_causal_rules():
             if len(rows) < 2:
                 continue
 
-            # Count per-observer episodes for confidence denominator
+            # Count per-observer episodes (denominator for confidence / lift)
             episodes = _split_episodes(rows)
+            total_episodes = len(episodes)
             observer_episode_count: Dict[str, int] = defaultdict(int)
             for ep in episodes:
                 obs_in_ep = {obs for _, obs in ep}
@@ -132,14 +198,20 @@ async def mine_causal_rules():
             # Upsert rules
             for (ant, con), lags in pair_lags.items():
                 count = len(lags)
-                if count < MIN_CO_OCCURRENCE:
-                    continue
-                avg_lag = sum(lags) / count
-                # Confidence: fraction of antecedent episodes where consequent followed
+                avg_lag = sum(lags) / count if count else 0.0
                 ant_total = observer_episode_count.get(ant, count)
-                confidence = count / ant_total if ant_total > 0 else 0.0
-                if confidence < CONFIDENCE_FLOOR:
+                con_total = observer_episode_count.get(con, 0)
+                scores = score_pair(count, ant_total, con_total, total_episodes)
+                # Log association strength even for dropped edges (lift has no
+                # dedicated column, so this is where it is surfaced).
+                logger.debug(
+                    "assoc %s->%s: count=%d support=%.3f confidence=%.3f lift=%.3f",
+                    ant, con, count, scores["support"],
+                    scores["confidence"], scores["lift"],
+                )
+                if not _pair_passes_thresholds(scores, count):
                     continue
+                confidence = scores["confidence"]
 
                 stmt = sqlite_upsert(CausalRuleModel).values(
                     array_id=array_id,
@@ -165,7 +237,7 @@ async def mine_causal_rules():
                 total_upserts += 1
 
         await db.commit()
-        logger.info("Causal mining done: %d edges upserted across %d arrays",
+        logger.info("Association mining done: %d edges upserted across %d arrays",
                      total_upserts, len(array_ids))
 
 
@@ -174,7 +246,7 @@ async def mine_causal_rules():
 async def get_causal_rules(
     db: AsyncSession, array_id: str,
 ) -> List[CausalRuleModel]:
-    """Fetch all learned causal edges for an array."""
+    """Fetch all learned association (co-occurrence) edges for an array."""
     result = await db.execute(
         select(CausalRuleModel)
         .where(CausalRuleModel.array_id == array_id)
@@ -201,8 +273,13 @@ def _build_episode_dag(
     rules: List,
 ) -> List[dict]:
     """
-    Build a causal DAG for a single episode (a set of temporally
-    co-occurring alerts). Returns annotated tree nodes.
+    Build an association DAG for a single episode (a set of temporally
+    co-occurring alerts), ordering antecedents before followers using the
+    learned co-occurrence edges. Returns annotated tree nodes.
+
+    Note: the ``causal_role`` / ``causal_edge`` keys are retained for frontend
+    compatibility; roles reflect observed temporal precedence within the
+    episode, not proven causation.
     """
     # Build lookup: observer_name → list of alerts in this episode
     obs_alerts: Dict[str, List[dict]] = defaultdict(list)
@@ -296,13 +373,14 @@ def build_causal_dag(
     rules: List,
 ) -> List[dict]:
     """
-    Split alerts into temporal episodes, then build a causal DAG
-    per episode using learned rules.
+    Split alerts into temporal episodes, then build an association DAG
+    per episode using learned co-occurrence rules.
 
-    Each alert gets a 'causal_role' annotation:
-      - 'root': no known antecedent in this episode
-      - 'consequence': has a known antecedent in this episode
-      - 'isolated': no causal edges match
+    Each alert gets a 'causal_role' annotation (key name kept for frontend
+    compatibility; it denotes observed precedence, not proven causation):
+      - 'root': no known antecedent (predecessor) in this episode
+      - 'consequence': follows a known antecedent in this episode
+      - 'isolated': no association edges match
 
     Returns flat list of annotated tree nodes (roots with nested consequences).
     """
