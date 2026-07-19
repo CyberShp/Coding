@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# SQLite database + WAL/SHM sidecars
+*.db
+*.db-wal
+*.db-shm
+
+# Archives / packaged builds
+*.tar.gz
+
+# Node / frontend
+frontend/node_modules/
+frontend/dist/
+
+# Env / editor
+.venv/
+venv/
+.DS_Store
+.cursor/
+
+# Debug / test artifacts
+.playwright-cli/
+output/

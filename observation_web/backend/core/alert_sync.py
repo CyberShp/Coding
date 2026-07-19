@@ -14,8 +14,14 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from ..config import get_config
 from ..core.ssh_pool import get_ssh_pool
 from ..core.system_alert import sys_error, sys_warning
+from ..core.status_cache import _array_status_cache
+from ..core.active_issues import _derive_active_issues_from_db, cleanup_stale_acks
 from ..db import database as _db_module
-from ..api.arrays import sync_array_alerts, _derive_active_issues_from_db, _array_status_cache
+
+# NOTE: sync_array_alerts and broadcast_status_update remain in the api layer
+# (they orchestrate api-layer concerns — SSH sync flow + WebSocket broadcast).
+# They are imported lazily inside the functions below to keep core -> api out of
+# the module import graph (no top-level "from ..api" in core).
 
 if TYPE_CHECKING:
     pass
@@ -25,6 +31,7 @@ logger = logging.getLogger(__name__)
 _scheduler: Optional[AsyncIOScheduler] = None
 _sync_interval_seconds = 20
 _max_concurrent = 5
+_sync_round = 0  # for periodic maintenance (stale-ack cleanup)
 
 
 async def _sync_one_array(array_id: str, semaphore: asyncio.Semaphore) -> Tuple[str, Optional[int]]:
@@ -37,6 +44,9 @@ async def _sync_one_array(array_id: str, semaphore: asyncio.Semaphore) -> Tuple[
                 return (array_id, None)
 
             config = get_config()
+            # Lazy import: breaks the core->api cycle. sync_array_alerts lives in
+            # api/array_alert_sync.py (it drives the SSH sync + api concerns).
+            from ..api.array_alert_sync import sync_array_alerts
             async with _db_module.AsyncSessionLocal() as db:
                 count = await sync_array_alerts(array_id, db, conn, config, full_sync=False)
                 await db.commit()
@@ -46,7 +56,9 @@ async def _sync_one_array(array_id: str, semaphore: asyncio.Semaphore) -> Tuple[
                     try:
                         issues = await _derive_active_issues_from_db(db, array_id)
                         _array_status_cache[array_id].active_issues = issues
-                        # Broadcast so ArrayDetail pages pick up new issues without manual refresh
+                        # Broadcast so ArrayDetail pages pick up new issues without manual refresh.
+                        # Lazy import: breaks the core->api cycle (websocket is an api
+                        # orchestration concern).
                         from ..api.websocket import broadcast_status_update
                         status_obj = _array_status_cache[array_id]
                         await broadcast_status_update(array_id, {
@@ -79,6 +91,19 @@ async def _sync_one_array(array_id: str, semaphore: asyncio.Semaphore) -> Tuple[
 
 async def _run_sync():
     """Sync alerts from all connected arrays."""
+    global _sync_round
+    _sync_round += 1
+    # Periodic maintenance (~every 10 min): physically remove expired acks that
+    # GET status endpoints no longer delete inline.
+    if _sync_round % 30 == 0:
+        try:
+            async with _db_module.AsyncSessionLocal() as db:
+                removed = await cleanup_stale_acks(db)
+                if removed:
+                    logger.info("Cleaned %d stale ack rows", removed)
+        except Exception as e:
+            logger.warning("Stale ack cleanup failed: %s", e)
+
     from ..models.array import ConnectionState
 
     ssh_pool = get_ssh_pool()
@@ -110,6 +135,13 @@ def start_alert_sync():
         seconds=_sync_interval_seconds,
         id="alert_sync",
         replace_existing=True,
+        # Without these, APScheduler's defaults (max_instances=1,
+        # misfire_grace_time=1s) silently DROP a whole cycle whenever the
+        # previous run overruns the 20s interval — which is exactly what happens
+        # at 50-array scale.  coalesce collapses a backlog into one run.
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=_sync_interval_seconds,
     )
     _scheduler.start()
     logger.info(f"Alert sync started (interval={_sync_interval_seconds}s, max_concurrent={_max_concurrent})")

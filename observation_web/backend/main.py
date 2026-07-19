@@ -59,6 +59,10 @@ _prev_health_state: dict = {}
 _bg_failure_counts: dict = {}
 _BG_FAILURE_THRESHOLD = 3
 
+# Data-lifecycle archiving runs on the 2-min idle loop; once per day = 720 cycles.
+_archive_cycle_counter = 0
+_ARCHIVE_EVERY_CYCLES = 720
+
 
 def _track_bg_failure(name: str, exc: Exception) -> None:
     """Record a background loop failure; escalate to sys_error after threshold."""
@@ -120,6 +124,29 @@ async def _idle_connection_cleaner():
                 _reset_bg_failure("idle_cleanup/ack")
             except Exception as e:
                 _track_bg_failure("idle_cleanup/ack", e)
+
+            # Once per day: archive old alerts + prune expired archives. Without
+            # this the retention/archive logic was never invoked by any scheduler,
+            # so the alerts table grew unbounded.
+            global _archive_cycle_counter
+            _archive_cycle_counter += 1
+            if _archive_cycle_counter >= _ARCHIVE_EVERY_CYCLES:
+                _archive_cycle_counter = 0
+                try:
+                    from .db.database import AsyncSessionLocal
+                    from .core.data_lifecycle import get_lifecycle_manager
+                    if AsyncSessionLocal:
+                        async with AsyncSessionLocal() as session:
+                            res = await get_lifecycle_manager().archive_old_data(session)
+                            if res.get("archived") or res.get("deleted"):
+                                logger.info(
+                                    "Data lifecycle: archived %s, pruned %s",
+                                    res.get("archived"), res.get("deleted"),
+                                )
+                    _reset_bg_failure("idle_cleanup/archive")
+                except Exception as e:
+                    _track_bg_failure("idle_cleanup/archive", e)
+
             _reset_bg_failure("idle_connection_cleaner")
         except asyncio.CancelledError:
             break
@@ -234,8 +261,15 @@ async def _health_checker():
                                     asyncio.get_running_loop().run_in_executor(None, deployer.check_deployed),
                                     timeout=10,
                                 ):
+                                    # wait_for_ready() drives BLOCKING conn.execute
+                                    # internally; await-ing it directly froze the
+                                    # event loop for up to its full timeout. Run it
+                                    # in a worker thread (same pattern as
+                                    # start_agent's asyncio.run at agent_deployer.py:259).
                                     ready = await asyncio.wait_for(
-                                        deployer.wait_for_ready(),
+                                        asyncio.get_running_loop().run_in_executor(
+                                            None, lambda: asyncio.run(deployer.wait_for_ready())
+                                        ),
                                         timeout=1210,
                                     )
                                     if ready:

@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 from ..core.base import BaseObserver, ObserverResult, AlertLevel
-from ..utils.helpers import run_command
+from ..utils.helpers import run_command, load_positions, save_positions
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +41,9 @@ class ProcessCrashObserver(BaseObserver):
     def __init__(self, name: str, config: Dict[str, Any]):
         super().__init__(name, config)
         self.log_paths = config.get('log_paths', ['/var/log/messages', '/var/log/syslog'])
-        self._last_positions = {}  # path -> byte offset
+        # path -> {'inode': int, 'pos': int}，从本地状态文件恢复（跨重启，避免重扫重报）
+        self._state_ns = f'process_crash:{name}'
+        self._last_positions = load_positions(self._state_ns)
 
     def check(self, reporter=None) -> ObserverResult:
         all_crashes = []
@@ -80,18 +82,27 @@ class ProcessCrashObserver(BaseObserver):
             return []
 
         crashes = []
-        last_pos = self._last_positions.get(log_path, 0)
+        entry = self._last_positions.get(log_path) or {}
+        last_pos = entry.get('pos', 0)
+        last_inode = entry.get('inode')
 
         try:
-            size = path.stat().st_size
-            if size < last_pos:
-                # Log rotated
+            st = path.stat()
+            inode = st.st_ino
+            size = st.st_size
+            if last_inode is not None and inode != last_inode:
+                # Log rotated (new inode) -> re-read from start
+                last_pos = 0
+            elif size < last_pos:
+                # Log truncated/rotated in place -> re-read from start
                 last_pos = 0
 
             with open(path, 'r', errors='ignore') as f:
                 f.seek(last_pos)
                 new_lines = f.readlines()
-                self._last_positions[log_path] = f.tell()
+                self._last_positions[log_path] = {'inode': inode, 'pos': f.tell()}
+
+            save_positions(self._state_ns, self._last_positions)
 
             for line in new_lines[-500:]:  # Only check last 500 new lines
                 for pattern, crash_type in CRASH_PATTERNS:

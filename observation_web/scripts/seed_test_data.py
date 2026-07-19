@@ -4,8 +4,8 @@
 
 用法:
     cd observation_web
-    python3 scripts/seed_test_data.py           # 默认 http://localhost:8001
-    python3 scripts/seed_test_data.py --host http://192.168.x.x:8001
+    python3 scripts/seed_test_data.py           # 默认从 config.json 读端口（缺省 8002）
+    python3 scripts/seed_test_data.py --host http://192.168.x.x:8002
 """
 
 import argparse
@@ -20,6 +20,17 @@ from pathlib import Path
 # ─────────── DB seed ───────────
 
 DB_PATH = Path(__file__).parent.parent / "observation_web.db"
+
+
+def _default_host() -> str:
+    """默认后端地址：从 config.json 读端口（单一真相源），缺省 8002。"""
+    port = 8002
+    try:
+        cfg = json.loads((Path(__file__).parent.parent / "config.json").read_text())
+        port = cfg.get("server", {}).get("port", 8002)
+    except Exception:
+        pass
+    return f"http://localhost:{port}"
 
 OBSERVERS_BY_LEVEL = {
     "error_code":       ("warning", "error"),
@@ -426,7 +437,7 @@ def api_test(base_url):
 
 def main():
     parser = argparse.ArgumentParser(description="喂入测试数据 + 调用新 API 验证")
-    parser.add_argument("--host", default="http://localhost:8001", help="后端地址")
+    parser.add_argument("--host", default=_default_host(), help="后端地址（默认读 config.json）")
     parser.add_argument("--no-seed", action="store_true", help="跳过数据库种子，只跑 API")
     parser.add_argument("--no-api", action="store_true", help="只灌数据不跑 API")
     parser.add_argument("--alerts", type=int, default=80, help="要插入的告警数量")

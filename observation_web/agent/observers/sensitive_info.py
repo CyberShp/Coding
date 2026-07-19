@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from ..core.base import BaseObserver, ObserverResult, AlertLevel
-from ..utils.helpers import tail_file
+from ..utils.helpers import tail_file, load_positions, save_positions
 
 logger = logging.getLogger(__name__)
 
@@ -143,8 +143,10 @@ class SensitiveInfoObserver(BaseObserver):
             re.compile(p, re.IGNORECASE) for p in self.whitelist_patterns
         ]
         
-        # 文件位置缓存
-        self._file_positions = {}  # type: Dict[str, int]
+        # 文件位置缓存：path -> {'inode': int, 'pos': int}
+        # 从本地状态文件恢复（跨重启，避免重扫重报历史敏感信息告警）
+        self._state_ns = f'sensitive_info:{name}'
+        self._positions_state = load_positions(self._state_ns)
         self._last_alerts = {}  # type: Dict[str, datetime]
         self._first_run = {}  # type: Dict[str, bool]
     
@@ -164,19 +166,32 @@ class SensitiveInfoObserver(BaseObserver):
             
             # 读取新增内容
             position_key = str(log_path)
-            last_position = self._file_positions.get(position_key, 0)
-            
-            # 首次运行时跳过历史数据
-            skip_existing = self._first_run.get(position_key, True)
+            entry = self._positions_state.get(position_key) or {}
+            last_position = entry.get('pos', 0)
+            last_inode = entry.get('inode')
+            had_state = position_key in self._positions_state
+
+            # 当前 inode，用于检测日志轮转
+            try:
+                inode = log_path.stat().st_ino
+            except OSError:
+                inode = None
+            if last_inode is not None and inode is not None and inode != last_inode:
+                # 日志轮转（inode 变化）-> 从头读取
+                last_position = 0
+
+            # 首次运行时跳过历史数据；若已有持久化位置则恢复读取，不跳过
+            skip_existing = (not had_state) and self._first_run.get(position_key, True)
             self._first_run[position_key] = False
-            
+
             new_lines, new_position = tail_file(
                 log_path,
                 last_position,
                 self.max_lines_per_check,
                 skip_existing=skip_existing
             )
-            self._file_positions[position_key] = new_position
+            self._positions_state[position_key] = {'inode': inode, 'pos': new_position}
+            save_positions(self._state_ns, self._positions_state)
             
             # 检查每一行
             for line_num, line in enumerate(new_lines, start=1):

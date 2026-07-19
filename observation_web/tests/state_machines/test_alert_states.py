@@ -167,31 +167,81 @@ class TestAlertReviewStatus:
 
 class TestAlertFingerprint:
 
-    async def test_alert_fingerprint_dedup(self, db_session):
-        """Two alerts with same fingerprint – second updates last_seen_at."""
+    async def _record_occurrence(self, db, *, array_id, fingerprint, occurred_at, **overrides):
+        """Fingerprint-based upsert: update last_seen_at on the existing row for
+        this fingerprint, otherwise insert a new alert. This is the dedup
+        contract fingerprints exist to support, run against the real model and
+        real queries (not a value hand-set on a pre-known row).
+        """
+        result = await db.execute(
+            select(AlertV2Model).where(
+                AlertV2Model.array_id == array_id,
+                AlertV2Model.fingerprint == fingerprint,
+            )
+        )
+        existing = result.scalars().first()
+        if existing is not None:
+            existing.last_seen_at = occurred_at
+            await db.flush()
+            return existing
+
+        alert = _make_alert(
+            array_id=array_id,
+            fingerprint=fingerprint,
+            occurred_at=occurred_at,
+            first_seen_at=occurred_at,
+            last_seen_at=occurred_at,
+            **overrides,
+        )
+        db.add(alert)
+        await db.flush()
+        return alert
+
+    async def test_alert_fingerprint_dedup_collapses_to_one_row(self, db_session):
+        """A repeated occurrence with the same fingerprint updates last_seen_at
+        and must NOT create a second row."""
         db = db_session
         await _ensure_array(db)
         fp = "fp_abc123"
         t1 = datetime.now() - timedelta(hours=1)
         t2 = datetime.now()
 
-        alert1 = _make_alert(fingerprint=fp, first_seen_at=t1, last_seen_at=t1)
-        db.add(alert1)
-        await db.flush()
+        first = await self._record_occurrence(
+            db, array_id="arr1", fingerprint=fp, occurred_at=t1
+        )
+        assert first.first_seen_at == t1
+        assert first.last_seen_at == t1
 
-        # Simulate dedup logic: find existing with same fingerprint, update last_seen_at
+        # Same fingerprint arrives again → dedup, no new row.
+        await self._record_occurrence(db, array_id="arr1", fingerprint=fp, occurred_at=t2)
+
         result = await db.execute(
             select(AlertV2Model).where(AlertV2Model.fingerprint == fp)
         )
-        existing = result.scalars().first()
-        assert existing is not None
-        existing.last_seen_at = t2
-        await db.flush()
+        rows = result.scalars().all()
+        assert len(rows) == 1                      # collapsed to a single row
+        assert rows[0].last_seen_at == t2          # last_seen advanced
+        assert rows[0].first_seen_at == t1         # first_seen preserved
 
-        result2 = await db.execute(select(AlertV2Model).where(AlertV2Model.fingerprint == fp))
-        updated = result2.scalars().first()
-        assert updated.last_seen_at == t2
-        assert updated.first_seen_at == t1
+    async def test_alert_distinct_fingerprints_are_not_deduped(self, db_session):
+        """Different fingerprints must remain separate rows."""
+        db = db_session
+        await _ensure_array(db)
+        now = datetime.now()
+
+        await self._record_occurrence(
+            db, array_id="arr1", fingerprint="fp_one", occurred_at=now,
+            message_raw="one",
+        )
+        await self._record_occurrence(
+            db, array_id="arr1", fingerprint="fp_two", occurred_at=now,
+            message_raw="two",
+        )
+
+        result = await db.execute(
+            select(AlertV2Model).where(AlertV2Model.fingerprint.in_(["fp_one", "fp_two"]))
+        )
+        assert len(result.scalars().all()) == 2
 
 
 class TestAlertIsExpected:

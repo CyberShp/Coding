@@ -40,11 +40,15 @@ class ServerConfig:
 class RemoteConfig:
     """Remote agent configuration"""
     agent_deploy_path: str = "/OSM/coffer_data/observation_points"
+    # Runtime config the agent actually reads — NOT under agent_deploy_path.
+    # The service, entrypoint (agent/__main__.py) and updater all read this path,
+    # so any config the backend pushes MUST target it, not <deploy>/config.json.
+    agent_config_path: str = "/etc/observation-points/config.json"
     agent_log_path: str = "/var/log/observation-points/alerts.log"
     python_cmd: str = "python3"
     upload_staging_path: str = "/home/permitdir"   # Staging dir for SFTP uploads (permission workaround)
     auto_redeploy: bool = True                      # Auto-redeploy agent when it goes offline
-    ingest_url: str = ""                            # URL for agent to push alerts (e.g. http://192.168.1.100:8001/api/ingest)
+    ingest_url: str = ""                            # URL for agent to push alerts (e.g. http://192.168.1.100:8002/api/ingest)
 
 
 @dataclass

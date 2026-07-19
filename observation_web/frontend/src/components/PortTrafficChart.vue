@@ -130,7 +130,12 @@ import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { Refresh, InfoFilled } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import api from '../api'
-import * as echarts from 'echarts'
+import * as echarts from 'echarts/core'
+import { LineChart } from 'echarts/charts'
+import { GridComponent, TooltipComponent, LegendComponent } from 'echarts/components'
+import { CanvasRenderer } from 'echarts/renderers'
+
+echarts.use([LineChart, GridComponent, TooltipComponent, LegendComponent, CanvasRenderer])
 
 const props = defineProps({
   arrayId: { type: String, required: true },

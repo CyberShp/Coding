@@ -8,6 +8,7 @@
 
 import json
 import logging
+import queue
 import re
 import syslog
 import threading
@@ -83,6 +84,12 @@ class Reporter:
     
     # 最大指标文件大小 (10MB), 超过后轮转
     MAX_METRICS_FILE_SIZE = 10 * 1024 * 1024
+
+    # 最大告警文件大小 (10MB), 超过后轮转（与指标文件同阈值）
+    MAX_ALERT_FILE_SIZE = 10 * 1024 * 1024
+
+    # HTTP 推送队列默认容量（有界，防止风暴时无限堆积/线程爆炸）
+    DEFAULT_PUSH_QUEUE_SIZE = 1000
     
     def __init__(self, config: Dict[str, Any], dry_run: bool = False, min_level: str = 'INFO'):
         """
@@ -114,6 +121,14 @@ class Reporter:
         self.push_enabled = config.get('push_enabled', False)
         self.push_url = config.get('push_url', '')  # e.g., "http://192.168.1.100:8000/api/ingest"
         self.push_timeout = config.get('push_timeout', 5)
+
+        # HTTP 推送采用「单后台线程 + 有界队列」模式：
+        # 每条告警/指标不再单独起线程，避免风暴时线程爆炸；队满时丢弃并计数。
+        self._push_queue = None  # type: Optional[queue.Queue]
+        self._push_worker = None  # type: Optional[threading.Thread]
+        self._push_queue_size = config.get('push_queue_size', self.DEFAULT_PUSH_QUEUE_SIZE)
+        self._push_dropped = 0
+        self._push_lock = threading.Lock()
         
         # Metrics recording
         self.metrics_enabled = config.get('metrics_enabled', True)
@@ -278,6 +293,11 @@ class Reporter:
         # 文件输出
         if self.output_mode in ('file', 'both'):
             try:
+                # 轮转检查：alerts.log 也会持续增长，超过阈值时轮转，
+                # 否则会无限增长写满被监控机磁盘。
+                if (self.file_path.exists()
+                        and self.file_path.stat().st_size > self.MAX_ALERT_FILE_SIZE):
+                    self._rotate_alerts()
                 with open(self.file_path, 'a', encoding='utf-8') as f:
                     f.write(json_str + '\n')
             except Exception as e:
@@ -305,28 +325,57 @@ class Reporter:
         level_tag = alert.level.value.upper()
         logger.info(f"[{level_tag}] {alert.observer_name}: {alert.message}")
     
-    def _push_to_web(self, alert: Alert):
-        """异步推送告警到 Web 后端"""
-        def _do_push():
+    def _ensure_push_worker(self):
+        """惰性启动单个后台推送线程与有界队列（首次推送时创建）。"""
+        if self._push_queue is not None:
+            return
+        with self._push_lock:
+            if self._push_queue is not None:
+                return
+            self._push_queue = queue.Queue(maxsize=self._push_queue_size)
+            self._push_worker = threading.Thread(
+                target=self._push_worker_loop,
+                name='reporter-push',
+                daemon=True,
+            )
+            self._push_worker.start()
+
+    def _push_worker_loop(self):
+        """后台推送线程主循环：从队列取出 payload 顺序 POST 到 Web 后端。"""
+        import urllib.request
+        while True:
+            payload = self._push_queue.get()
             try:
-                import urllib.request
-                data = json.dumps({
-                    'type': 'alert',
-                    **alert.to_dict(),
-                }).encode('utf-8')
+                data = json.dumps(payload).encode('utf-8')
                 req = urllib.request.Request(
                     self.push_url,
                     data=data,
                     headers={'Content-Type': 'application/json'},
                 )
                 urllib.request.urlopen(req, timeout=self.push_timeout)
-                logger.debug(f"推送告警成功: {alert.observer_name}")
             except Exception as e:
-                logger.debug(f"推送告警失败 (非致命): {e}")
-        
-        # 使用线程避免阻塞
-        t = threading.Thread(target=_do_push, daemon=True)
-        t.start()
+                # 推送失败非致命，debug 记录避免日志膨胀
+                logger.debug(f"推送失败 (非致命): {e}")
+            finally:
+                self._push_queue.task_done()
+
+    def _enqueue_push(self, payload: Dict[str, Any]):
+        """将 payload 投递到有界推送队列；队满则丢弃并计数（背压）。"""
+        self._ensure_push_worker()
+        try:
+            self._push_queue.put_nowait(payload)
+        except queue.Full:
+            self._push_dropped += 1
+            logger.warning(
+                "推送队列已满 (容量=%d)，丢弃 %s 消息 (累计丢弃 %d 条)",
+                self._push_queue_size,
+                payload.get('type', 'unknown'),
+                self._push_dropped,
+            )
+
+    def _push_to_web(self, alert: Alert):
+        """将告警投递到后台推送队列（fire-and-forget，带背压）"""
+        self._enqueue_push({'type': 'alert', **alert.to_dict()})
     
     def record_metrics(self, metrics: Dict[str, Any]):
         """
@@ -363,33 +412,34 @@ class Reporter:
             logger.error(f"写入指标文件失败: {e}")
     
     def _push_metrics_to_web(self, record: Dict[str, Any]):
-        """异步推送指标到 Web 后端"""
-        def _do_push():
-            try:
-                import urllib.request
-                data = json.dumps({
-                    'type': 'metrics',
-                    **record,
-                }).encode('utf-8')
-                req = urllib.request.Request(
-                    self.push_url,
-                    data=data,
-                    headers={'Content-Type': 'application/json'},
-                )
-                urllib.request.urlopen(req, timeout=self.push_timeout)
-            except Exception:
-                pass  # 指标推送失败不记录，避免日志膨胀
-        
-        t = threading.Thread(target=_do_push, daemon=True)
-        t.start()
-    
-    def _rotate_metrics(self):
-        """轮转指标文件"""
+        """将指标投递到后台推送队列（fire-and-forget，带背压）"""
+        self._enqueue_push({'type': 'metrics', **record})
+
+    def _rotate_file(self, path: Path, rotated_suffix: str):
+        """通用文件轮转：将 path 重命名为带 rotated_suffix 的备份文件。
+
+        Args:
+            path: 待轮转的文件
+            rotated_suffix: 备份文件后缀（如 '.jsonl.1' / '.log.1'）
+        """
         try:
-            rotated = self.metrics_path.with_suffix('.jsonl.1')
+            rotated = path.with_suffix(rotated_suffix)
             if rotated.exists():
                 rotated.unlink()
-            self.metrics_path.rename(rotated)
-            logger.info("指标文件已轮转")
+            # 再次确认源文件存在（可能已被其他轮转/清理动作移走）
+            if path.exists():
+                path.rename(rotated)
+                logger.info(f"文件已轮转: {path.name} -> {rotated.name}")
+        except FileNotFoundError:
+            # 源文件在重命名瞬间消失，视为已轮转，无需处理
+            pass
         except Exception as e:
-            logger.error(f"指标文件轮转失败: {e}")
+            logger.error(f"文件轮转失败 ({path}): {e}")
+
+    def _rotate_metrics(self):
+        """轮转指标文件"""
+        self._rotate_file(self.metrics_path, '.jsonl.1')
+
+    def _rotate_alerts(self):
+        """轮转告警文件"""
+        self._rotate_file(self.file_path, self.file_path.suffix + '.1')

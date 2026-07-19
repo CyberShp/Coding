@@ -179,7 +179,7 @@ async def create_template(
         rule_type=template.rule.rule_type.value,
         pattern=template.rule.pattern,
         expect_match=template.rule.expect_match,
-        extract_fields=json.dumps([f.dict() for f in template.rule.extract_fields]),
+        extract_fields=json.dumps([f.model_dump() for f in template.rule.extract_fields]),
         is_builtin=False,
         auto_monitor=template.auto_monitor,
         monitor_interval=template.monitor_interval,
@@ -190,7 +190,15 @@ async def create_template(
     db.add(db_template)
     await db.commit()
     await db.refresh(db_template)
-    
+
+    # Register as a periodic auto-monitor so the "定时监测" toggle actually runs.
+    if db_template.auto_monitor:
+        try:
+            from ..core.scheduler import get_scheduler
+            get_scheduler().add_auto_monitor(db_template)
+        except Exception:
+            logger.warning("Failed to register auto-monitor for template %s", db_template.id, exc_info=True)
+
     return QueryTemplateResponse(
         id=db_template.id,
         name=db_template.name,
@@ -229,7 +237,14 @@ async def delete_template(
     
     await db.delete(template)
     await db.commit()
-    
+
+    # Stop its periodic auto-monitor job if any.
+    try:
+        from ..core.scheduler import get_scheduler
+        get_scheduler().remove_auto_monitor(template_id)
+    except Exception:
+        logger.warning("Failed to remove auto-monitor for template %s", template_id, exc_info=True)
+
     return {"status": "deleted"}
 
 

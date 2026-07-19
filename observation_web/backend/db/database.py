@@ -50,14 +50,18 @@ def init_db():
     database_url = get_database_url()
     
     # Connection pool settings for concurrent access
+    # SQLite serialises all writes regardless of pool size, so a large pool
+    # only adds lock contention (SQLITE_BUSY) without improving write throughput.
+    # Keep the pool modest; reads still scale via WAL.  (A true fix for heavy
+    # concurrent writes is Postgres — tracked as a known scaling limit.)
     _async_engine = create_async_engine(
         database_url,
         echo=config.database.echo,
-        pool_size=10,  # Number of connections to keep open
-        max_overflow=20,  # Additional connections when pool is exhausted
-        pool_timeout=30,  # Seconds to wait for connection
-        pool_recycle=3600,  # Recycle connections after 1 hour
-        pool_pre_ping=True,  # Verify connections before use
+        pool_size=5,       # Connections kept open
+        max_overflow=10,   # Extra connections under burst (15 max total)
+        pool_timeout=30,   # Seconds to wait for a connection
+        pool_recycle=3600, # Recycle connections after 1 hour
+        pool_pre_ping=True, # Verify connections before use
     )
 
     @event.listens_for(_async_engine.sync_engine, "connect")
@@ -98,19 +102,71 @@ def _get_alembic_config():
     return cfg
 
 
+_BASELINE_REVISION = "a18c393c631a"
+
+
+def _reconcile_orphan_version(cfg):
+    """Reset databases stamped with a revision no longer in the migration graph.
+
+    Historical databases may carry an ``alembic_version`` left behind by the
+    old self-rolled migration systems (schema_migrate.py / _archived_migrations),
+    e.g. ``e31b7a9c204d``.  ``upgrade head`` on such a DB raises
+    ``Can't locate revision`` and the whole service fails to start.
+
+    Since the catch-up migration (c7e9d2b4f81a) is fully idempotent — every
+    ADD COLUMN is guarded by a column-existence check — we can safely re-stamp
+    the baseline and let ``upgrade head`` re-run the catch-up, which fills only
+    the columns that are genuinely missing.
+    """
+    from alembic.script import ScriptDirectory
+    from sqlalchemy import create_engine, text as _text
+
+    known = {sc.revision for sc in ScriptDirectory.from_config(cfg).walk_revisions()}
+
+    db_url = get_database_url().replace("sqlite+aiosqlite://", "sqlite://")
+    engine = create_engine(db_url)
+    try:
+        with engine.begin() as conn:
+            has_table = conn.execute(_text(
+                "SELECT name FROM sqlite_master "
+                "WHERE type='table' AND name='alembic_version'"
+            )).fetchone()
+            if has_table is None:
+                return  # no version table yet; upgrade will establish it
+            current = conn.execute(
+                _text("SELECT version_num FROM alembic_version")
+            ).scalar()
+            if not current or current in known:
+                return
+            logger.warning(
+                "alembic_version=%s is not in the migration graph (legacy residue); "
+                "resetting to baseline %s so the idempotent catch-up migration "
+                "restores the schema on upgrade head",
+                current, _BASELINE_REVISION,
+            )
+            # Overwrite directly via SQL: alembic's own stamp/upgrade would first
+            # try to resolve the orphan revision and crash with "Can't locate revision".
+            conn.execute(
+                _text("UPDATE alembic_version SET version_num = :v"),
+                {"v": _BASELINE_REVISION},
+            )
+    finally:
+        engine.dispose()
+
+
 def _run_alembic_upgrade():
     """Run alembic upgrade head (synchronous — called via run_in_executor)."""
     from alembic import command
     try:
         cfg = _get_alembic_config()
+        # Heal databases pinned to a revision that no longer exists before
+        # attempting the upgrade, otherwise upgrade head crashes on startup.
+        _reconcile_orphan_version(cfg)
         command.upgrade(cfg, "head")
         logger.info("Alembic migrations applied successfully")
     except Exception as e:
         logger.error("Alembic migration failed: %s", e)
         raise
-
-
-_BASELINE_REVISION = "a18c393c631a"
 
 
 def _stamp_head_if_needed():

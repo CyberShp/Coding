@@ -51,6 +51,8 @@ class Scheduler:
 
         # 从配置加载并注册观察点
         self._load_observers()
+        # 启动自检：注册表键 与 DEFAULT_CONFIG observer 键 漂移时告警（防止将来再漏 observer）
+        self._verify_registry_coverage()
 
     def _record_failure(self, name: str, exc: Exception) -> None:
         """Record an observer failure.
@@ -157,7 +159,20 @@ class Scheduler:
         from ..observers.abnormal_reset import AbnormalResetObserver
         from ..observers.custom_monitor import CustomMonitorObserver
         from ..observers.start_work import StartWorkObserver
-        
+        # 系统类观察点：此前 __init__.py 已导出但注册表遗漏，导致即使配置启用也永不实例化。
+        from ..observers.disk_io import DiskIoObserver
+        from ..observers.disk_space import DiskSpaceObserver
+        from ..observers.load_average import LoadAverageObserver
+        from ..observers.swap_usage import SwapUsageObserver
+        from ..observers.tcp_connections import TcpConnectionsObserver
+        from ..observers.zombie_processes import ZombieProcessesObserver
+        from ..observers.file_descriptors import FileDescriptorsObserver
+        from ..observers.thermal import ThermalObserver
+        from ..observers.dmesg_errors import DmesgErrorsObserver
+        from ..observers.system_uptime import SystemUptimeObserver
+        # network_errors 是 PortCountersObserver 的向后兼容别名（见 network_errors.py）。
+        from ..observers.port_counters import PortCountersObserver as NetworkErrorsObserver
+
         return {
             'error_code': ErrorCodeObserver,
             'link_status': LinkStatusObserver,
@@ -184,8 +199,47 @@ class Scheduler:
             'abnormal_reset': AbnormalResetObserver,
             'start_work': StartWorkObserver,
             'custom_monitor': CustomMonitorObserver,
+            # 系统类观察点（新增补全）
+            'disk_io': DiskIoObserver,
+            'disk_space': DiskSpaceObserver,
+            'load_average': LoadAverageObserver,
+            'network_errors': NetworkErrorsObserver,
+            'swap_usage': SwapUsageObserver,
+            'tcp_connections': TcpConnectionsObserver,
+            'zombie_processes': ZombieProcessesObserver,
+            'file_descriptors': FileDescriptorsObserver,
+            'thermal': ThermalObserver,
+            'dmesg_errors': DmesgErrorsObserver,
+            'system_uptime': SystemUptimeObserver,
         }
     
+    def _verify_registry_coverage(self) -> None:
+        """启动自检：比对观察点注册表键集合与 DEFAULT_CONFIG 的 observer 配置键集合。
+
+        任一方向不一致都 logger.warning 列出差异，以便及早发现漂移：
+          - 有配置键但注册表无实现 → 该 observer 配置后永不生效（危险，最需关注）；
+          - 有实现但 DEFAULT_CONFIG 未列出 → 默认配置缺省，仅在用户显式配置后启用。
+        仅告警，不抛异常，避免影响正常启动。
+        """
+        try:
+            from ..config.loader import ConfigLoader
+            registry_keys = set(self._get_observer_classes().keys())
+            default_keys = set((ConfigLoader.DEFAULT_CONFIG.get('observers', {}) or {}).keys())
+            missing_impl = sorted(default_keys - registry_keys)
+            not_in_defaults = sorted(registry_keys - default_keys)
+            if missing_impl:
+                logger.warning(
+                    "观察点漂移: DEFAULT_CONFIG 中以下键在注册表无实现，配置后不会生效: %s",
+                    missing_impl,
+                )
+            if not_in_defaults:
+                logger.warning(
+                    "观察点漂移: 以下已实现观察点未列入 DEFAULT_CONFIG（需显式配置才启用）: %s",
+                    not_in_defaults,
+                )
+        except Exception as e:
+            logger.debug("注册表自检跳过: %s", e)
+
     def register(self, observer: BaseObserver):
         """
         注册观察点
@@ -201,7 +255,13 @@ class Scheduler:
         """启动调度器"""
         self._running = True
         logger.info(f"调度器启动 ({len(self._observers)} 个观察点)")
-        
+
+        # 自更新启动确认/回滚：若上一次更新未确认，累加启动计数；反复启动失败则回滚。
+        # 正常无更新时为空操作。（可能触发回滚并 re-exec，不再返回）
+        self._updater.register_boot()
+        # 主循环首次成功迭代后确认上一次更新可用（删 .bak / 写 hash / 清标记）。
+        self._update_confirmed = False
+
         # 主循环
         while self._running:
             now = time.time()
@@ -276,6 +336,11 @@ class Scheduler:
                 if next_run < next_wakeup:
                     next_wakeup = next_run
             
+            # 一次主循环迭代成功跑完 → 视为新版本可稳定运行，确认上一次自更新。
+            if not self._update_confirmed:
+                self._updater.confirm_update()
+                self._update_confirmed = True
+
             # 休眠到下次执行时间
             sleep_time = max(0.1, next_wakeup - time.time())
             time.sleep(sleep_time)

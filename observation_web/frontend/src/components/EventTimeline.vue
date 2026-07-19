@@ -53,7 +53,24 @@
 
 <script setup>
 import { ref, onMounted, nextTick, watch, onBeforeUnmount } from 'vue'
-import * as echarts from 'echarts'
+import * as echarts from 'echarts/core'
+import { ScatterChart } from 'echarts/charts'
+import {
+  GridComponent,
+  TooltipComponent,
+  MarkAreaComponent,
+  DataZoomInsideComponent,
+} from 'echarts/components'
+import { CanvasRenderer } from 'echarts/renderers'
+
+echarts.use([
+  ScatterChart,
+  GridComponent,
+  TooltipComponent,
+  MarkAreaComponent,
+  DataZoomInsideComponent,
+  CanvasRenderer,
+])
 import api from '@/api'
 import { getObserverName } from '@/utils/alertTranslator'
 

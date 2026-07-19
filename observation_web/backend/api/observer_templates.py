@@ -93,7 +93,7 @@ async def test_execute_template(
         raise HTTPException(status_code=400, detail="Command contains disallowed pattern")
 
     try:
-        ret_code, stdout, stderr = conn.execute(cmd, timeout=body.timeout)
+        ret_code, stdout, stderr = await conn.execute_async(cmd, timeout=body.timeout)
         output = stdout or ""
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Command execution failed: {e}")

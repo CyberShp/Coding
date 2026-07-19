@@ -17,23 +17,43 @@ class TestAgentDeployer:
         deployer = AgentDeployer(mock_conn, config)
         return deployer, mock_conn
 
-    def test_check_deployed_when_connected(self):
+    def test_check_deployed_true_when_marker_present(self):
         deployer, conn = self._make_deployer(True)
-        conn.execute.return_value = (0, "main.py\n__init__.py\n", "")
-        result = deployer.check_deployed()
-        assert isinstance(result, bool)
+        # `test -d <path> && echo 'deployed'` succeeds and prints the marker.
+        conn.execute.return_value = (0, "deployed\n", "")
+        assert deployer.check_deployed() is True
 
-    def test_check_deployed_when_disconnected(self):
+    def test_check_deployed_false_when_path_missing(self):
+        deployer, conn = self._make_deployer(True)
+        # Directory absent → non-zero exit, no marker.
+        conn.execute.return_value = (1, "", "")
+        assert deployer.check_deployed() is False
+
+    def test_check_deployed_false_when_disconnected(self):
         deployer, conn = self._make_deployer(False)
-        try:
-            deployer.check_deployed()
-        except Exception:
-            pass  # Expected
+        # A disconnected SSHConnection.execute returns the (-1, "", "Not connected")
+        # error tuple rather than raising; check_deployed must degrade to False.
+        conn.execute.return_value = (-1, "", "Not connected")
+        assert deployer.check_deployed() is False
 
-    def test_check_running_pid_file_exists(self):
+    def test_check_running_true_when_pidfile_alive_and_cmdline_matches(self):
         deployer, conn = self._make_deployer(True)
-        conn.execute.return_value = (0, "12345\n", "")
-        result = deployer.check_running()
+
+        def execute_side_effect(cmd, **kw):
+            if "command -v systemctl" in cmd or "test -d /run/systemd/system" in cmd:
+                return (1, "", "")  # systemd unavailable → skip layer 1
+            if AGENT_PID_FILE in cmd and "cat" in cmd:
+                return (0, "12345\n", "")
+            if "kill -0 12345" in cmd:
+                return (0, "alive\n", "")
+            if "/proc/12345/cmdline" in cmd:
+                return (0, "python3 -m observation_points\n", "")
+            if "pgrep" in cmd:
+                return (1, "", "")
+            return (0, "", "")
+
+        conn.execute.side_effect = execute_side_effect
+        assert deployer.check_running() is True
 
     def test_check_running_no_pid_file(self):
         deployer, conn = self._make_deployer(True)
@@ -41,24 +61,49 @@ class TestAgentDeployer:
         result = deployer.check_running()
         assert result is False
 
-    def test_get_agent_status(self):
+    def test_get_agent_status_reports_deployed_and_running(self):
         deployer, conn = self._make_deployer(True)
-        conn.execute.return_value = (0, "12345\n", "")
+
+        def execute_side_effect(cmd, **kw):
+            if "echo 'deployed'" in cmd:
+                return (0, "deployed\n", "")
+            if "command -v systemctl" in cmd or "test -d /run/systemd/system" in cmd:
+                return (1, "", "")
+            if AGENT_PID_FILE in cmd and "cat" in cmd:
+                return (0, "12345\n", "")
+            if "kill -0 12345" in cmd:
+                return (0, "alive\n", "")
+            if "/proc/12345/cmdline" in cmd:
+                return (0, "python3 -m observation_points\n", "")
+            if "pgrep" in cmd:
+                return (1, "", "")
+            if "ps -o etime=" in cmd:
+                return (0, "01:23\n", "")
+            return (0, "", "")
+
+        conn.execute.side_effect = execute_side_effect
         status = deployer.get_agent_status()
-        assert isinstance(status, dict)
+
+        assert status["deployed"] is True
+        assert status["running"] is True
+        assert status["running_source"] == "pidfile"
+        assert status["pid"] == 12345
+        assert status["pidfile_present"] is True
+        assert status["uptime"] == "01:23"
 
     def test_stop_agent_no_process(self):
         deployer, conn = self._make_deployer(True)
         conn.execute.return_value = (1, "", "No such file")
-        deployer.stop_agent()  # Should not raise
+        result = deployer.stop_agent()
+        assert result["ok"] is True
+        # No PID was found, so no process was stopped.
+        assert "none" in result["message"]
 
     def test_start_agent_not_connected(self):
-        """BUG-MARKER: Starting agent without connection should fail cleanly."""
+        """Starting the agent without a connection must fail cleanly (no raise)."""
         deployer, conn = self._make_deployer(False)
-        try:
-            deployer.start_agent()
-        except Exception:
-            pass  # Expected
+        result = deployer.start_agent()
+        assert result == {"ok": False, "error": "Not connected"}
 
     @patch.object(AgentDeployer, "_build_package", return_value="/tmp/test.tar.gz")
     @patch("builtins.open")

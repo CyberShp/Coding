@@ -46,7 +46,9 @@ class TaskScheduler:
             
             # Load existing tasks
             await self._load_tasks()
-            
+            # Load auto-monitor query templates (custom observers)
+            await self._load_auto_monitors()
+
         except Exception as e:
             logger.error(f"Failed to start scheduler: {e}")
             sys_error("scheduler", "Failed to start task scheduler", {"error": str(e)})
@@ -68,9 +70,134 @@ class TaskScheduler:
             
             for task in tasks:
                 self._add_job(task)
-            
+
             logger.info(f"Loaded {len(tasks)} scheduled tasks")
-    
+
+    # ------------------------------------------------------------------
+    # Auto-monitor query templates (custom observers running from the backend)
+    # ------------------------------------------------------------------
+
+    async def _load_auto_monitors(self):
+        """Register every auto_monitor query template as a periodic job."""
+        from ..models.query import QueryTemplateModel
+        async with _db_module.AsyncSessionLocal() as db:
+            rows = (await db.execute(
+                select(QueryTemplateModel).where(QueryTemplateModel.auto_monitor == True)  # noqa: E712
+            )).scalars().all()
+            for t in rows:
+                self.add_auto_monitor(t)
+            logger.info("Loaded %d auto-monitors", len(rows))
+
+    def add_auto_monitor(self, template) -> None:
+        """(Re)register an auto_monitor query template as an interval job.
+
+        Called on startup and whenever a template is created/updated so the
+        "定时监测" toggle in CustomQuery actually results in periodic execution
+        with alerting — previously auto_monitor/monitor_interval were stored but
+        never consumed by anything.
+        """
+        if not self._running:
+            return
+        job_id = f"automon_{template.id}"
+        if not getattr(template, "auto_monitor", False):
+            self.remove_auto_monitor(template.id)
+            return
+        from apscheduler.triggers.interval import IntervalTrigger
+        interval = max(int(template.monitor_interval or 300), 30)
+        self.scheduler.add_job(
+            self._execute_auto_monitor,
+            trigger=IntervalTrigger(seconds=interval),
+            id=job_id,
+            args=[template.id],
+            name=f"automon:{template.name}",
+            replace_existing=True,
+            coalesce=True,
+            max_instances=1,
+            misfire_grace_time=30,
+        )
+        logger.info("Registered auto-monitor '%s' every %ss", template.name, interval)
+
+    def remove_auto_monitor(self, template_id: int) -> None:
+        """Remove an auto-monitor job (template disabled or deleted)."""
+        if not self._running:
+            return
+        job_id = f"automon_{template_id}"
+        if self.scheduler.get_job(job_id):
+            self.scheduler.remove_job(job_id)
+            logger.info("Removed auto-monitor job %s", job_id)
+
+    async def _execute_auto_monitor(self, template_id: int):
+        """Run one auto-monitor cycle: execute commands, apply rule, alert on anomaly."""
+        from ..models.query import QueryTemplateModel
+        async with _db_module.AsyncSessionLocal() as db:
+            tmpl = (await db.execute(
+                select(QueryTemplateModel).where(QueryTemplateModel.id == template_id)
+            )).scalar()
+            if not tmpl or not tmpl.auto_monitor:
+                self.remove_auto_monitor(template_id)
+                return
+
+            try:
+                commands = json.loads(tmpl.commands) if tmpl.commands else []
+            except (ValueError, TypeError):
+                commands = []
+            try:
+                arrays = json.loads(tmpl.monitor_arrays) if tmpl.monitor_arrays else []
+            except (ValueError, TypeError):
+                arrays = []
+
+            ssh_pool = get_ssh_pool()
+            if not arrays:
+                arrays = [aid for aid, c in ssh_pool._connections.items() if c.is_connected()]
+
+            for array_id in arrays:
+                conn = ssh_pool.get_connection(array_id)
+                if not conn or not conn.is_connected():
+                    continue
+                for cmd in commands:
+                    try:
+                        exit_code, stdout, stderr = await conn.execute_async(cmd)
+                        output = (stdout or "") + (stderr or "")
+                        await self._alert_from_rule(db, tmpl, array_id, cmd, output)
+                    except Exception as e:
+                        logger.warning("Auto-monitor %s on %s failed: %s", tmpl.name, array_id, e)
+            await db.commit()
+
+    async def _alert_from_rule(self, db, template, array_id: str, cmd: str, output: str) -> None:
+        """Apply a query template's rule to command output; create an Alert on anomaly."""
+        if not getattr(template, "alert_on_mismatch", True):
+            return
+        from .query_engine import QueryEngine
+        from ..models.query import QueryRule, RuleType
+        from ..core.alert_store import get_alert_store
+        from ..models.alert import AlertCreate, AlertLevel
+        # Alerting must never break the monitoring run itself.
+        try:
+            try:
+                rule = QueryRule(
+                    rule_type=RuleType(template.rule_type) if template.rule_type else RuleType.VALID_MATCH,
+                    pattern=template.pattern or "",
+                    expect_match=template.expect_match if template.expect_match is not None else True,
+                )
+            except ValueError:
+                rule = QueryRule(pattern=template.pattern or "")
+            result = QueryEngine()._apply_rule(output, rule)
+            if result.is_normal:
+                return
+            await get_alert_store().create_alert(db, AlertCreate(
+                array_id=array_id,
+                observer_name=f"custom:{template.name}",
+                level=AlertLevel.WARNING,
+                message=f"自定义监测 '{template.name}' 异常：命令 `{cmd}` 输出不符合预期",
+                details={"command": cmd, "output": output[:500], "matched": result.matched_values},
+                timestamp=datetime.now(),
+            ))
+        except Exception:
+            logger.warning(
+                "Rule-based alerting failed for template '%s' on %s",
+                getattr(template, "name", "?"), array_id, exc_info=True,
+            )
+
     def _add_job(self, task: ScheduledTaskModel):
         """Add a job to the scheduler"""
         try:
@@ -104,7 +231,12 @@ class TaskScheduler:
                 id=job_id,
                 args=[task.id],
                 name=task.name,
-                replace_existing=True
+                replace_existing=True,
+                # A long multi-array run must not be silently skipped by the 1s
+                # default misfire grace; coalesce a backlog into a single run.
+                misfire_grace_time=3600,
+                coalesce=True,
+                max_instances=1,
             )
             
             # Update next run time
@@ -165,6 +297,7 @@ class TaskScheduler:
 
                 # Resolve commands once before iterating arrays
                 commands_to_run: List[str] = []
+                template = None  # set when the task is backed by a query template
                 if task.command:
                     commands_to_run = [task.command]
                 elif task.query_template_id:
@@ -209,6 +342,12 @@ class TaskScheduler:
                             elif stderr:
                                 # exit_code=0 but stderr has content (warning, not failure)
                                 errors.append(f"[{array_id}] {stderr}")
+                            # Template-backed tasks apply their matching rule and
+                            # raise a real alert on anomaly (not just store stdout).
+                            if template is not None:
+                                await self._alert_from_rule(
+                                    db, template, array_id, cmd, (stdout or "") + (stderr or "")
+                                )
                     except Exception as e:
                         errors.append(f"{array_id}: {str(e)}")
                 
@@ -273,7 +412,7 @@ class TaskScheduler:
             return None
         
         # Update fields
-        update_data = data.dict(exclude_unset=True)
+        update_data = data.model_dump(exclude_unset=True)
         for field, value in update_data.items():
             setattr(task, field, value)
         

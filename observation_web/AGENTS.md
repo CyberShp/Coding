@@ -1,30 +1,22 @@
-<!-- CAT-CAFE-GOVERNANCE-START -->
-> Pack version: 1.3.0 | Provider: codex
+<!-- PROJECT-GOVERNANCE-START -->
+> Provider: codex
 
-## Cat Cafe Governance Rules (Auto-managed)
+## Observation Web 协作与工程纪律
 
-### Hard Constraints (immutable)
-- **Public local defaults**: use frontend 5174 and API 8002. Do NOT use 3003/3004 (reserved for Cat Cafe).
-- **Redis port 6399** is Cat Cafe's production Redis. Never connect to it from external projects. Use 6398 for dev/test.
-- **No self-review**: The same individual cannot review their own code. Cross-family review preferred.
-- **Identity is constant**: Never impersonate another cat. Identity is a hard constraint.
+### 硬约束（不可变）
+- **本地默认端口**：前端 5174、API 8002。端口以根目录 `config.json` 的 `server.port` 为单一真相源；脚本能读 config.json 就读，不要再散落写死端口。
+- **No self-review**：不得自行评审自己的代码，优先交叉评审。
 
-### Collaboration Standards
-- A2A handoff uses five-tuple: What / Why / Tradeoff / Open Questions / Next Action
-- Vision Guardian: Read original requirements before starting. AC completion ≠ feature complete.
-- Review flow: quality-gate → request-review → receive-review → merge-gate
-- Skills are available via symlinked cat-cafe-skills/ — load the relevant skill before each workflow step
-- Shared rules: See cat-cafe-skills/refs/shared-rules.md for full collaboration contract
+### 质量纪律（优先于"先试最简单的做法"）
+- **Bug 先找根因再修**：复现 → 看日志 → 理调用链 → 确认根因 → 再修。不做 guess-and-patch。
+- **方向不确定时**：停 → 查 → 问 → 确认 → 再动手，不要"先跑起来看看"。
+- **"完成"需要证据**：测试通过 / 截图 / 日志。修 bug 遵循先红后绿。
 
-### Quality Discipline (overrides "try simplest approach first")
-- **Bug: find root cause before fixing**. No guess-and-patch. Steps: reproduce → logs → call chain → confirm root cause → fix
-- **Uncertain direction: stop → search → ask → confirm → then act**. Never "just try it first"
-- **"Done" requires evidence** (tests pass / screenshot / logs). Bug fix = red test first, then green
+### 文档纪律
+- 描述须与实现一致。改了行为就同步改 README/docs；发现文档漂移就据实修正，不保留过时宣称。
+- 分层信息架构：治理文件（本文件，简短）→ docs/（细节）。
+<!-- PROJECT-GOVERNANCE-END -->
 
-### Knowledge Engineering
-- Documents use YAML frontmatter (feature_ids, topics, doc_kind, created)
-- Three-layer info architecture: CLAUDE.md (≤100 lines) → Skills (on-demand) → refs/
-- Backlog: BACKLOG.md (hot) → Feature files (warm) → raw docs (cold)
-- Feature lifecycle: kickoff → discussion → implementation → review → completion
-- SOP: See docs/SOP.md for the 6-step workflow
-<!-- CAT-CAFE-GOVERNANCE-END -->
+## 交流约定（Communication）
+
+- **默认使用中文与用户交流**：所有回复、说明、报告、提问均使用中文。代码、标识符、日志、Git 提交信息等技术产物仍按各自惯例（通常英文）。

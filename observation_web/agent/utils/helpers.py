@@ -4,10 +4,14 @@
 提供常用的辅助功能：命令执行、文件读取、解析等。
 """
 
+import json
 import logging
+import os
 import re
 import subprocess
 import sys
+import tempfile
+import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
@@ -15,6 +19,88 @@ logger = logging.getLogger(__name__)
 
 # 默认子进程超时时间（秒）
 DEFAULT_TIMEOUT = 10
+
+# ---------------------------------------------------------------------------
+# 持久化观察点文件读取位置（跨重启）
+#
+# 观察点扫描系统日志时以字节偏移记录读取进度。若仅存内存，Agent 重启后归零，
+# 会重新扫描并重复上报历史事件。这里提供统一的加载/保存工具，把「路径 -> {inode, pos}」
+# 持久化到本地状态目录，重启后恢复；inode 变化（日志轮转）时调用方应从 0 重新读取。
+# ---------------------------------------------------------------------------
+
+# 候选状态目录（按优先级），可用 OBSERVATION_POINTS_STATE_DIR 覆盖
+_DEFAULT_STATE_DIRS = ["/var/lib/observation-points"]
+_STATE_LOCK = threading.Lock()
+
+
+def get_state_dir() -> Path:
+    """返回可写的 Agent 本地状态目录。
+
+    优先级：环境变量 OBSERVATION_POINTS_STATE_DIR -> /var/lib/observation-points
+    -> 系统临时目录下的 observation-points（退化方案）。
+    """
+    candidates: List[Path] = []
+    override = os.environ.get("OBSERVATION_POINTS_STATE_DIR")
+    if override:
+        candidates.append(Path(override))
+    candidates.extend(Path(d) for d in _DEFAULT_STATE_DIRS)
+
+    for c in candidates:
+        try:
+            c.mkdir(parents=True, exist_ok=True)
+            if os.access(str(c), os.W_OK):
+                return c
+        except Exception:
+            continue
+
+    fallback = Path(tempfile.gettempdir()) / "observation-points"
+    try:
+        fallback.mkdir(parents=True, exist_ok=True)
+    except Exception as e:
+        logger.debug(f"创建退化状态目录失败: {fallback}, 错误: {e}")
+    return fallback
+
+
+def _positions_file() -> Path:
+    return get_state_dir() / "positions.json"
+
+
+def _read_positions_file() -> Dict[str, Any]:
+    pf = _positions_file()
+    try:
+        if pf.exists():
+            data = json.loads(pf.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                return data
+    except Exception as e:
+        logger.debug(f"读取位置状态文件失败: {pf}, 错误: {e}")
+    return {}
+
+
+def load_positions(namespace: str) -> Dict[str, Dict[str, int]]:
+    """加载指定命名空间（通常为观察点名）的文件读取位置。
+
+    Returns:
+        {path: {'inode': int, 'pos': int}}，无记录时返回空字典。
+    """
+    with _STATE_LOCK:
+        data = _read_positions_file()
+    ns = data.get(namespace, {})
+    return ns if isinstance(ns, dict) else {}
+
+
+def save_positions(namespace: str, positions: Dict[str, Dict[str, int]]) -> None:
+    """持久化指定命名空间的文件读取位置（含 inode），原子写入避免写坏。"""
+    with _STATE_LOCK:
+        data = _read_positions_file()
+        data[namespace] = positions
+        pf = _positions_file()
+        try:
+            tmp = pf.with_suffix(".json.tmp")
+            tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+            os.replace(str(tmp), str(pf))
+        except Exception as e:
+            logger.debug(f"写入位置状态文件失败: {pf}, 错误: {e}")
 
 
 # PATH 初始化，用于 SSH/服务环境下 os_cli 等命令找不到时

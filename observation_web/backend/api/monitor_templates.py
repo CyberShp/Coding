@@ -5,6 +5,7 @@ CRUD for custom monitor templates and deploy to arrays.
 Admin-only (require_admin).
 """
 
+import asyncio
 import json
 import logging
 from typing import Any, Dict, List, Optional
@@ -202,9 +203,57 @@ async def delete_template(
         raise HTTPException(status_code=404, detail="Template not found")
     if m.is_builtin:
         raise HTTPException(status_code=400, detail="Builtin templates cannot be deleted")
+    removed_name = m.name
     await db.delete(m)
     await db.commit()
+
+    # Best-effort: drop this monitor from every connected array's agent config so
+    # a deleted template stops running (otherwise it lingers as a zombie until the
+    # next manual redeploy).
+    try:
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, _remove_monitor_from_connected_arrays, removed_name)
+    except Exception:
+        logger.warning("Zombie-monitor recovery failed for %s", removed_name, exc_info=True)
+
     return {"ok": True}
+
+
+def _remove_monitor_from_connected_arrays(monitor_name: str) -> None:
+    """Remove a custom monitor by name from every connected array and restart it.
+
+    Synchronous (SSH) — run via run_in_executor.  Idempotent: arrays that don't
+    have the monitor are skipped.
+    """
+    import base64
+    from ..core.agent_deployer import AgentDeployer
+
+    config = get_config()
+    config_path = config.remote.agent_config_path
+    ssh_pool = get_ssh_pool()
+    for array_id, conn in list(ssh_pool._connections.items()):
+        try:
+            if not conn or not conn.is_connected():
+                continue
+            content = conn.read_file(config_path)
+            if not content:
+                continue
+            config_data = json.loads(content)
+            existing = config_data.get("custom_monitors", [])
+            filtered = [
+                m for m in existing
+                if not (isinstance(m, dict) and m.get("name") == monitor_name)
+            ]
+            if len(filtered) == len(existing):
+                continue  # this array didn't have it
+            config_data["custom_monitors"] = filtered
+            payload = json.dumps(config_data, indent=2, ensure_ascii=False)
+            encoded = base64.b64encode(payload.encode("utf-8")).decode("ascii")
+            conn.execute(f"echo '{encoded}' | base64 -d > {config_path}")
+            AgentDeployer(conn, config).restart_agent()
+            logger.info("Removed deleted monitor '%s' from %s", monitor_name, array_id)
+        except Exception:
+            logger.warning("Failed removing monitor '%s' from %s", monitor_name, array_id, exc_info=True)
 
 
 # ---------------------------------------------------------------------------
@@ -261,8 +310,9 @@ async def deploy_templates(
 
     ssh_pool = get_ssh_pool()
     config = get_config()
-    agent_path = config.remote.agent_deploy_path
-    config_path = f"{agent_path}/config.json"
+    # Must write the config the agent actually reads (/etc/...), not the code
+    # deploy directory — otherwise the agent never loads these custom_monitors.
+    config_path = config.remote.agent_config_path
 
     results = []
     for array_id in array_ids:
@@ -273,7 +323,17 @@ async def deploy_templates(
         try:
             content = conn.read_file(config_path)
             config_data = json.loads(content) if content else {}
-            config_data["custom_monitors"] = custom_monitors
+            # Merge by name (upsert) instead of overwriting the whole list, so
+            # deploying template-set B doesn't wipe template-set A already on the
+            # array.  Same-name templates are updated; others are preserved.
+            existing = config_data.get("custom_monitors", [])
+            by_name = {
+                m.get("name"): m for m in existing
+                if isinstance(m, dict) and m.get("name")
+            }
+            for m in custom_monitors:
+                by_name[m["name"]] = m
+            config_data["custom_monitors"] = list(by_name.values())
 
             if observer_overrides:
                 observers = config_data.setdefault("observers", {})

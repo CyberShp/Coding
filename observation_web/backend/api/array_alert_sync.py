@@ -8,6 +8,7 @@ Owns:
 - POST /arrays/{array_id}/refresh
 """
 import asyncio
+import hashlib
 import json
 import logging
 from datetime import datetime
@@ -109,6 +110,86 @@ async def _update_sync_position(
     return True
 
 
+async def _set_sync_position(db: AsyncSession, array_id: str, new_position: int) -> None:
+    """Force-set the sync cursor (single-instance; no compare-and-swap).
+
+    The old CAS path broke on log rotation: the rotation branch reset the local
+    cursor to 0 and then compared-and-swapped against 0 while the DB still held
+    the old large value, so the write silently failed and the cursor got stuck —
+    re-reading the same tail forever.  The service runs single-instance
+    (workers=1, one sync loop), so an unconditional set is both correct and
+    rotation-safe.
+    """
+    result = await db.execute(
+        select(SyncStateModel).where(SyncStateModel.array_id == array_id)
+    )
+    row = result.scalar_one_or_none()
+    if row is None:
+        db.add(SyncStateModel(
+            array_id=array_id,
+            last_position=new_position,
+            last_sync_at=datetime.now(),
+        ))
+    else:
+        row.last_position = new_position
+        row.last_sync_at = datetime.now()
+    await db.flush()
+
+
+def _parse_alert_ts(timestamp_str: str) -> datetime:
+    """Parse an agent alert timestamp into a naive local datetime.
+
+    The backend compares timestamps against ``datetime.now()`` (naive local),
+    so aware timestamps are normalised to naive to avoid aware/naive comparison
+    errors.  Falls back to now() on unparseable input.
+    """
+    try:
+        return datetime.fromisoformat(
+            timestamp_str.replace('Z', '+00:00').replace('+00:00', '')
+        )
+    except Exception:
+        return datetime.now()
+
+
+def _dedup_key(timestamp_str: str, observer: str, message: str) -> str:
+    """Build a dedup key from the FULL message (hashed), not a 50-char prefix.
+
+    The old key truncated the message to 50 chars, which merged distinct alerts
+    that shared a common prefix (silent alert loss).  Hashing the whole message
+    fixes that while keeping the key compact.
+    """
+    digest = hashlib.md5((message or "").encode("utf-8", "ignore")).hexdigest()
+    return f"{timestamp_str}|{observer}|{digest}"
+
+
+def _apply_observer_status(status_obj, parsed_alerts: List[Dict[str, Any]]) -> None:
+    """Update the in-memory observer_status map from parsed alerts (refresh path)."""
+    for alert in parsed_alerts[-200:]:
+        observer = alert.get('observer_name', '')
+        if not observer:
+            continue
+        level = alert.get('level', 'info')
+        message = alert.get('message', '')
+        alert_ts = alert.get('timestamp', datetime.now().isoformat())
+        if level in ('error', 'critical'):
+            status_obj.observer_status[observer] = {
+                'status': 'error', 'message': message[:100], 'last_active_ts': alert_ts,
+            }
+        elif level == 'warning':
+            if observer not in status_obj.observer_status or \
+               status_obj.observer_status[observer].get('status') != 'error':
+                status_obj.observer_status[observer] = {
+                    'status': 'warning', 'message': message[:100], 'last_active_ts': alert_ts,
+                }
+        else:
+            if observer not in status_obj.observer_status:
+                status_obj.observer_status[observer] = {
+                    'status': 'ok', 'message': '', 'last_active_ts': alert_ts,
+                }
+            else:
+                status_obj.observer_status[observer]['last_active_ts'] = alert_ts
+
+
 # ---------------------------------------------------------------------------
 # Auto-ack on new alerts
 # ---------------------------------------------------------------------------
@@ -185,43 +266,94 @@ async def _auto_ack_new_alerts(
 # Core sync function (used by core/alert_sync.py)
 # ---------------------------------------------------------------------------
 
+# Max lines pulled per SSH round; a large backlog is read across several
+# batches so we never load an unbounded burst fully into memory, and — unlike
+# the old `tail -n 500` — never silently drop the lines in between.
+MAX_LINES_PER_BATCH = 5000
+
+
 async def sync_array_alerts(
     array_id: str,
     db: AsyncSession,
     conn: "SSHConnection",
     config,
     full_sync: bool = False,
+    status_obj=None,
 ) -> int:
     """
     Sync alerts from array's alerts.log to DB.
+
+    Reads every new line since the last cursor using ``tail -n +K`` (line-offset
+    based, batched) so alert bursts are never truncated.  Handles log rotation
+    by resyncing from the start, dedups against an adaptive window using the full
+    message hash, force-advances the cursor, and stamps a heartbeat on success.
+
+    When ``status_obj`` is provided (refresh endpoint) the in-memory observer
+    status and active issues are updated too.
+
     Returns count of new alerts synced. Raises on fatal error.
     """
     from ..core.alert_store import get_alert_store
     from ..models.alert import AlertCreate, AlertLevel
     from .websocket import broadcast_alert
+    from .ingest import touch_heartbeat
 
     log_path = config.remote.agent_log_path
-    new_alerts_count = 0
 
     exit_code, total_str, _ = await conn.execute_async(f"wc -l < {log_path} 2>/dev/null", timeout=5)
     if exit_code != 0:
         return 0
+    try:
+        total_lines = int(total_str.strip())
+    except (ValueError, AttributeError):
+        return 0
 
-    total_lines = int(total_str.strip())
-    last_pos = await _get_sync_position(db, array_id)
+    # A successful wc means the collection channel to the agent is alive.
+    await touch_heartbeat(db, array_id)
 
-    if full_sync or total_lines < last_pos:
-        last_pos = 0
+    db_pos = await _get_sync_position(db, array_id)
+    rotated = total_lines < db_pos
+    if rotated:
+        logger.info(
+            "Log rotation/truncation detected for %s (total=%d < cursor=%d); resyncing from start",
+            array_id, total_lines, db_pos,
+        )
+    start_pos = 0 if (full_sync or rotated) else db_pos
 
-    new_count = total_lines - last_pos
-    content = ""
-    if new_count > 0:
-        read_count = min(new_count, 500)
-        exit_code, content, _ = await conn.execute_async(
-            f"tail -n {read_count} {log_path} 2>/dev/null", timeout=10
+    new_count = total_lines - start_pos
+    if new_count <= 0:
+        # Nothing new (or file unchanged) — still keep the cursor consistent.
+        await _set_sync_position(db, array_id, total_lines)
+        return 0
+
+    alert_store = get_alert_store()
+    # Adaptive dedup window: cover at least this sync's own volume (not a fixed
+    # 100), capped to avoid pulling an unbounded history into memory.
+    dedup_limit = min(max(new_count + 100, 200), 5000)
+    existing_alerts = await alert_store.get_alerts(db, array_id=array_id, limit=dedup_limit)
+    existing_keys = {
+        _dedup_key(a.timestamp.isoformat(), a.observer_name, a.message or "")
+        for a in existing_alerts
+    }
+
+    if new_count > MAX_LINES_PER_BATCH:
+        logger.warning(
+            "Large alert backlog for %s: %d new lines, reading in batches of %d",
+            array_id, new_count, MAX_LINES_PER_BATCH,
         )
 
-    if content and content.strip():
+    total_new = 0
+    all_parsed: List[Dict[str, Any]] = []
+    pos = start_pos
+    while pos < total_lines:
+        batch = min(MAX_LINES_PER_BATCH, total_lines - pos)
+        exit_code, content, _ = await conn.execute_async(
+            f"tail -n +{pos + 1} {log_path} 2>/dev/null | head -n {batch}", timeout=20
+        )
+        pos += batch
+        if exit_code != 0 or not content or not content.strip():
+            continue
+
         parsed_alerts = []
         for line in content.strip().split('\n'):
             if not line.strip():
@@ -230,61 +362,59 @@ async def sync_array_alerts(
                 parsed_alerts.append(json.loads(line))
             except Exception:
                 pass
+        if not parsed_alerts:
+            continue
+        all_parsed.extend(parsed_alerts)
 
-        if parsed_alerts:
-            alert_store = get_alert_store()
-            existing_alerts = await alert_store.get_alerts(db, array_id=array_id, limit=100)
-            existing_keys = {
-                f"{a.timestamp.isoformat()}_{a.observer_name}_{a.message[:50]}"
-                for a in existing_alerts
-            }
+        new_alerts = []
+        for alert in parsed_alerts:
+            timestamp_str = alert.get('timestamp', '')
+            if not timestamp_str:
+                continue
+            key = _dedup_key(timestamp_str, alert.get('observer_name', ''), alert.get('message', ''))
+            if key in existing_keys:
+                continue
+            existing_keys.add(key)
+            try:
+                level_str = alert.get('level', 'info').lower()
+                level = AlertLevel(level_str) if level_str in [l.value for l in AlertLevel] else AlertLevel.INFO
+                new_alerts.append(AlertCreate(
+                    array_id=array_id,
+                    observer_name=alert.get('observer_name', 'unknown'),
+                    level=level,
+                    message=alert.get('message', ''),
+                    details=alert.get('details', {}),
+                    timestamp=_parse_alert_ts(timestamp_str),
+                ))
+            except Exception as e:
+                sys_error("arrays", "Failed to parse alert", {"error": str(e)})
 
-            new_alerts = []
-            for alert in parsed_alerts:
-                timestamp_str = alert.get('timestamp', '')
-                if not timestamp_str:
-                    continue
-                dedup_key = f"{timestamp_str}_{alert.get('observer_name', '')}_{alert.get('message', '')[:50]}"
-                if dedup_key in existing_keys:
-                    continue
-                existing_keys.add(dedup_key)
+        if new_alerts:
+            cnt, created_db_alerts = await alert_store.create_alerts_batch(db, new_alerts)
+            total_new += cnt
+            await _auto_ack_new_alerts(db, array_id, created_db_alerts)
+            for db_alert in created_db_alerts[-50:]:
+                await broadcast_alert({
+                    'id': db_alert.id,
+                    'array_id': db_alert.array_id,
+                    'observer_name': db_alert.observer_name,
+                    'level': db_alert.level,
+                    'message': db_alert.message,
+                    'timestamp': db_alert.timestamp.isoformat() if db_alert.timestamp else None,
+                    'created_at': db_alert.created_at.isoformat() if db_alert.created_at else None,
+                })
 
-                try:
-                    level_str = alert.get('level', 'info').lower()
-                    level = AlertLevel(level_str) if level_str in [l.value for l in AlertLevel] else AlertLevel.INFO
-                    alert_create = AlertCreate(
-                        array_id=array_id,
-                        observer_name=alert.get('observer_name', 'unknown'),
-                        level=level,
-                        message=alert.get('message', ''),
-                        details=alert.get('details', {}),
-                        timestamp=datetime.fromisoformat(
-                            timestamp_str.replace('Z', '+00:00').replace('+00:00', '')
-                        ),
-                    )
-                    new_alerts.append(alert_create)
-                except Exception as e:
-                    sys_error("arrays", "Failed to parse alert", {"error": str(e)})
+    if status_obj is not None and all_parsed:
+        _apply_observer_status(status_obj, all_parsed)
+        for alert in all_parsed:
+            _update_active_issues(status_obj, alert)
+        status_obj.active_issues = await _derive_active_issues_from_db(db, array_id)
 
-            if new_alerts:
-                new_alerts_count, created_db_alerts = await alert_store.create_alerts_batch(db, new_alerts)
-                await _auto_ack_new_alerts(db, array_id, created_db_alerts)
-                alerts_to_broadcast = created_db_alerts[-50:]
-                if len(created_db_alerts) > 50:
-                    logger.warning("Alert burst for %s: %d new alerts, broadcasting last 50", array_id, len(created_db_alerts))
-                for db_alert in alerts_to_broadcast:
-                    await broadcast_alert({
-                        'id': db_alert.id,
-                        'array_id': db_alert.array_id,
-                        'observer_name': db_alert.observer_name,
-                        'level': db_alert.level,
-                        'message': db_alert.message,
-                        'timestamp': db_alert.timestamp.isoformat() if db_alert.timestamp else None,
-                        'created_at': db_alert.created_at.isoformat() if db_alert.created_at else None,
-                    })
-
-    await _update_sync_position(db, array_id, total_lines, last_pos)
-    return new_alerts_count
+    # Force-advance the cursor regardless of prior value (rotation-safe).
+    await _set_sync_position(db, array_id, total_lines)
+    if total_new:
+        sys_info("arrays", f"Synced {total_new} new alerts for {array_id}")
+    return total_new
 
 
 # ---------------------------------------------------------------------------
@@ -361,139 +491,14 @@ async def refresh_array(
         agent_info = {"running": False}
         status_obj.agent_running = False
 
-    log_path = config.remote.agent_log_path
     new_alerts_count = 0
-
     try:
-        exit_code, total_str, _ = await conn.execute_async(f"wc -l < {log_path} 2>/dev/null", timeout=5)
-        if exit_code != 0:
-            status_obj.last_refresh = datetime.now()
-            return {
-                "state": status_obj.state.value if hasattr(status_obj.state, 'value') else status_obj.state,
-                "agent_deployed": status_obj.agent_deployed,
-                "agent_running": status_obj.agent_running,
-                "agent_pid": agent_info.get("pid"),
-                "new_alerts_synced": 0,
-                "observer_status": status_obj.observer_status,
-                "last_refresh": status_obj.last_refresh.isoformat() if status_obj.last_refresh else None,
-            }
-
-        total_lines = int(total_str.strip())
-        last_pos = await _get_sync_position(db, array_id)
-
-        if full_sync or total_lines < last_pos:
-            last_pos = 0
-
-        new_count = total_lines - last_pos
-        content = ""
-        if new_count > 0:
-            read_count = min(new_count, 500)
-            exit_code, content, _ = await conn.execute_async(
-                f"tail -n {read_count} {log_path} 2>/dev/null", timeout=10
-            )
-
-        if content and content.strip():
-            parsed_alerts = []
-            for line in content.strip().split('\n'):
-                if not line.strip():
-                    continue
-                try:
-                    alert = json.loads(line)
-                    parsed_alerts.append(alert)
-                except Exception:
-                    pass
-
-            if parsed_alerts:
-                alert_store = get_alert_store()
-                existing_alerts = await alert_store.get_alerts(db, array_id=array_id, limit=100)
-                existing_keys = set()
-                for a in existing_alerts:
-                    key = f"{a.timestamp.isoformat()}_{a.observer_name}_{a.message[:50]}"
-                    existing_keys.add(key)
-
-                new_alerts = []
-                for alert in parsed_alerts:
-                    timestamp_str = alert.get('timestamp', '')
-                    if not timestamp_str:
-                        continue
-                    dedup_key = f"{timestamp_str}_{alert.get('observer_name', '')}_{alert.get('message', '')[:50]}"
-                    if dedup_key in existing_keys:
-                        continue
-                    existing_keys.add(dedup_key)
-                    try:
-                        level_str = alert.get('level', 'info').lower()
-                        level = AlertLevel(level_str) if level_str in [l.value for l in AlertLevel] else AlertLevel.INFO
-                        alert_create = AlertCreate(
-                            array_id=array_id,
-                            observer_name=alert.get('observer_name', 'unknown'),
-                            level=level,
-                            message=alert.get('message', ''),
-                            details=alert.get('details', {}),
-                            timestamp=datetime.fromisoformat(
-                                timestamp_str.replace('Z', '+00:00').replace('+00:00', '')
-                            ),
-                        )
-                        new_alerts.append(alert_create)
-                    except Exception as e:
-                        sys_error("arrays", "Failed to parse alert", {"error": str(e)})
-
-                if new_alerts:
-                    new_alerts_count, created_db_alerts = await alert_store.create_alerts_batch(db, new_alerts)
-                    await _auto_ack_new_alerts(db, array_id, created_db_alerts)
-                    sys_info("arrays", f"Synced {new_alerts_count} new alerts for {array_id}")
-
-                    alerts_to_broadcast = created_db_alerts[-50:]
-                    if len(created_db_alerts) > 50:
-                        logger.warning("Alert burst for %s: %d new alerts, broadcasting last 50", array_id, len(created_db_alerts))
-                    for db_alert in alerts_to_broadcast:
-                        await broadcast_alert({
-                            'id': db_alert.id,
-                            'array_id': db_alert.array_id,
-                            'observer_name': db_alert.observer_name,
-                            'level': db_alert.level,
-                            'message': db_alert.message,
-                            'timestamp': db_alert.timestamp.isoformat() if db_alert.timestamp else None,
-                            'created_at': db_alert.created_at.isoformat() if db_alert.created_at else None,
-                        })
-
-                for alert in parsed_alerts[-50:]:
-                    observer = alert.get('observer_name', '')
-                    level = alert.get('level', 'info')
-                    message = alert.get('message', '')
-                    alert_ts = alert.get('timestamp', datetime.now().isoformat())
-
-                    if observer:
-                        if level in ('error', 'critical'):
-                            status_obj.observer_status[observer] = {
-                                'status': 'error',
-                                'message': message[:100],
-                                'last_active_ts': alert_ts,
-                            }
-                        elif level == 'warning':
-                            if observer not in status_obj.observer_status or \
-                               status_obj.observer_status[observer].get('status') != 'error':
-                                status_obj.observer_status[observer] = {
-                                    'status': 'warning',
-                                    'message': message[:100],
-                                    'last_active_ts': alert_ts,
-                                }
-                        else:
-                            if observer not in status_obj.observer_status:
-                                status_obj.observer_status[observer] = {
-                                    'status': 'ok',
-                                    'message': '',
-                                    'last_active_ts': alert_ts,
-                                }
-                            else:
-                                status_obj.observer_status[observer]['last_active_ts'] = alert_ts
-
-                for alert in parsed_alerts:
-                    _update_active_issues(status_obj, alert)
-
-                status_obj.active_issues = await _derive_active_issues_from_db(db, array_id)
-
-        await _update_sync_position(db, array_id, total_lines, last_pos)
-
+        # Single source of truth for alert syncing (line-offset based, batched,
+        # rotation-safe, adaptive dedup, heartbeat on success).  status_obj is
+        # passed so observer_status / active_issues get updated for the UI.
+        new_alerts_count = await sync_array_alerts(
+            array_id, db, conn, config, full_sync=full_sync, status_obj=status_obj
+        )
     except Exception as e:
         sys_error("arrays", f"Refresh failed for {array_id}", {"error": str(e)})
 

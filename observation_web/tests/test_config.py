@@ -2,6 +2,7 @@
 import json
 import os
 import tempfile
+from pathlib import Path
 import pytest
 from backend.config import AppConfig, get_config, DatabaseConfig, SSHConfig, ServerConfig
 
@@ -15,15 +16,30 @@ class TestAppConfig:
         assert c.ssh.default_port == 22
 
     def test_load_missing_file(self):
-        c = AppConfig()
-        c.load()  # Should not crash with missing config file
+        """Loading a non-existent config returns an all-defaults AppConfig."""
+        missing = Path(tempfile.gettempdir()) / "observation_web_missing_config_xyz.json"
+        if missing.exists():
+            missing.unlink()
+
+        c = AppConfig.load(missing)
+        assert c.server.port == 8002
+        assert c.server.host == "0.0.0.0"
+        assert c.database.path == "observation_web.db"
 
     def test_save_and_load(self):
-        """Config save/load round-trip."""
-        c = AppConfig()
-        c.server.port = 8002
-        c.save()
-        # Just verify it doesn't crash
+        """Config save/load round-trip (isolated temp file — never the real config.json)."""
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "config.json"
+
+            c = AppConfig()
+            c.server.port = 8002          # governance default; must survive round-trip
+            c.server.host = "127.0.0.1"   # non-default, proves the round-trip is real
+            c.save(path)
+            assert path.exists()
+
+            loaded = AppConfig.load(path)
+            assert loaded.server.port == 8002
+            assert loaded.server.host == "127.0.0.1"
 
     def test_singleton_getter(self):
         c1 = get_config()

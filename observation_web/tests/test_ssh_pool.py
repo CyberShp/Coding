@@ -1,7 +1,9 @@
 """Tests for backend/core/ssh_pool.py — SSHConnection and SSHPool."""
+import time
 import pytest
 from unittest.mock import patch, MagicMock, PropertyMock
 from backend.core.ssh_pool import SSHConnection, SSHPool, get_ssh_pool
+from backend.models.array import ConnectionState
 
 
 class TestSSHConnection:
@@ -44,12 +46,21 @@ class TestSSHConnection:
         code, stdout, stderr = conn.execute("ls")
         assert code == -1
 
-    @patch("backend.core.ssh_pool.PARAMIKO_AVAILABLE", True)
-    def test_disconnect(self):
+    def test_disconnect_tears_down_client_and_sets_state(self):
         conn = SSHConnection("arr-001", "192.168.1.1", 22, "admin")
-        conn._client = MagicMock()
-        conn._state = MagicMock()
+        mock_client = MagicMock()
+        mock_sftp = MagicMock()
+        conn._client = mock_client
+        conn._sftp = mock_sftp
+
         conn.disconnect()
+
+        mock_client.close.assert_called_once()
+        mock_sftp.close.assert_called_once()
+        assert conn._client is None
+        assert conn._sftp is None
+        assert conn.state == ConnectionState.DISCONNECTED
+        assert conn.is_connected() is False
 
     def test_max_reconnect_attempts(self):
         conn = SSHConnection("arr-001", "192.168.1.1", 22, "admin")
@@ -102,9 +113,28 @@ class TestSSHPool:
         pool.close_all()
         assert pool.get_connection("arr-001") is None
 
-    def test_cleanup_idle_connections(self):
+    def test_cleanup_idle_connections_disconnects_idle(self):
         pool = SSHPool()
+        conn = pool.add_connection("arr-001", "192.168.1.1", 22, "admin")
+        # Mark the connection as connected but idle for 100s.
+        conn._state = ConnectionState.CONNECTED
+        conn._last_activity = time.time() - 100
+
         pool.cleanup_idle_connections(max_idle_seconds=0)
+
+        # Idle beyond the threshold → disconnected.
+        assert conn.state == ConnectionState.DISCONNECTED
+
+    def test_cleanup_idle_connections_keeps_active(self):
+        pool = SSHPool()
+        conn = pool.add_connection("arr-002", "192.168.1.2", 22, "admin")
+        conn._state = ConnectionState.CONNECTED
+        conn._last_activity = time.time()  # just used
+
+        pool.cleanup_idle_connections(max_idle_seconds=600)
+
+        # Well within the idle window → still connected.
+        assert conn.state == ConnectionState.CONNECTED
 
     def test_singleton_getter(self):
         pool1 = get_ssh_pool()

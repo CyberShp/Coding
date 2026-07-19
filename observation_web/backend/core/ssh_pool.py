@@ -29,8 +29,13 @@ except ImportError:
     PARAMIKO_AVAILABLE = False
     logger.warning("paramiko not installed, SSH functionality disabled")
 
-# Thread pool for async SSH operations
-_executor = ThreadPoolExecutor(max_workers=20, thread_name_prefix="ssh-worker")
+# Thread pool for async SSH operations.
+_executor = ThreadPoolExecutor(max_workers=32, thread_name_prefix="ssh-worker")
+
+# Cap concurrent in-flight batch commands at (or below) the pool size so tasks
+# don't sit queued in the pool while asyncio.wait_for is already counting down —
+# that was producing spurious "async timeout" failures on large batches.
+_BATCH_CONCURRENCY = 24
 
 
 def tcp_probe(host: str, port: int = 22, timeout: float = 2.0) -> bool:
@@ -173,19 +178,23 @@ class SSHConnection:
 
     def _try_reconnect(self) -> bool:
         """Attempt to reconnect if credentials are available"""
-        if self._reconnect_attempts >= self.MAX_RECONNECT_ATTEMPTS:
-            logger.warning(f"Max reconnect attempts reached for {self.host}")
-            return False
-        
         if not self.password and not self.key_path:
             return False
 
-        # TCP pre-check: fail fast if the host is unreachable
+        # TCP pre-check FIRST: fail fast if the host is unreachable.
         if not tcp_probe(self.host, self.port, timeout=2.0):
             logger.info(f"TCP probe failed for {self.host}:{self.port}, skipping SSH reconnect")
             self._state = ConnectionState.DISCONNECTED
             return False
-        
+
+        # Host is reachable again.  If we'd previously exhausted the attempt
+        # budget during the outage, reset it — otherwise an array that comes
+        # back online after >MAX_RECONNECT_ATTEMPTS probes would never
+        # auto-reconnect and would need a manual "connect" forever.
+        if self._reconnect_attempts >= self.MAX_RECONNECT_ATTEMPTS:
+            logger.info(f"{self.host} reachable again; resetting reconnect budget")
+            self._reconnect_attempts = 0
+
         self._reconnect_attempts += 1
         logger.info(f"Attempting reconnect to {self.host} (attempt {self._reconnect_attempts})")
         
@@ -548,13 +557,16 @@ class SSHPool:
                 if conn.state == ConnectionState.CONNECTED
             ]
         
+        sem = asyncio.Semaphore(_BATCH_CONCURRENCY)
+
         async def _exec_one(aid: str) -> Tuple[str, Tuple[int, str, str]]:
-            conn = self.get_connection(aid)
-            if conn and conn.is_connected():
-                result = await conn.execute_async(command, timeout)
-                return (aid, result)
-            return (aid, (-1, "", "Not connected"))
-        
+            async with sem:
+                conn = self.get_connection(aid)
+                if conn and conn.is_connected():
+                    result = await conn.execute_async(command, timeout)
+                    return (aid, result)
+                return (aid, (-1, "", "Not connected"))
+
         results = await asyncio.gather(*[_exec_one(aid) for aid in array_ids])
         return dict(results)
     

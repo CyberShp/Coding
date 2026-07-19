@@ -1,5 +1,25 @@
 import axios from 'axios'
 
+/**
+ * Unified error-message extractor.
+ *
+ * Collapses the pattern repeated across ~57 view/component catch blocks:
+ *   e.response?.data?.detail || e.message || '默认文案'
+ * into a single helper so error surfacing stays consistent.
+ *
+ * Migration note: existing views still inline this expression; they can be
+ * incrementally switched to `extractError(e, '...')` — e.g.
+ *   import { extractError } from '@/api'
+ *   ElMessage.error(extractError(e, '操作失败'))
+ *
+ * @param {any} e         The caught error (usually an Axios error).
+ * @param {string} fallback  Message to use when nothing else is available.
+ * @returns {string}
+ */
+export function extractError(e, fallback = '操作失败') {
+  return e?.response?.data?.detail || e?.message || fallback
+}
+
 const http = axios.create({
   baseURL: '/api',
   timeout: 15000,  // 15s default timeout

@@ -7,16 +7,16 @@
 ## v2.0 新增功能
 
 ### 1. Agent 启动修复 (P0)
-- 使用 PID 文件跟踪 Agent 进程，替代不可靠的 `nohup`
-- 启动后验证进程存活（2 秒超时检测）
-- 启动失败时返回详细错误日志（从 `/tmp/observation_points_start.log` 读取）
-- 使用 `disown` 确保 SSH 断开后进程不被杀死
+- **主路径 systemd**：有 systemd 时将 Agent 安装为 `observation-points.service` 托管，SSH 断开后不受影响
+- **回退路径**：无 systemd 时以 `nohup` 后台启动，并写入 PID 文件（`/var/run/observation-points.pid`）跟踪进程
+- 启动后轮询验证进程存活（最长 5 秒超时）
+- 启动失败时返回详细错误日志（从 Agent 启动日志读取）
 
 ### 2. alerts.log 性能优化 (P0)
 - **增量拉取**: 使用 `wc -l` + `tail -n` 只读取新增行，避免全量传输
 - **位置记录**: 服务端追踪每个阵列的同步位置，支持断点续传
 - **响应瘦身**: 刷新接口不再返回完整 `recent_alerts`，改为数据库分页查询
-- **去重优化**: 从 O(n) DB 比对改为基于内容 hash 的内存去重
+- **去重优化**: 拉取数据库最近 100 条告警，构建去重键（timestamp + observer_name + message 前 50 字），在内存中比对新到告警
 
 ### 3. 双向数据推送 (P1)
 - **Agent HTTP 推送**: Agent 可主动将告警推送到 Web 后端 `/api/ingest` 端点
