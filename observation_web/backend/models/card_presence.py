@@ -25,7 +25,7 @@ class CardPresenceCurrentModel(Base):
     """Current card presence state"""
     __tablename__ = "card_presence_current"
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True)
     array_id = Column(String(64), index=True, nullable=False)
     board_id = Column(String(64), index=True, nullable=False)
     card_no = Column(String(32), default="")
@@ -44,7 +44,7 @@ class CardPresenceHistoryModel(Base):
     """Historical card presence records"""
     __tablename__ = "card_presence_history"
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True)
     board_id = Column(String(64), index=True, nullable=False)
     array_id = Column(String(64), nullable=False)
     card_no = Column(String(32), default="")

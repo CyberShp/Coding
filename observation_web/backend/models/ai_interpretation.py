@@ -12,7 +12,7 @@ class AIInterpretationModel(Base):
     """Cached AI interpretation for an alert"""
     __tablename__ = "ai_interpretations"
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True)
     alert_id = Column(Integer, unique=True, index=True, nullable=False)
     interpretation = Column(Text, nullable=False)
     model_name = Column(String(64), default="")

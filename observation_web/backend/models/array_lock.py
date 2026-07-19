@@ -19,7 +19,7 @@ class ArrayLockModel(Base):
     """Array lock database model"""
     __tablename__ = "array_locks"
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True)
     array_id = Column(String(64), unique=True, index=True, nullable=False)
     task_id = Column(Integer, ForeignKey("task_sessions.id"), nullable=False)
     locked_by_ip = Column(String(64), nullable=True)

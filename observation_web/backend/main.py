@@ -125,6 +125,28 @@ async def _idle_connection_cleaner():
             except Exception as e:
                 _track_bg_failure("idle_cleanup/ack", e)
 
+            # Every cycle: prune metric samples past the retention window (7d).
+            # Range DELETE keeps the metric_samples table bounded.
+            try:
+                from .db.database import AsyncSessionLocal
+                from .models.metric_sample import MetricSampleModel
+                from sqlalchemy import delete as sa_delete
+                from datetime import datetime as _dt, timedelta as _td
+                if AsyncSessionLocal:
+                    async with AsyncSessionLocal() as session:
+                        cutoff = _dt.now() - _td(days=7)
+                        result = await session.execute(
+                            sa_delete(MetricSampleModel).where(
+                                MetricSampleModel.ts < cutoff
+                            )
+                        )
+                        if result.rowcount and result.rowcount > 0:
+                            await session.commit()
+                            logger.info(f"Cleaned up {result.rowcount} expired metric samples")
+                _reset_bg_failure("idle_cleanup/metrics")
+            except Exception as e:
+                _track_bg_failure("idle_cleanup/metrics", e)
+
             # Once per day: archive old alerts + prune expired archives. Without
             # this the retention/archive logic was never invoked by any scheduler,
             # so the alerts table grew unbounded.
@@ -572,6 +594,87 @@ def create_app() -> FastAPI:
     @app.get("/health")
     async def health_check():
         return {"status": "healthy", "version": __version__}
+
+    @app.get("/livez")
+    async def livez():
+        """Liveness probe: the process is up. Always 200 unless the process is dead."""
+        return {"status": "alive", "version": __version__}
+
+    @app.get("/readyz")
+    async def readyz():
+        """Readiness probe: DB reachable + core services initialized.
+
+        Returns 503 (not 200) when not ready, so a load balancer / orchestrator
+        can actually drain traffic — the old /health returned 200 unconditionally.
+        """
+        from fastapi.responses import JSONResponse
+        from sqlalchemy import text as _text
+        from .db.database import AsyncSessionLocal
+        checks = {"db": False, "scheduler": False}
+        if AsyncSessionLocal is not None:
+            try:
+                async with AsyncSessionLocal() as s:
+                    await s.execute(_text("SELECT 1"))
+                checks["db"] = True
+            except Exception:
+                pass
+        try:
+            from .core.scheduler import get_scheduler
+            checks["scheduler"] = bool(get_scheduler()._running)
+        except Exception:
+            pass
+        ready = all(checks.values())
+        return JSONResponse(
+            status_code=200 if ready else 503,
+            content={"status": "ready" if ready else "not_ready", "checks": checks},
+        )
+
+    @app.get("/metrics")
+    async def metrics():
+        """Prometheus text-format metrics (no external dependency).
+
+        Surfaces the runtime signals that were previously only in logs, so
+        50-array operation can be monitored instead of guessed at.
+        """
+        from fastapi.responses import PlainTextResponse
+        lines: list = []
+
+        def emit(name, value, labels="", help_text=""):
+            if help_text:
+                lines.append(f"# HELP {name} {help_text}")
+                lines.append(f"# TYPE {name} gauge")
+            lines.append(f"{name}{labels} {value}")
+
+        try:
+            st = get_ssh_pool().get_stats()
+            emit("observation_ssh_connections", st.get("connected", 0),
+                 '{state="connected"}', "SSH connections in the pool by state")
+            emit("observation_ssh_connections", st.get("disconnected", 0), '{state="disconnected"}')
+            emit("observation_ssh_connections_total", st.get("total_connections", 0),
+                 help_text="Total SSH connections in the pool")
+        except Exception:
+            pass
+        try:
+            from .api.websocket import manager as _ws_manager
+            emit("observation_ws_connections", _ws_manager.get_connection_count("alerts"),
+                 '{channel="alerts"}', "Active WebSocket connections by channel")
+            emit("observation_ws_connections", _ws_manager.get_connection_count("status"), '{channel="status"}')
+        except Exception:
+            pass
+        try:
+            emit("observation_bg_loops_failing", len(_bg_failure_counts),
+                 help_text="Background loops currently in a failure streak")
+            for name, cnt in list(_bg_failure_counts.items()):
+                emit("observation_bg_failure_count", cnt, f'{{loop="{name.replace(chr(34), "")}"}}')
+        except Exception:
+            pass
+        try:
+            from .api.ingest import _metrics_store
+            emit("observation_metrics_store_arrays", len(_metrics_store),
+                 help_text="Arrays with in-memory metrics buffered")
+        except Exception:
+            pass
+        return PlainTextResponse("\n".join(lines) + "\n")
     
     # API info endpoint
     @app.get("/api")

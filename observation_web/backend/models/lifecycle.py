@@ -30,7 +30,7 @@ class AlertsArchiveModel(Base):
     """Archived alerts with compression"""
     __tablename__ = "alerts_archive"
     
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True)
     array_id = Column(String(64), index=True, nullable=False)
     year_month = Column(String(7), index=True, nullable=False)  # e.g., "2026-02"
     data_compressed = Column(LargeBinary, nullable=False)  # gzip compressed JSON

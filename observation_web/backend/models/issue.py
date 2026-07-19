@@ -16,7 +16,7 @@ class IssueModel(Base):
     """Issue/feedback database model"""
     __tablename__ = "issues"
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True)
     title = Column(String(256), nullable=False)
     content = Column(Text, nullable=False)
     status = Column(String(32), default="open")  # open, resolved, rejected, adopted

@@ -29,7 +29,7 @@ class TagModel(Base):
     """Tag database model for organizing arrays. level=1: group/team, level=2: array type."""
     __tablename__ = "tags"
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True)
     name = Column(String(64), unique=True, nullable=False, index=True)
     color = Column(String(32), default="#409eff")
     description = Column(Text, default="")
@@ -44,7 +44,7 @@ class ArrayTagModel(Base):
     """Many-to-many junction table for arrays and tags"""
     __tablename__ = "array_tags"
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True)
     array_id = Column(String(64), index=True, nullable=False)
     tag_id = Column(Integer, ForeignKey("tags.id", ondelete="CASCADE"), index=True, nullable=False)
 

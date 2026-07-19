@@ -19,7 +19,7 @@ class TaskSessionModel(Base):
     """Test task session database model"""
     __tablename__ = "task_sessions"
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True)
     name = Column(String(256), nullable=False)
     task_type = Column(String(64), nullable=False)  # normal_business, controller_poweroff, etc.
     array_ids = Column(Text, default="")  # JSON array of array_id strings

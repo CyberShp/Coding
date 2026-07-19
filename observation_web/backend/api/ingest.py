@@ -9,6 +9,7 @@ Supports two data types:
 import json
 import logging
 import threading
+import time
 from collections import deque
 from datetime import datetime
 from typing import Any, Dict, List, Optional
@@ -27,6 +28,29 @@ router = APIRouter(tags=["ingest"])
 # Each entry stores a deque of recent metrics (last 24 hours worth)
 MAX_METRICS_PER_ARRAY = 8640  # 24h * 60min * 6 (every 10s) = ~8640 points per day
 _metrics_store: Dict[str, deque] = {}
+
+# Last time each array pushed data (monotonic-ish wall clock). Used by the SSH
+# alert-sync loop to skip the redundant pull for arrays whose push channel is
+# active (both read the same alerts.log).
+_last_push_at: Dict[str, float] = {}
+
+# Downsample gate for DB persistence of metrics. Metrics arrive at high
+# frequency (~every 10s); persisting every point would hammer SQLite. We keep
+# the in-memory deque for fast recent lookups and additionally persist at most
+# one row per array per ``METRIC_PERSIST_INTERVAL_S`` seconds.
+METRIC_PERSIST_INTERVAL_S = 60.0
+_last_persist_at: Dict[str, float] = {}
+
+
+def mark_pushed(array_id: str) -> None:
+    """Record that *array_id* just pushed data."""
+    if array_id:
+        _last_push_at[array_id] = time.time()
+
+
+def get_last_push_at(array_id: str) -> float:
+    """Wall-clock time of the last push for *array_id* (0.0 if never)."""
+    return _last_push_at.get(array_id, 0.0)
 
 
 class IngestPayload(BaseModel):
@@ -170,6 +194,8 @@ async def _handle_alert(payload: IngestPayload, source_ip: str, db: AsyncSession
                        "Agent must include a real array_id in the payload.",
             )
 
+        mark_pushed(real_array_id)
+
         level_str = (payload.level or "info").lower()
         level = AlertLevel(level_str) if level_str in [l.value for l in AlertLevel] else AlertLevel.INFO
         
@@ -250,6 +276,8 @@ async def _handle_metrics(payload: IngestPayload, source_ip: str, db: AsyncSessi
         # Resolve real array_id for metrics storage
         real_array_id = _resolve_array_id(payload.array_id, source_ip)
         store_key = real_array_id or source_ip  # fallback to IP for metrics (non-critical)
+        if real_array_id:
+            mark_pushed(real_array_id)
 
         # Build metrics record
         record = {
@@ -267,6 +295,12 @@ async def _handle_metrics(payload: IngestPayload, source_ip: str, db: AsyncSessi
             _metrics_store[store_key] = deque(maxlen=MAX_METRICS_PER_ARRAY)
         _metrics_store[store_key].append(record)
 
+        # Downsampled persistence: only write to DB when we have a real array_id
+        # and a live session, and at most once per METRIC_PERSIST_INTERVAL_S per
+        # array (protects SQLite from high-frequency metric pushes).
+        if db is not None and real_array_id:
+            await _persist_metric_sample(db, real_array_id, record)
+
         # Metrics push is also a liveness signal for the agent.
         if db is not None and real_array_id:
             await touch_heartbeat(db, real_array_id)
@@ -275,6 +309,104 @@ async def _handle_metrics(payload: IngestPayload, source_ip: str, db: AsyncSessi
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+def _parse_ts(value: Any) -> datetime:
+    """Best-effort parse of a metric timestamp into a naive datetime."""
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, str) and value:
+        try:
+            return datetime.fromisoformat(
+                value.replace("Z", "+00:00").replace("+00:00", "")
+            )
+        except Exception:
+            pass
+    return datetime.now()
+
+
+async def _persist_metric_sample(db: AsyncSession, array_id: str, record: Dict) -> None:
+    """Persist a downsampled metric sample, rate-limited per array.
+
+    Writes at most one row per METRIC_PERSIST_INTERVAL_S seconds per array_id.
+    Failures are swallowed (metrics persistence is non-critical) so a DB hiccup
+    never breaks the ingest path.
+    """
+    now = time.time()
+    last = _last_persist_at.get(array_id, 0.0)
+    if now - last < METRIC_PERSIST_INTERVAL_S:
+        return
+    _last_persist_at[array_id] = now
+
+    try:
+        from ..models.metric_sample import MetricSampleModel
+
+        ts = _parse_ts(record.get("ts"))
+        # Everything except the promoted columns goes into extra as JSON.
+        promoted = {"ts", "cpu0", "mem_used_mb", "mem_total_mb", "array_id", "source_ip"}
+        extra = {k: v for k, v in record.items() if k not in promoted}
+        db.add(MetricSampleModel(
+            array_id=array_id,
+            ts=ts,
+            cpu0=record.get("cpu0"),
+            mem_used_mb=record.get("mem_used_mb"),
+            mem_total_mb=record.get("mem_total_mb"),
+            extra=json.dumps(extra) if extra else None,
+        ))
+        await db.flush()
+    except Exception:
+        # Roll back so the surrounding request (heartbeat commit) stays clean,
+        # and allow a retry on the next window.
+        _last_persist_at[array_id] = last
+        logger.debug("metric sample persist failed for %s", array_id, exc_info=True)
+        try:
+            await db.rollback()
+        except Exception:
+            pass
+
+
+async def get_metrics_from_db(
+    db: AsyncSession, array_id: str, minutes: int = 60
+) -> List[Dict]:
+    """Read persisted metric samples for *array_id* within the last *minutes*.
+
+    Returns records shaped like the in-memory store (ts as ISO string plus the
+    flattened metric fields), ordered by ts ascending. Empty list if none.
+    """
+    from datetime import timedelta
+    from sqlalchemy import select as _select
+    from ..models.metric_sample import MetricSampleModel
+
+    cutoff = datetime.now() - timedelta(minutes=minutes)
+    result = await db.execute(
+        _select(MetricSampleModel)
+        .where(
+            MetricSampleModel.array_id == array_id,
+            MetricSampleModel.ts >= cutoff,
+        )
+        .order_by(MetricSampleModel.ts.asc())
+    )
+    rows = result.scalars().all()
+
+    out: List[Dict] = []
+    for row in rows:
+        rec: Dict[str, Any] = {
+            "ts": row.ts.isoformat() if row.ts else None,
+            "array_id": row.array_id,
+        }
+        if row.cpu0 is not None:
+            rec["cpu0"] = row.cpu0
+        if row.mem_used_mb is not None:
+            rec["mem_used_mb"] = row.mem_used_mb
+        if row.mem_total_mb is not None:
+            rec["mem_total_mb"] = row.mem_total_mb
+        if row.extra:
+            try:
+                rec.update(json.loads(row.extra))
+            except Exception:
+                pass
+        out.append(rec)
+    return out
 
 
 def get_metrics_for_ip(source_ip: str, minutes: int = 60) -> List[Dict]:

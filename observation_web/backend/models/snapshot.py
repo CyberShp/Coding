@@ -18,7 +18,7 @@ class SnapshotModel(Base):
     """Snapshot database model"""
     __tablename__ = "snapshots"
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True)
     array_id = Column(String(64), index=True, nullable=False)
     label = Column(String(256), default="")
     task_id = Column(Integer, nullable=True)

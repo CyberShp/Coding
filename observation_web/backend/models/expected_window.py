@@ -17,7 +17,7 @@ class ExpectedWindowModel(Base):
     """Expected window database model"""
     __tablename__ = "expected_windows"
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True)
     array_id = Column(String(64), index=True, nullable=False)
     name = Column(String(128), nullable=False)
     category_pattern = Column(String(256), nullable=False)

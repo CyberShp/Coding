@@ -28,10 +28,13 @@ class AlertModel(Base):
     """Alert database model"""
     __tablename__ = "alerts"
     
-    id = Column(Integer, primary_key=True, index=True)
-    array_id = Column(String(64), index=True, nullable=False)
-    observer_name = Column(String(64), index=True, nullable=False)
-    level = Column(String(16), index=True, nullable=False)
+    # Single-column indexes on array_id / observer_name / level are intentionally
+    # omitted: they are fully covered by the composite indexes below (leftmost
+    # prefix). The PK is the SQLite rowid, so index=True on id is redundant too.
+    id = Column(Integer, primary_key=True)
+    array_id = Column(String(64), nullable=False)
+    observer_name = Column(String(64), nullable=False)
+    level = Column(String(16), nullable=False)
     message = Column(Text, nullable=False)
     details = Column(Text, default="{}")  # JSON string
     timestamp = Column(DateTime, index=True, nullable=False)
@@ -39,12 +42,11 @@ class AlertModel(Base):
     is_expected = Column(Integer, default=0)  # 0=unknown, 1=expected, -1=unexpected
     matched_rule_id = Column(Integer, nullable=True)  # ID of the rule that matched
     created_at = Column(DateTime, server_default=func.now())
-    
+
     __table_args__ = (
         Index('ix_alerts_array_timestamp', 'array_id', 'timestamp'),
         Index('ix_alerts_level_timestamp', 'level', 'timestamp'),
         Index('ix_alerts_array_observer_ts', 'array_id', 'observer_name', 'timestamp'),
-        Index('ix_alerts_is_expected', 'is_expected'),
     )
 
 
@@ -120,7 +122,7 @@ class AlertAckModel(Base):
     """Alert acknowledgement record"""
     __tablename__ = "alert_acknowledgements"
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True)
     alert_id = Column(Integer, ForeignKey("alerts.id", ondelete="CASCADE"), nullable=False, index=True)
     acked_by_ip = Column(String(64), nullable=False)
     acked_at = Column(DateTime, server_default=func.now())

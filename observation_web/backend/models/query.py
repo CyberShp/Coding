@@ -33,7 +33,7 @@ class QueryTemplateModel(Base):
     """Query template database model"""
     __tablename__ = "query_templates"
     
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True)
     name = Column(String(128), nullable=False)
     description = Column(Text, default="")
     commands = Column(Text, nullable=False)  # JSON array

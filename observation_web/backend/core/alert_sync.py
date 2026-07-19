@@ -32,6 +32,15 @@ _scheduler: Optional[AsyncIOScheduler] = None
 _sync_interval_seconds = 20
 _max_concurrent = 5
 _sync_round = 0  # for periodic maintenance (stale-ack cleanup)
+# If an array pushed within this window, skip its (redundant) SSH pull — the push
+# channel already delivered the same alerts.log content.
+_PUSH_FRESH_SECONDS = 120
+
+
+def _push_is_fresh(array_id: str) -> bool:
+    import time
+    from ..api.ingest import get_last_push_at
+    return (time.time() - get_last_push_at(array_id)) < _PUSH_FRESH_SECONDS
 
 
 async def _sync_one_array(array_id: str, semaphore: asyncio.Semaphore) -> Tuple[str, Optional[int]]:
@@ -48,11 +57,19 @@ async def _sync_one_array(array_id: str, semaphore: asyncio.Semaphore) -> Tuple[
             # api/array_alert_sync.py (it drives the SSH sync + api concerns).
             from ..api.array_alert_sync import sync_array_alerts
             async with _db_module.AsyncSessionLocal() as db:
-                count = await sync_array_alerts(array_id, db, conn, config, full_sync=False)
-                await db.commit()
+                push_fresh = _push_is_fresh(array_id)
+                if push_fresh:
+                    # Push channel is active — its alerts are already in the DB.
+                    # Skip the redundant SSH pull (wc/tail), but still refresh
+                    # derived active issues below so the dashboard reflects them.
+                    count = 0
+                else:
+                    count = await sync_array_alerts(array_id, db, conn, config, full_sync=False)
+                    await db.commit()
 
                 # Refresh in-memory active issues so dashboard stays current
-                if count and count > 0 and array_id in _array_status_cache:
+                # (also when push delivered alerts but we skipped the SSH pull).
+                if array_id in _array_status_cache and ((count and count > 0) or push_fresh):
                     try:
                         issues = await _derive_active_issues_from_db(db, array_id)
                         _array_status_cache[array_id].active_issues = issues

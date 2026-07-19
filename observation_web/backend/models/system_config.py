@@ -17,7 +17,7 @@ class SystemConfigModel(Base):
     """Platform configuration key-value store"""
     __tablename__ = "system_config"
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True)
     key = Column(String(128), unique=True, index=True, nullable=False)
     value = Column(Text, nullable=False)
     description = Column(Text, default="")
@@ -28,7 +28,7 @@ class SchemaVersionModel(Base):
     """Schema version tracking"""
     __tablename__ = "schema_version"
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True)
     version = Column(String(32), nullable=False)
     applied_at = Column(DateTime, server_default=func.now())
     description = Column(Text, default="")
