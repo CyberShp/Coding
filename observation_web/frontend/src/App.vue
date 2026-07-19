@@ -225,7 +225,7 @@ import { useAlertStore } from './stores/alerts'
 import { useAuthStore } from './stores/auth'
 import { usePreferencesStore } from './stores/preferences'
 import { setSoundEnabled } from './utils/notification'
-import api from './api'
+import api, { extractError } from './api'
 
 const route = useRoute()
 const alertStore = useAlertStore()
@@ -249,7 +249,8 @@ async function handleAckAllVisible() {
     alertStore.acknowledgeAllCritical()
     ElMessage.success('已全部忽略 24 小时')
   } catch (e) {
-    ElMessage.error('操作失败: ' + (e.response?.data?.detail || e.message))
+    // Example use of the shared extractError helper (see api/index.js).
+    ElMessage.error('操作失败: ' + extractError(e))
   }
 }
 
@@ -380,7 +381,7 @@ async function claimNickname() {
     }
     ElMessage.success('认领成功，身份已恢复')
   } catch (e) {
-    ElMessage.error(e.response?.data?.detail || '认领失败，请确认昵称正确')
+    ElMessage.error(extractError(e, '认领失败，请确认昵称正确'))
   }
 }
 

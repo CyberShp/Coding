@@ -14,8 +14,14 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from ..config import get_config
 from ..core.ssh_pool import get_ssh_pool
 from ..core.system_alert import sys_error, sys_warning
+from ..core.status_cache import _array_status_cache
+from ..core.active_issues import _derive_active_issues_from_db, cleanup_stale_acks
 from ..db import database as _db_module
-from ..api.arrays import sync_array_alerts, _derive_active_issues_from_db, _array_status_cache
+
+# NOTE: sync_array_alerts and broadcast_status_update remain in the api layer
+# (they orchestrate api-layer concerns — SSH sync flow + WebSocket broadcast).
+# They are imported lazily inside the functions below to keep core -> api out of
+# the module import graph (no top-level "from ..api" in core).
 
 if TYPE_CHECKING:
     pass
@@ -38,6 +44,9 @@ async def _sync_one_array(array_id: str, semaphore: asyncio.Semaphore) -> Tuple[
                 return (array_id, None)
 
             config = get_config()
+            # Lazy import: breaks the core->api cycle. sync_array_alerts lives in
+            # api/array_alert_sync.py (it drives the SSH sync + api concerns).
+            from ..api.array_alert_sync import sync_array_alerts
             async with _db_module.AsyncSessionLocal() as db:
                 count = await sync_array_alerts(array_id, db, conn, config, full_sync=False)
                 await db.commit()
@@ -47,7 +56,9 @@ async def _sync_one_array(array_id: str, semaphore: asyncio.Semaphore) -> Tuple[
                     try:
                         issues = await _derive_active_issues_from_db(db, array_id)
                         _array_status_cache[array_id].active_issues = issues
-                        # Broadcast so ArrayDetail pages pick up new issues without manual refresh
+                        # Broadcast so ArrayDetail pages pick up new issues without manual refresh.
+                        # Lazy import: breaks the core->api cycle (websocket is an api
+                        # orchestration concern).
                         from ..api.websocket import broadcast_status_update
                         status_obj = _array_status_cache[array_id]
                         await broadcast_status_update(array_id, {
@@ -87,7 +98,6 @@ async def _run_sync():
     if _sync_round % 30 == 0:
         try:
             async with _db_module.AsyncSessionLocal() as db:
-                from ..api.array_status import cleanup_stale_acks
                 removed = await cleanup_stale_acks(db)
                 if removed:
                     logger.info("Cleaned %d stale ack rows", removed)

@@ -208,6 +208,9 @@ async def handle_recovery_event(
 
     ``event_type`` is one of: 'reconnect', 'heartbeat', 'ingest_push', 'probe_success'
     """
+    # Lazy import: breaks the core->api layering. broadcast_status_update lives in
+    # api/websocket.py (WebSocket fan-out is an api orchestration concern); keeping
+    # this import inside the function means no top-level "from ..api" in core.
     from ..api.websocket import broadcast_status_update
 
     logger.info(
