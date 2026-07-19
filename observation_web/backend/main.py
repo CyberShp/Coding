@@ -5,7 +5,9 @@ FastAPI-based backend service for storage array monitoring platform.
 """
 
 import asyncio
+import json as _json
 import logging
+import os
 import sys
 from contextlib import asynccontextmanager
 from datetime import datetime
@@ -44,12 +46,48 @@ from .core.alert_sync import start_alert_sync, stop_alert_sync
 from .models.array import ArrayModel
 from sqlalchemy import select
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s [%(levelname)s] %(name)s: %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S',
-)
+# ── Logging ──────────────────────────────────────────────────────────────
+# Standard LogRecord attributes we don't want to duplicate as "extra" fields.
+_STD_LOGRECORD_KEYS = set(logging.makeLogRecord({}).__dict__.keys()) | {"message", "asctime", "taskName"}
+
+
+class _JsonLogFormatter(logging.Formatter):
+    """Structured JSON log lines, including any `extra=` fields (e.g. array_id).
+
+    Previously logs were plain text and the `extra={array_id, event_type}` passed
+    in several places was silently dropped by the text formatter. Enable with
+    OBSERVATION_LOG_FORMAT=json; default stays text for backward compatibility.
+    """
+
+    def format(self, record: logging.LogRecord) -> str:
+        base = {
+            "ts": self.formatTime(record, "%Y-%m-%dT%H:%M:%S"),
+            "level": record.levelname,
+            "logger": record.name,
+            "msg": record.getMessage(),
+        }
+        for key, val in record.__dict__.items():
+            if key not in _STD_LOGRECORD_KEYS and not key.startswith("_"):
+                try:
+                    _json.dumps(val)  # only include JSON-serializable extras
+                    base[key] = val
+                except (TypeError, ValueError):
+                    base[key] = str(val)
+        if record.exc_info:
+            base["exc"] = self.formatException(record.exc_info)
+        return _json.dumps(base, ensure_ascii=False)
+
+
+if os.environ.get("OBSERVATION_LOG_FORMAT", "text").lower() == "json":
+    _handler = logging.StreamHandler()
+    _handler.setFormatter(_JsonLogFormatter())
+    logging.basicConfig(level=logging.INFO, handlers=[_handler])
+else:
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s [%(levelname)s] %(name)s: %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S',
+    )
 logger = logging.getLogger(__name__)
 
 # Tracks the previous health state per array so we only broadcast on change

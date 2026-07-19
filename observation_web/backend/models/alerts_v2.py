@@ -1,5 +1,11 @@
 """
 Unified alert model v2.
+
+STATUS: NOT WIRED INTO THE APPLICATION. This is an in-progress v1→v2 alert
+migration. The live alert path uses models.alert.AlertModel; AlertV2Model is
+only referenced by tests (as a dedup-contract fixture) and table creation.
+Do NOT assume it is active. Either complete the v1→v2 migration and switch the
+API/store over to it, or remove it — but don't leave callers thinking it's live.
 """
 
 from datetime import datetime
