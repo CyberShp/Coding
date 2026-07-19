@@ -125,6 +125,28 @@ async def _idle_connection_cleaner():
             except Exception as e:
                 _track_bg_failure("idle_cleanup/ack", e)
 
+            # Every cycle: prune metric samples past the retention window (7d).
+            # Range DELETE keeps the metric_samples table bounded.
+            try:
+                from .db.database import AsyncSessionLocal
+                from .models.metric_sample import MetricSampleModel
+                from sqlalchemy import delete as sa_delete
+                from datetime import datetime as _dt, timedelta as _td
+                if AsyncSessionLocal:
+                    async with AsyncSessionLocal() as session:
+                        cutoff = _dt.now() - _td(days=7)
+                        result = await session.execute(
+                            sa_delete(MetricSampleModel).where(
+                                MetricSampleModel.ts < cutoff
+                            )
+                        )
+                        if result.rowcount and result.rowcount > 0:
+                            await session.commit()
+                            logger.info(f"Cleaned up {result.rowcount} expired metric samples")
+                _reset_bg_failure("idle_cleanup/metrics")
+            except Exception as e:
+                _track_bg_failure("idle_cleanup/metrics", e)
+
             # Once per day: archive old alerts + prune expired archives. Without
             # this the retention/archive logic was never invoked by any scheduler,
             # so the alerts table grew unbounded.

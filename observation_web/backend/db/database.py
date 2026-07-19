@@ -243,6 +243,7 @@ async def create_tables():
         observer_config, ai_interpretation, card_inventory, alerts_v2,
         expected_window, observer_snapshot, agent_heartbeat, card_presence,
         viewer_profile, system_config, enrollment, baseline, causal,
+        metric_sample,
     )
 
     # Step 1: create_all for new databases (idempotent on existing ones)

@@ -824,10 +824,30 @@ async def get_array_metrics(
     array_id: str,
     minutes: int = Query(60, description="Time range in minutes"),
     ssh_pool: SSHPool = Depends(get_ssh_pool),
+    db: AsyncSession = Depends(get_db),
 ):
-    """Get performance metrics (CPU, memory) from the remote array."""
-    from .ingest import get_metrics_for_ip
+    """Get performance metrics (CPU, memory) from the remote array.
 
+    Prefers persisted ``metric_samples`` (survives restarts, shared across
+    workers). Falls back to the in-memory push store + SSH tail only when the
+    DB has no rows for the requested window.
+    """
+    from .ingest import get_metrics_for_ip, get_metrics_from_db
+
+    # 1. Prefer persisted samples.
+    try:
+        persisted = await get_metrics_from_db(db, array_id, minutes)
+    except Exception:
+        persisted = []
+    if persisted:
+        return {
+            "array_id": array_id,
+            "minutes": minutes,
+            "count": len(persisted),
+            "metrics": persisted,
+        }
+
+    # 2. Fall back to SSH tail + in-memory push store.
     conn = ssh_pool.get_connection(array_id)
     if not conn or not conn.is_connected():
         raise HTTPException(
