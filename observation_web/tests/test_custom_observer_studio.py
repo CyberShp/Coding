@@ -216,7 +216,9 @@ async def test_reassignment_reconciles_old_array_and_reports_removal(
 
     assert set(captured_plans[-1]) == {first.array_id, second.array_id}
     assert captured_plans[-1][first.array_id] == []
-    assert [item["name"] for item in captured_plans[-1][second.array_id]] == ["controller_health"]
+    # Phase 2: agent instance names carry an @owner suffix so same-name monitors
+    # from different owners coexist on one array (creator here is legacy admin).
+    assert [item["name"] for item in captured_plans[-1][second.array_id]] == ["controller_health@admin"]
     deployments = await client.get(
         f"/api/admin/monitor-templates/{template_id}/deployments",
         headers=_admin_headers(),

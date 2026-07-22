@@ -53,9 +53,13 @@
               <el-icon><Box /></el-icon>
               <span>卡件列表</span>
             </el-menu-item>
-            <el-menu-item v-if="authStore.isAdmin" index="/admin/monitors">
-              <el-icon><Bell /></el-icon>
-              <span>告警管理</span>
+            <el-menu-item index="/admin/monitors">
+              <el-icon><View /></el-icon>
+              <span>自定义监测</span>
+            </el-menu-item>
+            <el-menu-item index="/monitor-health">
+              <el-icon><FirstAidKit /></el-icon>
+              <span>监测健康度</span>
             </el-menu-item>
           </el-menu>
         </el-aside>
@@ -248,7 +252,7 @@ import { useRoute } from 'vue-router'
 import router from './router'
 import { ElMessage } from 'element-plus'
 import zhCn from 'element-plus/dist/locale/zh-cn.mjs'
-import { Monitor, Odometer, Cpu, Bell, Search, Setting, User, Warning, Files, Timer, WarningFilled, Stopwatch, UserFilled, ChatDotRound, InfoFilled, Box, Star } from '@element-plus/icons-vue'
+import { Monitor, Odometer, Cpu, Bell, Search, Setting, User, Warning, Files, Timer, WarningFilled, Stopwatch, UserFilled, ChatDotRound, InfoFilled, Box, Star, View, FirstAidKit } from '@element-plus/icons-vue'
 import { useAlertStore } from './stores/alerts'
 import { useAuthStore } from './stores/auth'
 import { usePreferencesStore } from './stores/preferences'
@@ -328,6 +332,8 @@ const currentRoute = computed(() => {
     '/tasks': '定时任务',
     '/test-tasks': '测试任务',
     '/card-inventory': '卡件列表',
+    '/admin/monitors': '自定义监测',
+    '/monitor-health': '监测健康度',
   }
   return routes[route.path] || ''
 })

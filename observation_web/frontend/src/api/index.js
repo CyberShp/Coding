@@ -118,22 +118,24 @@ export default {
   whoami: () => http.get('/auth/whoami'),
   setMyTeams: (tagIds) => http.put('/auth/me/teams', { tag_ids: tagIds }),
 
-  // Admin monitor templates
-  getMonitorTemplates: () => http.get('/admin/monitor-templates'),
-  createMonitorTemplate: (data) => http.post('/admin/monitor-templates', data),
-  updateMonitorTemplate: (id, data) => http.put(`/admin/monitor-templates/${id}`, data),
-  deleteMonitorTemplate: (id) => http.delete(`/admin/monitor-templates/${id}`),
-  getMonitorTemplateVersions: (id) => http.get(`/admin/monitor-templates/${id}/versions`),
-  restoreMonitorTemplateVersion: (id, version) => http.post(`/admin/monitor-templates/${id}/versions/${version}/restore`),
-  getMonitorAssignments: (id) => http.get(`/admin/monitor-templates/${id}/assignments`),
+  // Monitor templates (multi-user Phase 2 —登录用户可用, visibility-scoped)
+  getMonitorTemplates: () => http.get('/monitor-templates'),
+  createMonitorTemplate: (data) => http.post('/monitor-templates', data),
+  updateMonitorTemplate: (id, data) => http.put(`/monitor-templates/${id}`, data),
+  deleteMonitorTemplate: (id) => http.delete(`/monitor-templates/${id}`),
+  publishMonitorTemplate: (id, visibility) => http.post(`/monitor-templates/${id}/publish`, { visibility }),
+  getMonitorHealth: () => http.get('/monitor-templates/health'),
+  getMonitorTemplateVersions: (id) => http.get(`/monitor-templates/${id}/versions`),
+  restoreMonitorTemplateVersion: (id, version) => http.post(`/monitor-templates/${id}/versions/${version}/restore`),
+  getMonitorAssignments: (id) => http.get(`/monitor-templates/${id}/assignments`),
   saveMonitorAssignments: (id, targetType, targetIds) =>
-    http.put(`/admin/monitor-templates/${id}/assignments`, {
+    http.put(`/monitor-templates/${id}/assignments`, {
       target_type: targetType,
       target_ids: targetIds,
     }),
-  getMonitorDeployments: (id) => http.get(`/admin/monitor-templates/${id}/deployments`),
+  getMonitorDeployments: (id) => http.get(`/monitor-templates/${id}/deployments`),
   deployMonitorTemplates: (templateIds, targetType, targetIds) =>
-    httpLong.post('/admin/monitor-templates/deploy', {
+    httpLong.post('/monitor-templates/deploy', {
       template_ids: templateIds,
       target_type: targetType,
       target_ids: targetIds,

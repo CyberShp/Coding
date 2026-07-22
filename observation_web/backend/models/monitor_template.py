@@ -51,6 +51,12 @@ class MonitorTemplateModel(Base):
     is_enabled = Column(Boolean, default=True)
     is_builtin = Column(Boolean, default=False)
     created_by = Column(String(64), default="")
+    # Precise ownership for multi-user Phase 2 (created_by keeps the nickname
+    # for display/attribution; owner_user_id is the authoritative FK for
+    # permission checks). Nullable: builtin/legacy rows have no owner.
+    owner_user_id = Column(
+        Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     template_key = Column(String(64), unique=True, index=True, nullable=True)
     version = Column(Integer, default=1, nullable=False)
     visibility = Column(String(16), default="team", nullable=False)

@@ -16,6 +16,21 @@ from ..models.monitor_template import (
     MonitorTemplateModel,
     MonitorTemplateVersionModel,
 )
+from ..models.user_account import UserTeamModel
+
+VISIBILITY_VALUES = ("draft", "team", "global")
+# Ordered visibility levels for publish-upgrade checks (draft < team < global).
+VISIBILITY_ORDER = {"draft": 0, "team": 1, "global": 2}
+
+
+async def get_user_team_ids(db: AsyncSession, user_id: int) -> List[int]:
+    """L1 tag ids the user belongs to (empty for anonymous/legacy-admin id=0)."""
+    if not user_id:
+        return []
+    result = await db.execute(
+        select(UserTeamModel.tag_id).where(UserTeamModel.user_id == user_id)
+    )
+    return [row[0] for row in result.all()]
 
 
 CONFIG_FIELDS = (
@@ -85,18 +100,36 @@ def add_version_snapshot(
     return version
 
 
+def owner_suffixed_name(template: MonitorTemplateModel) -> str:
+    """Instance name with an ``@owner`` suffix so the same template name from
+    different owners can coexist on one array without the later deployment
+    overwriting the earlier one. Alerts inherit this as their observer_name,
+    carrying the source owner into every alert.
+    """
+    owner = (template.created_by or "").strip()
+    if not owner:
+        return template.name
+    return f"{template.name}@{owner}"
+
+
 def template_to_agent_config(template: MonitorTemplateModel) -> Dict[str, Any]:
     strategy, strategy_config = normalize_extraction_strategy(
         template.match_type,
         template.match_expression,
     )
     return {
-        "name": template.name,
+        # Owner-suffixed so same-array/same-name monitors from different owners
+        # coexist (the Agent keys instances by name).
+        "name": owner_suffixed_name(template),
         "template_id": template.id,
         "template_key": template.template_key,
         "template_version": template.version,
         "visibility": template.visibility or "team",
         "owner_id": template.created_by or "",
+        # deployed_by: at the desired-config layer only the template owner is
+        # known, so it mirrors the owner nickname; per-deployment attribution is
+        # tracked separately on MonitorAssignment.created_by / the health API.
+        "deployed_by": template.created_by or "",
         "team_scope": template.team_scope or "",
         "command": template.command,
         "command_type": template.command_type or "shell",
