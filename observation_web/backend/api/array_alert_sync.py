@@ -27,6 +27,7 @@ from ..models.array import ArrayModel, ConnectionState
 from ..models.lifecycle import SyncStateModel
 from ..models.alert import AlertModel, AlertAckModel
 
+from .auth import require_user
 from .array_status import (
     _array_status_cache,
     _get_array_status,
@@ -421,7 +422,7 @@ async def sync_array_alerts(
 # Refresh endpoint
 # ---------------------------------------------------------------------------
 
-@sync_router.post("/{array_id}/refresh")
+@sync_router.post("/{array_id}/refresh", dependencies=[Depends(require_user)])
 async def refresh_array(
     array_id: str,
     full_sync: bool = Query(False, description="Force full sync instead of incremental"),

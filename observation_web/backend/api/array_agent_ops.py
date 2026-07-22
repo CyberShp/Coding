@@ -29,6 +29,7 @@ from ..core.system_alert import sys_error, sys_info, sys_warning
 from ..db.database import get_db
 
 from .array_status import _get_array_status, _get_array_or_404
+from .auth import require_user
 
 logger = logging.getLogger(__name__)
 agent_router = APIRouter()
@@ -112,7 +113,7 @@ def _compute_config_hash(content: str) -> str:
 # Agent control endpoints
 # ---------------------------------------------------------------------------
 
-@agent_router.post("/{array_id}/deploy-agent")
+@agent_router.post("/{array_id}/deploy-agent", dependencies=[Depends(require_user)])
 async def deploy_agent(
     array_id: str,
     db: AsyncSession = Depends(get_db),
@@ -170,7 +171,7 @@ async def deploy_agent(
     return result
 
 
-@agent_router.post("/{array_id}/start-agent")
+@agent_router.post("/{array_id}/start-agent", dependencies=[Depends(require_user)])
 async def start_agent(
     array_id: str,
     db: AsyncSession = Depends(get_db),
@@ -219,7 +220,7 @@ async def start_agent(
     return result
 
 
-@agent_router.post("/{array_id}/stop-agent")
+@agent_router.post("/{array_id}/stop-agent", dependencies=[Depends(require_user)])
 async def stop_agent(
     array_id: str,
     db: AsyncSession = Depends(get_db),
@@ -268,7 +269,7 @@ async def stop_agent(
     return result
 
 
-@agent_router.post("/{array_id}/restart-agent")
+@agent_router.post("/{array_id}/restart-agent", dependencies=[Depends(require_user)])
 async def restart_agent(
     array_id: str,
     db: AsyncSession = Depends(get_db),
@@ -502,7 +503,7 @@ async def get_agent_config(
         )
 
 
-@agent_router.put("/{array_id}/agent-config")
+@agent_router.put("/{array_id}/agent-config", dependencies=[Depends(require_user)])
 async def update_agent_config(
     array_id: str,
     body: Dict[str, Any] = Body(...),

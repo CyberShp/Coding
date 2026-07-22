@@ -21,6 +21,7 @@ from ..models.alert_rule import (
     BUILTIN_RULES,
 )
 from ..core.alert_expectation import get_expectation_engine, init_builtin_rules
+from .auth import require_user
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/alert-rules", tags=["alert-rules"])
@@ -41,7 +42,7 @@ async def list_rules(
     return [_to_response(r) for r in rules]
 
 
-@router.post("", response_model=AlertRuleResponse, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=AlertRuleResponse, status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_user)])
 async def create_rule(
     rule: AlertRuleCreate,
     db: AsyncSession = Depends(get_db),
@@ -81,7 +82,7 @@ async def get_rule(
     return _to_response(rule)
 
 
-@router.put("/{rule_id}", response_model=AlertRuleResponse)
+@router.put("/{rule_id}", response_model=AlertRuleResponse, dependencies=[Depends(require_user)])
 async def update_rule(
     rule_id: int,
     update: AlertRuleUpdate,
@@ -112,7 +113,7 @@ async def update_rule(
     return _to_response(rule)
 
 
-@router.delete("/{rule_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/{rule_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(require_user)])
 async def delete_rule(
     rule_id: int,
     db: AsyncSession = Depends(get_db),
@@ -137,7 +138,7 @@ async def delete_rule(
     logger.info(f"Deleted alert rule: {rule.name}")
 
 
-@router.post("/{rule_id}/toggle", response_model=AlertRuleResponse)
+@router.post("/{rule_id}/toggle", response_model=AlertRuleResponse, dependencies=[Depends(require_user)])
 async def toggle_rule(
     rule_id: int,
     db: AsyncSession = Depends(get_db),
@@ -158,7 +159,7 @@ async def toggle_rule(
     return _to_response(rule)
 
 
-@router.post("/init-builtin")
+@router.post("/init-builtin", dependencies=[Depends(require_user)])
 async def init_builtin(
     db: AsyncSession = Depends(get_db),
 ):
@@ -167,7 +168,7 @@ async def init_builtin(
     return {"message": "Built-in rules initialized", "count": len(BUILTIN_RULES)}
 
 
-@router.post("/reset-builtin")
+@router.post("/reset-builtin", dependencies=[Depends(require_user)])
 async def reset_builtin(
     db: AsyncSession = Depends(get_db),
 ):

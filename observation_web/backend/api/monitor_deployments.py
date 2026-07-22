@@ -296,6 +296,18 @@ async def deploy_templates(
     templates = result.scalars().all()
     if len(templates) != len(set(body.template_ids)):
         raise HTTPException(status_code=400, detail="No enabled templates found")
+
+    # Deploy requires the template to be VISIBLE to the caller (same rule as
+    # list): otherwise a user could deploy another team's draft by guessing ids.
+    from .monitor_templates import _is_visible
+    from ..core.monitor_template_service import get_user_team_ids
+    team_ids = {str(t) for t in await get_user_team_ids(db, user.id)} if user.id else set()
+    invisible = [t.id for t in templates if not _is_visible(t, user, team_ids)]
+    if invisible:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Templates not visible to you: {invisible}",
+        )
     previous_result = await db.execute(
         select(MonitorAssignmentModel).where(
             MonitorAssignmentModel.template_id.in_(body.template_ids)

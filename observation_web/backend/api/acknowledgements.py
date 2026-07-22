@@ -320,12 +320,26 @@ async def get_alert_ack_details(
     from .arrays import _resolve_ips_to_nicknames
     ips = list({a.acked_by_ip for a in acks})
     nick_map = await _resolve_ips_to_nicknames(db, ips)
+
+    def _nickname_of(acked_by: str):
+        """acked_by_ip historically held an IP; since multi-user Phase 1 it holds
+        the ACCOUNT NICKNAME. IP-map lookup covers legacy rows; for new rows the
+        value itself IS the nickname (unless it's 'system' or IP-shaped). Without
+        this fallback the UI saw None and treated every human ack as a public one."""
+        resolved = nick_map.get(acked_by)
+        if resolved:
+            return resolved
+        if not acked_by or acked_by == "system":
+            return None
+        looks_like_ip = acked_by.replace(".", "").replace(":", "").isdigit() or ":" in acked_by
+        return None if looks_like_ip else acked_by
+
     return [
         AlertAckResponse(
             id=a.id, alert_id=a.alert_id, acked_by_ip=a.acked_by_ip, acked_at=a.acked_at,
             comment=a.comment or "", ack_type=a.ack_type or "dismiss",
             ack_expires_at=a.ack_expires_at, note=a.note or "",
-            acked_by_nickname=nick_map.get(a.acked_by_ip) or None,
+            acked_by_nickname=_nickname_of(a.acked_by_ip),
         )
         for a in acks
     ]
