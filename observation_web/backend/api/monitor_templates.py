@@ -60,6 +60,11 @@ class MonitorTemplateCreate(BaseModel):
     is_enabled: bool = True
     visibility: str = "team"
     team_scope: str = ""
+    # Unified monitor: exec_location=backend runs via the scheduler over SSH.
+    exec_location: str = "agent"
+    commands: Optional[List[str]] = None       # backend multi-command
+    monitor_arrays: Optional[List[str]] = None  # backend target array_ids
+    rule_spec: Optional[Dict[str, Any]] = None  # backend QueryEngine rule
 
 
 class PublishRequest(BaseModel):
@@ -119,6 +124,10 @@ def _model_to_dict(m: MonitorTemplateModel) -> dict:
         "visibility": m.visibility or "team",
         "team_scope": m.team_scope or "",
         "config_fingerprint": m.config_fingerprint or "",
+        "exec_location": m.exec_location or "agent",
+        "commands": json.loads(m.commands_json) if m.commands_json else [],
+        "monitor_arrays": json.loads(m.monitor_arrays) if m.monitor_arrays else [],
+        "rule_spec": json.loads(m.rule_spec_json) if m.rule_spec_json else None,
         "created_at": m.created_at.isoformat() if m.created_at else None,
         "updated_at": m.updated_at.isoformat() if m.updated_at else None,
     }
@@ -247,6 +256,10 @@ async def create_template(
         visibility=body.visibility,
         team_scope=team_scope,
         version=1,
+        exec_location=body.exec_location or "agent",
+        commands_json=json.dumps(body.commands) if body.commands is not None else None,
+        monitor_arrays=json.dumps(body.monitor_arrays) if body.monitor_arrays is not None else None,
+        rule_spec_json=json.dumps(body.rule_spec, ensure_ascii=False) if body.rule_spec is not None else None,
     )
     ensure_template_identity(m)
     db.add(m)
@@ -254,6 +267,13 @@ async def create_template(
     add_version_snapshot(db, m, created_by)
     await db.commit()
     await db.refresh(m)
+    # Backend-exec definitions are driven by the scheduler; register the job.
+    if m.exec_location == "backend":
+        try:
+            from ..core.scheduler import get_scheduler
+            get_scheduler().add_backend_monitor(m)
+        except Exception:
+            logger.warning("Failed to register backend monitor %s", m.id, exc_info=True)
     return _model_to_dict(m)
 
 
@@ -291,6 +311,16 @@ async def update_template(
         assignment.status_message = "模板已更新，等待重新下发"
     await db.commit()
     await db.refresh(m)
+    # Keep the backend scheduler job in sync (interval/rule may have changed, or
+    # exec_location switched away from backend).
+    try:
+        from ..core.scheduler import get_scheduler
+        if m.exec_location == "backend":
+            get_scheduler().add_backend_monitor(m)
+        else:
+            get_scheduler().remove_backend_monitor(m.id)
+    except Exception:
+        logger.warning("Failed to sync backend monitor job for %s", m.id, exc_info=True)
     return _model_to_dict(m)
 
 
@@ -417,8 +447,16 @@ async def delete_template(
         raise HTTPException(status_code=400, detail="Builtin templates cannot be deleted")
     if not _is_owner_or_admin(user, m):
         raise HTTPException(status_code=403, detail="仅创建者或管理员可删除")
+    was_backend = m.exec_location == "backend"
+    tid = m.id
     await db.delete(m)
     await db.commit()
+    if was_backend:
+        try:
+            from ..core.scheduler import get_scheduler
+            get_scheduler().remove_backend_monitor(tid)
+        except Exception:
+            logger.warning("Failed to remove backend monitor job %s", tid, exc_info=True)
     return {"ok": True}
 
 

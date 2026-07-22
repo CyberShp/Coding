@@ -176,7 +176,38 @@ async def deployment_health(
             "status": deployment.status,
             "confirmed_at": deployment.confirmed_at.isoformat() if deployment.confirmed_at else None,
             "last_alert_at": last_alert.isoformat() if last_alert else None,
+            "exec_location": "agent",
         })
+
+    # Backend-exec definitions have no deployment rows (scheduler-driven). Emit
+    # one health row per (definition, target array).
+    import json as _json
+    backend_defs = (await db.execute(
+        select(MonitorTemplateModel).where(MonitorTemplateModel.exec_location == "backend")
+    )).scalars().all()
+    for mt in backend_defs:
+        try:
+            arrays = _json.loads(mt.monitor_arrays) if mt.monitor_arrays else []
+        except (ValueError, TypeError):
+            arrays = []
+        for array_id in (arrays or ["*"]):
+            conds = [AlertModel.details.like(f'%"template_id": {mt.id}%')]
+            if array_id != "*":
+                conds.append(AlertModel.array_id == array_id)
+            last_alert = (await db.execute(
+                select(func.max(AlertModel.timestamp)).where(*conds)
+            )).scalar()
+            out.append({
+                "template_id": mt.id,
+                "template_name": mt.name,
+                "array_id": array_id,
+                "deployed_by": mt.created_by or "",
+                "version": mt.version,
+                "status": "active" if mt.is_enabled else "disabled",
+                "confirmed_at": None,
+                "last_alert_at": last_alert.isoformat() if last_alert else None,
+                "exec_location": "backend",
+            })
     return out
 
 

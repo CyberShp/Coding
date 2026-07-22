@@ -48,6 +48,8 @@ class TaskScheduler:
             await self._load_tasks()
             # Load auto-monitor query templates (custom observers)
             await self._load_auto_monitors()
+            # Load unified backend-exec monitor definitions
+            await self._load_backend_monitors()
 
         except Exception as e:
             logger.error(f"Failed to start scheduler: {e}")
@@ -197,6 +199,114 @@ class TaskScheduler:
                 "Rule-based alerting failed for template '%s' on %s",
                 getattr(template, "name", "?"), array_id, exc_info=True,
             )
+
+    # ------------------------------------------------------------------
+    # Unified backend-exec monitor definitions (monitor_templates,
+    # exec_location=backend). Same interval-job pattern as auto-monitors, but
+    # judged via QueryEngine (rule_spec_json) with owner-attributed alerts.
+    # ------------------------------------------------------------------
+
+    async def _load_backend_monitors(self):
+        from ..models.monitor_template import MonitorTemplateModel
+        async with _db_module.AsyncSessionLocal() as db:
+            rows = (await db.execute(
+                select(MonitorTemplateModel).where(
+                    MonitorTemplateModel.exec_location == "backend",
+                    MonitorTemplateModel.is_enabled == True,  # noqa: E712
+                )
+            )).scalars().all()
+            for t in rows:
+                self.add_backend_monitor(t)
+            logger.info("Loaded %d backend monitors", len(rows))
+
+    def add_backend_monitor(self, template) -> None:
+        """(Re)register a backend-exec monitor definition as an interval job."""
+        if not self._running:
+            return
+        job_id = f"bmon_{template.id}"
+        if getattr(template, "exec_location", "agent") != "backend" or not template.is_enabled:
+            self.remove_backend_monitor(template.id)
+            return
+        from apscheduler.triggers.interval import IntervalTrigger
+        interval = max(int(template.interval or 300), 30)
+        self.scheduler.add_job(
+            self._execute_backend_monitor,
+            trigger=IntervalTrigger(seconds=interval),
+            id=job_id,
+            args=[template.id],
+            name=f"bmon:{template.name}",
+            replace_existing=True,
+            coalesce=True,
+            max_instances=1,
+            misfire_grace_time=30,
+        )
+        logger.info("Registered backend monitor '%s' every %ss", template.name, interval)
+
+    def remove_backend_monitor(self, template_id: int) -> None:
+        if not self._running:
+            return
+        job_id = f"bmon_{template_id}"
+        if self.scheduler.get_job(job_id):
+            self.scheduler.remove_job(job_id)
+            logger.info("Removed backend monitor job %s", job_id)
+
+    async def _execute_backend_monitor(self, template_id: int):
+        """One backend-monitor cycle: exec commands over SSH on target arrays,
+        judge via QueryEngine (rule_spec_json), alert on anomaly with source tag."""
+        from ..models.monitor_template import MonitorTemplateModel
+        from .monitor_rule import evaluate_backend
+        async with _db_module.AsyncSessionLocal() as db:
+            mt = (await db.execute(
+                select(MonitorTemplateModel).where(MonitorTemplateModel.id == template_id)
+            )).scalar()
+            if not mt or mt.exec_location != "backend" or not mt.is_enabled:
+                self.remove_backend_monitor(template_id)
+                return
+            try:
+                commands = json.loads(mt.commands_json) if mt.commands_json else ([mt.command] if mt.command else [])
+            except (ValueError, TypeError):
+                commands = [mt.command] if mt.command else []
+            try:
+                arrays = json.loads(mt.monitor_arrays) if mt.monitor_arrays else []
+            except (ValueError, TypeError):
+                arrays = []
+            ssh_pool = get_ssh_pool()
+            if not arrays:
+                arrays = [aid for aid, c in ssh_pool._connections.items() if c.is_connected()]
+            owner = mt.created_by or "?"
+            for array_id in arrays:
+                conn = ssh_pool.get_connection(array_id)
+                if not conn or not conn.is_connected():
+                    continue
+                for cmd in commands:
+                    try:
+                        _, stdout, stderr = await conn.execute_async(cmd)
+                        output = (stdout or "") + (stderr or "")
+                        result = evaluate_backend(mt.rule_spec_json, output)
+                        if result.is_normal:
+                            continue
+                        from ..core.alert_store import get_alert_store
+                        from ..models.alert import AlertCreate, AlertLevel
+                        try:
+                            level = AlertLevel(mt.alert_level) if mt.alert_level in [l.value for l in AlertLevel] else AlertLevel.WARNING
+                        except Exception:
+                            level = AlertLevel.WARNING
+                        await get_alert_store().create_alert(db, AlertCreate(
+                            array_id=array_id,
+                            observer_name=f"custom:{mt.name}@{owner}",
+                            level=level,
+                            message=f"自定义监测 '{mt.name}' 异常：命令 `{cmd}` 输出不符合预期",
+                            details={
+                                "command": cmd, "output": output[:500],
+                                "matched": result.matched_values,
+                                "template_id": mt.id, "version": mt.version,
+                                "deployed_by": owner,
+                            },
+                            timestamp=datetime.now(),
+                        ))
+                    except Exception as e:
+                        logger.warning("Backend monitor %s on %s failed: %s", mt.name, array_id, e)
+            await db.commit()
 
     def _add_job(self, task: ScheduledTaskModel):
         """Add a job to the scheduler"""
