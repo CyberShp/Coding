@@ -122,22 +122,49 @@
               <el-badge :value="alertCount" :hidden="alertCount === 0" class="alert-badge">
                 <el-button :icon="Bell" circle @click="$router.push('/alerts')" />
               </el-badge>
-              <el-dropdown>
-                <span class="user-dropdown">
-                  <span class="my-dot" :style="{ background: currentUser.color }"></span>
-                  <el-button :icon="User" circle />
+              <!-- Account user (multi-user Phase 1): logged in -->
+              <el-dropdown v-if="authStore.isLoggedIn">
+                <span class="user-dropdown account-user">
+                  <el-icon><User /></el-icon>
+                  <span class="account-nickname">{{ authStore.currentUser?.nickname || '已登录' }}</span>
                 </span>
                 <template #dropdown>
                   <el-dropdown-menu>
                     <el-dropdown-item disabled>
-                      <span style="color: #909399">{{ currentUser.nickname || currentUser.ip }}</span>
+                      <span style="color: #909399">{{ authStore.currentUser?.nickname }}</span>
                     </el-dropdown-item>
-                    <el-dropdown-item @click="showNicknameDialog = true">设置昵称</el-dropdown-item>
-                    <el-dropdown-item @click="showClaimDialog = true">认领昵称</el-dropdown-item>
+                    <el-dropdown-item @click="showTeamSelector = true">我的小组</el-dropdown-item>
+                    <el-dropdown-item divided @click="handleUserLogout">退出登录</el-dropdown-item>
                   </el-dropdown-menu>
                 </template>
               </el-dropdown>
+              <!-- Anonymous: login button + legacy IP nickname dropdown -->
+              <template v-else>
+                <el-button type="primary" size="small" round @click="openLoginDialog(false)">
+                  登录
+                </el-button>
+                <el-dropdown>
+                  <span class="user-dropdown">
+                    <span class="my-dot" :style="{ background: currentUser.color }"></span>
+                    <el-button :icon="User" circle />
+                  </span>
+                  <template #dropdown>
+                    <el-dropdown-menu>
+                      <el-dropdown-item disabled>
+                        <span style="color: #909399">{{ currentUser.nickname || currentUser.ip }}</span>
+                      </el-dropdown-item>
+                      <el-dropdown-item @click="showNicknameDialog = true">设置昵称</el-dropdown-item>
+                      <el-dropdown-item @click="showClaimDialog = true">认领昵称</el-dropdown-item>
+                    </el-dropdown-menu>
+                  </template>
+                </el-dropdown>
+              </template>
             </div>
+
+            <!-- Login/Register dialog (also popped by 401 login_required events) -->
+            <LoginDialog v-model="showLoginDialog" :from-login-required="loginRequired" />
+            <!-- Team (L1 tag) self-selection -->
+            <TeamSelector v-model="showTeamSelector" />
 
             <!-- Nickname Dialog -->
             <el-dialog
@@ -227,6 +254,9 @@ import { useAuthStore } from './stores/auth'
 import { usePreferencesStore } from './stores/preferences'
 import { setSoundEnabled } from './utils/notification'
 import api, { extractError } from './api'
+import authEvents, { AUTH_LOGIN_REQUIRED } from './utils/authEvents'
+import LoginDialog from './components/auth/LoginDialog.vue'
+import TeamSelector from './components/auth/TeamSelector.vue'
 
 const route = useRoute()
 const alertStore = useAlertStore()
@@ -265,6 +295,25 @@ const forceRename = ref(false)
 const showClaimDialog = ref(false)
 const claimInput = ref('')
 let userCountInterval = null
+
+// Multi-user account (Phase 1)
+const showLoginDialog = ref(false)
+const loginRequired = ref(false)
+const showTeamSelector = ref(false)
+
+function openLoginDialog(fromLoginRequired) {
+  loginRequired.value = !!fromLoginRequired
+  showLoginDialog.value = true
+}
+
+function onLoginRequired() {
+  openLoginDialog(true)
+}
+
+function handleUserLogout() {
+  authStore.userLogout()
+  ElMessage.success('已退出登录')
+}
 
 const activeMenu = computed(() => route.path)
 const currentRoute = computed(() => {
@@ -394,6 +443,12 @@ onMounted(() => {
   loadUserCount()
   userCountInterval = setInterval(loadUserCount, 60000)
 
+  // Multi-user: restore account session + listen for write-gate 401 events
+  authEvents.on(AUTH_LOGIN_REQUIRED, onLoginRequired)
+  if (authStore.userToken) {
+    authStore.fetchWhoami()
+  }
+
   // Prefetch all lazy route chunks during idle time so switching pages is
   // instant. Without this, the first click on a route (esp. heavy ones like
   // AlertCenter / TestTasks) pays a chunk-download (prod) or on-demand-compile
@@ -419,6 +474,7 @@ onMounted(() => {
 onUnmounted(() => {
   alertStore.disconnectWebSocket()
   if (userCountInterval) clearInterval(userCountInterval)
+  authEvents.off(AUTH_LOGIN_REQUIRED, onLoginRequired)
 })
 </script>
 
@@ -659,6 +715,23 @@ html, body, #app {
   display: flex;
   align-items: center;
   gap: 4px;
+}
+
+.account-user {
+  cursor: pointer;
+  color: #409eff;
+  font-size: 14px;
+  padding: 4px 8px;
+  border-radius: 16px;
+  background: #ecf5ff;
+}
+
+.account-nickname {
+  font-weight: 600;
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .claim-hint {

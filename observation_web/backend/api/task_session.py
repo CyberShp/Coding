@@ -21,6 +21,8 @@ from ..models.task_session import (
 )
 from ..models.alert import AlertModel
 from ..models.array_lock import ArrayLockModel, ArrayLockInfo, LockConflict
+from ..models.user_account import UserAccountModel
+from .auth import require_user
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/test-tasks", tags=["test-tasks"])
@@ -127,6 +129,7 @@ async def list_tasks(
 async def create_task(
     body: TaskSessionCreate,
     db: AsyncSession = Depends(get_db),
+    _user: UserAccountModel = Depends(require_user),
 ):
     """Create a new test task"""
     task = TaskSessionModel(
@@ -157,6 +160,7 @@ async def start_task(
     task_id: int,
     request: Request,
     db: AsyncSession = Depends(get_db),
+    user: UserAccountModel = Depends(require_user),
 ):
     """Start a test task (mark begin timestamp)"""
     global _active_task_id
@@ -183,9 +187,9 @@ async def start_task(
             }
         )
 
-    # Get user info from request
+    # Get user info: account nickname (signed) first, IP kept for audit
     user_ip = getattr(request.state, 'user_ip', '') or ''
-    user_nickname = ''
+    user_nickname = user.nickname or ''
 
     # Acquire locks
     await _acquire_locks(db, task.id, array_ids, user_ip, user_nickname)
@@ -201,7 +205,7 @@ async def start_task(
 
 
 @router.post("/{task_id}/stop", response_model=TaskSessionResponse)
-async def stop_task(task_id: int, db: AsyncSession = Depends(get_db)):
+async def stop_task(task_id: int, db: AsyncSession = Depends(get_db), _user: UserAccountModel = Depends(require_user)):
     """Stop a test task (mark end timestamp)"""
     global _active_task_id
     task = await db.get(TaskSessionModel, task_id)
@@ -240,7 +244,7 @@ async def stop_task(task_id: int, db: AsyncSession = Depends(get_db)):
 
 
 @router.delete("/{task_id}")
-async def delete_task(task_id: int, db: AsyncSession = Depends(get_db)):
+async def delete_task(task_id: int, db: AsyncSession = Depends(get_db), _user: UserAccountModel = Depends(require_user)):
     """Delete a test task"""
     task = await db.get(TaskSessionModel, task_id)
     if not task:
@@ -410,8 +414,9 @@ async def force_unlock(
     array_id: str,
     request: Request,
     db: AsyncSession = Depends(get_db),
+    user: UserAccountModel = Depends(require_user),
 ):
-    """Force release a lock (admin operation)."""
+    """Force release a lock. Only the lock holder or an admin may unlock."""
     result = await db.execute(
         select(ArrayLockModel).where(ArrayLockModel.array_id == array_id)
     )
@@ -421,7 +426,20 @@ async def force_unlock(
         raise HTTPException(404, "Array is not locked")
 
     user_ip = getattr(request.state, 'user_ip', '') or 'unknown'
-    logger.warning(f"Force unlock: {array_id} by {user_ip} (was locked by task {lock.task_id})")
+
+    # Nickname is the identity when present (IP is unstable and shared);
+    # IP match is only a fallback for legacy locks without a nickname.
+    if lock.locked_by_nickname:
+        is_holder = lock.locked_by_nickname == user.nickname
+    else:
+        is_holder = bool(lock.locked_by_ip and lock.locked_by_ip == user_ip)
+    if not (user.is_admin or is_holder):
+        raise HTTPException(403, "仅锁持有者或管理员可强制解锁")
+
+    logger.warning(
+        f"Force unlock: {array_id} by {user.nickname or user_ip} "
+        f"(was locked by task {lock.task_id})"
+    )
 
     await db.delete(lock)
     await db.commit()

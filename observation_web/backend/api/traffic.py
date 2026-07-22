@@ -21,6 +21,7 @@ from ..core.ssh_pool import get_ssh_pool, SSHPool
 from ..core.traffic_store import get_traffic_store
 from ..core.system_alert import sys_error, sys_info
 from ..db.database import get_db
+from .auth import require_user
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/traffic", tags=["traffic"])
@@ -79,6 +80,7 @@ async def sync_traffic(
     array_id: str,
     db: AsyncSession = Depends(get_db),
     ssh_pool: SSHPool = Depends(get_ssh_pool),
+    _user=Depends(require_user),
 ):
     """
     Sync traffic.jsonl from agent via SSH.

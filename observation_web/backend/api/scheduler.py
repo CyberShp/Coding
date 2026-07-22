@@ -17,6 +17,8 @@ from ..models.scheduler import (
     ScheduledTaskResponse, TaskResultResponse
 )
 
+from .auth import require_user
+
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/tasks", tags=["scheduler"])
 
@@ -40,6 +42,7 @@ async def list_tasks(
 async def create_task(
     data: ScheduledTaskCreate,
     db: AsyncSession = Depends(get_db),
+    _user=Depends(require_user),
 ):
     """Create a new scheduled task"""
     scheduler = get_scheduler()
@@ -69,6 +72,7 @@ async def update_task(
     task_id: int,
     data: ScheduledTaskUpdate,
     db: AsyncSession = Depends(get_db),
+    _user=Depends(require_user),
 ):
     """Update a task"""
     scheduler = get_scheduler()
@@ -84,6 +88,7 @@ async def update_task(
 async def delete_task(
     task_id: int,
     db: AsyncSession = Depends(get_db),
+    _user=Depends(require_user),
 ):
     """Delete a task"""
     scheduler = get_scheduler()
@@ -99,6 +104,7 @@ async def delete_task(
 async def run_task(
     task_id: int,
     db: AsyncSession = Depends(get_db),
+    _user=Depends(require_user),
 ):
     """Run a task immediately"""
     result = await db.execute(

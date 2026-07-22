@@ -16,6 +16,8 @@ from ..core.system_alert import (
     get_system_alert_store,
 )
 
+from .auth import require_user
+
 router = APIRouter(prefix="/system-alerts", tags=["system-alerts"])
 
 
@@ -46,7 +48,7 @@ async def get_stats():
 
 
 @router.delete("")
-async def clear_alerts():
+async def clear_alerts(_user=Depends(require_user)):
     """Clear all alerts"""
     store = get_system_alert_store()
     store.clear()

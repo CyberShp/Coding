@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..db.database import get_db
 from ..models.card_inventory import CardInventoryModel, CardInventoryResponse, CardSyncResult
+from .auth import require_user
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/card-inventory", tags=["card-inventory"])
@@ -84,7 +85,7 @@ async def get_last_sync(db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/sync", response_model=CardSyncResult)
-async def sync_cards(db: AsyncSession = Depends(get_db)):
+async def sync_cards(db: AsyncSession = Depends(get_db), _user=Depends(require_user)):
     """Sync card inventory from all connected arrays using SSH."""
     from ..core.ssh_pool import get_ssh_pool
     from ..models.array import ArrayModel

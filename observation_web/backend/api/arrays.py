@@ -44,6 +44,8 @@ from .array_status import (
 from .array_alert_sync import sync_array_alerts, sync_router
 from .array_agent_ops import agent_router
 
+from .auth import require_user
+
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/arrays", tags=["arrays"])
 
@@ -242,6 +244,7 @@ async def import_arrays(
     file: UploadFile = File(...),
     db: AsyncSession = Depends(get_db),
     ssh_pool: SSHPool = Depends(get_ssh_pool),
+    _user=Depends(require_user),
 ):
     """Import arrays from CSV or Excel. Columns: name, host, port?, username?, tag?, tag_l1?, tag_l2?, color?"""
     from ..models.tag import TagModel
@@ -354,6 +357,7 @@ async def create_array(
     array: ArrayCreate,
     db: AsyncSession = Depends(get_db),
     ssh_pool: SSHPool = Depends(get_ssh_pool),
+    _user=Depends(require_user),
 ):
     """Create a new array"""
     array_id = f"arr_{uuid.uuid4().hex[:8]}"
@@ -414,6 +418,7 @@ async def update_array(
     array_id: str,
     update: ArrayUpdate,
     db: AsyncSession = Depends(get_db),
+    _user=Depends(require_user),
 ):
     """Update array with optimistic locking support."""
     result = await db.execute(select(ArrayModel).where(ArrayModel.array_id == array_id))
@@ -455,6 +460,7 @@ async def delete_array(
     array_id: str,
     db: AsyncSession = Depends(get_db),
     ssh_pool: SSHPool = Depends(get_ssh_pool),
+    _user=Depends(require_user),
 ):
     """Delete array"""
     result = await db.execute(select(ArrayModel).where(ArrayModel.array_id == array_id))
@@ -484,6 +490,7 @@ async def batch_action(
     stream: bool = Query(False, description="Return SSE progress stream"),
     db: AsyncSession = Depends(get_db),
     ssh_pool: SSHPool = Depends(get_ssh_pool),
+    _user=Depends(require_user),
 ):
     """Execute batch operations on multiple arrays."""
     valid_actions = ["connect", "disconnect", "refresh", "deploy-agent", "start-agent", "stop-agent", "restart-agent"]
@@ -697,6 +704,7 @@ async def connect_array(
     password: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
     ssh_pool: SSHPool = Depends(get_ssh_pool),
+    _user=Depends(require_user),
 ):
     """Connect to array."""
     result = await db.execute(select(ArrayModel).where(ArrayModel.array_id == array_id))
@@ -795,6 +803,7 @@ async def disconnect_array(
     array_id: str,
     db: AsyncSession = Depends(get_db),
     ssh_pool: SSHPool = Depends(get_ssh_pool),
+    _user=Depends(require_user),
 ):
     """Disconnect from array"""
     await _get_array_or_404(array_id, db)

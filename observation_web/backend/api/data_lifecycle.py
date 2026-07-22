@@ -21,6 +21,7 @@ from ..models.lifecycle import (
     ArchiveConfig, ArchiveStats, LogFileInfo
 )
 from ..config import get_config
+from .auth import require_user
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/data", tags=["data-lifecycle"])
@@ -61,6 +62,7 @@ async def import_history(
     request: ImportRequest,
     db: AsyncSession = Depends(get_db),
     ssh_pool: SSHPool = Depends(get_ssh_pool),
+    _user=Depends(require_user),
 ):
     """
     Import historical alerts from remote array.
@@ -102,6 +104,7 @@ async def get_archive_config(
 async def update_archive_config(
     config: ArchiveConfig,
     db: AsyncSession = Depends(get_db),
+    _user=Depends(require_user),
 ):
     """Update archive configuration"""
     manager = get_lifecycle_manager()
@@ -111,6 +114,7 @@ async def update_archive_config(
 @router.post("/archive/run")
 async def run_archive(
     db: AsyncSession = Depends(get_db),
+    _user=Depends(require_user),
 ):
     """Manually trigger archive process"""
     manager = get_lifecycle_manager()

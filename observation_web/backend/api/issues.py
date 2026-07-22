@@ -15,24 +15,48 @@ from ..models.issue import (
     IssueUpdateStatus,
     IssueResponse,
 )
-from .auth import require_admin, _verify_token
+from ..models.user_account import UserAccountModel
+from .auth import require_admin, require_user, _verify_token
 
 router = APIRouter(prefix="/issues", tags=["issues"])
 
 
 def _is_admin(request: Request) -> bool:
-    """Check if request has valid admin token."""
+    """Check if request has a valid admin token.
+
+    Accepts legacy admin tokens (config.json account) or user tokens whose
+    signed payload carries is_admin=True.
+    """
     auth = request.headers.get("Authorization", "")
     token = auth[7:] if auth.startswith("Bearer ") else ""
-    return bool(token and _verify_token(token))
+    if not token:
+        return False
+    payload = _verify_token(token)
+    if not payload:
+        return False
+    if payload.get("typ") == "user":
+        return bool(payload.get("is_admin"))
+    return True
 
 
-def _can_change_status(request: Request, issue: IssueModel, is_admin: bool) -> bool:
-    """Only creator or admin can change status."""
+def _can_change_status(
+    request: Request, issue: IssueModel, is_admin: bool,
+    user: "UserAccountModel" = None,
+) -> bool:
+    """Only creator or admin can change status.
+
+    Creator match is either account nickname (multi-user Phase 1) or the
+    legacy same-IP rule.
+    """
     if is_admin:
         return True
+    if user is not None:
+        if user.is_admin:
+            return True
+        if user.nickname and issue.created_by_nickname == user.nickname:
+            return True
     user_ip = getattr(request.state, 'user_ip', None)
-    return user_ip and issue.created_by_ip == user_ip
+    return bool(user_ip and issue.created_by_ip == user_ip)
 
 
 @router.get("", response_model=List[IssueResponse])
@@ -54,15 +78,11 @@ async def create_issue(
     request: Request,
     body: IssueCreate,
     db: AsyncSession = Depends(get_db),
+    user: UserAccountModel = Depends(require_user),
 ):
-    """Create a new issue (any user)."""
+    """Create a new issue (logged-in user)."""
     user_ip = getattr(request.state, 'user_ip', 'unknown')
-    user_nickname = ''
-    from ..models.user_session import UserSessionModel
-    r = await db.execute(select(UserSessionModel).where(UserSessionModel.ip == user_ip))
-    sess = r.scalar_one_or_none()
-    if sess and sess.nickname:
-        user_nickname = sess.nickname
+    user_nickname = user.nickname or ''
 
     issue = IssueModel(
         title=body.title.strip()[:256],
@@ -96,6 +116,7 @@ async def update_issue_status(
     request: Request,
     body: IssueUpdateStatus,
     db: AsyncSession = Depends(get_db),
+    user: UserAccountModel = Depends(require_user),
 ):
     """
     Update issue status. Only creator or admin can change.
@@ -111,16 +132,11 @@ async def update_issue_status(
 
     is_admin = _is_admin(request)
 
-    if not _can_change_status(request, issue, is_admin):
+    if not _can_change_status(request, issue, is_admin, user=user):
         raise HTTPException(status_code=403, detail="仅创建者或管理员可修改状态")
 
     user_ip = getattr(request.state, 'user_ip', '')
-    user_nickname = ''
-    from ..models.user_session import UserSessionModel
-    r = await db.execute(select(UserSessionModel).where(UserSessionModel.ip == user_ip))
-    sess = r.scalar_one_or_none()
-    if sess and sess.nickname:
-        user_nickname = sess.nickname
+    user_nickname = user.nickname or ''
 
     issue.status = body.status
     issue.resolution_note = (body.resolution_note or '')[:2000]

@@ -23,6 +23,8 @@ from ..middleware.user_session import get_client_ip
 from ..models.alert import (
     AlertModel, AlertAckModel, AlertAckCreate, AlertAckResponse, AckType,
 )
+from ..models.user_account import UserAccountModel
+from .auth import require_user
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/alerts", tags=["acknowledgements"])
@@ -36,15 +38,17 @@ async def ack_alerts(
     body: AlertAckCreate,
     request: Request,
     db: AsyncSession = Depends(get_db),
+    user: UserAccountModel = Depends(require_user),
 ):
     """
     Acknowledge one or more alerts.
 
     Creates ack records for the given alert IDs.
     Skips alerts that are already acknowledged (idempotent).
-    Uses ``request.client.host`` as the acknowledger identity.
+    Attribution: the logged-in user's nickname (field name kept as
+    ``acked_by_ip`` for compatibility); user_id is recorded in ``note``.
     """
-    client_ip = get_client_ip(request)
+    client_ip = user.nickname or get_client_ip(request)
 
     if not body.alert_ids:
         raise HTTPException(
@@ -99,7 +103,7 @@ async def ack_alerts(
             comment=body.comment,
             ack_type=ack_type,
             ack_expires_at=expires_at,
-            note=body.comment,
+            note=(body.comment or f"user_id={user.id}"),
         )
         db.add(ack)
         created.append(ack)
@@ -124,6 +128,7 @@ async def ack_all_visible(
     db: AsyncSession = Depends(get_db),
     hours: int = Query(2, ge=1, le=168, description="Only ack alerts within this many hours"),
     ack_type: str = Query("dismiss", description="dismiss | confirmed_ok"),
+    user: UserAccountModel = Depends(require_user),
 ):
     """
     Batch acknowledge all currently unacked alerts within the time range.
@@ -131,7 +136,7 @@ async def ack_all_visible(
     """
     from datetime import datetime
 
-    client_ip = get_client_ip(request)
+    client_ip = user.nickname or get_client_ip(request)
     valid_types = {t.value for t in AckType}
     ack_type_val = ack_type if ack_type in valid_types else AckType.DISMISS.value
 
@@ -183,6 +188,7 @@ async def ack_all_visible(
 async def unack_alert(
     alert_id: int,
     db: AsyncSession = Depends(get_db),
+    _user: UserAccountModel = Depends(require_user),
 ):
     """
     Revoke acknowledgement for a specific alert.
@@ -216,6 +222,7 @@ class BatchModifyRequest(BaseModel):
 async def batch_undo_ack(
     body: BatchUndoRequest,
     db: AsyncSession = Depends(get_db),
+    _user: UserAccountModel = Depends(require_user),
 ):
     """Batch revoke acknowledgements for multiple alerts."""
     if not body.alert_ids:
@@ -235,6 +242,7 @@ async def batch_modify_ack(
     body: BatchModifyRequest,
     request: Request,
     db: AsyncSession = Depends(get_db),
+    _user: UserAccountModel = Depends(require_user),
 ):
     """Batch change ack type for multiple alerts. Updates existing ack records."""
     if not body.alert_ids:

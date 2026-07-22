@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..db.database import get_db
 from ..models.tag import TagModel, TagCreate, TagUpdate, TagResponse, TagWithArrays
 from ..models.array import ArrayModel
+from .auth import require_user
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/tags", tags=["tags"])
@@ -88,6 +89,7 @@ async def list_tags(
 async def create_tag(
     tag: TagCreate,
     db: AsyncSession = Depends(get_db),
+    _user=Depends(require_user),
 ):
     """
     Create a new tag.
@@ -212,6 +214,7 @@ async def update_tag(
     tag_id: int,
     tag_update: TagUpdate,
     db: AsyncSession = Depends(get_db),
+    _user=Depends(require_user),
 ):
     """
     Update a tag.
@@ -257,6 +260,7 @@ async def update_tag(
 async def delete_tag(
     tag_id: int,
     db: AsyncSession = Depends(get_db),
+    _user=Depends(require_user),
 ):
     """
     Delete a tag. Arrays with this tag will have tag_id set to NULL.
@@ -272,6 +276,7 @@ async def delete_tag(
 @router.post("/migrate-folders", response_model=dict)
 async def migrate_folders_to_tags(
     db: AsyncSession = Depends(get_db),
+    _user=Depends(require_user),
 ):
     """
     Migrate existing folder values to tags.

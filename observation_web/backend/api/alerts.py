@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..core.alert_store import get_alert_store, AlertStore
 from ..db.database import get_db
 from ..models.alert import AlertResponse, AlertStats, AlertLevel
+from .auth import require_user
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/alerts", tags=["alerts"])
@@ -431,6 +432,7 @@ async def export_alerts(
 async def cleanup_old_alerts(
     days: int = Query(30, ge=1, le=365, description="Delete alerts older than days"),
     db: AsyncSession = Depends(get_db),
+    _user=Depends(require_user),
 ):
     """Delete old alerts"""
     store = get_alert_store()

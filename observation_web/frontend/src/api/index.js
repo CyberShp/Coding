@@ -1,4 +1,5 @@
 import axios from 'axios'
+import authEvents, { AUTH_LOGIN_REQUIRED } from '../utils/authEvents'
 
 /**
  * Unified error-message extractor.
@@ -31,37 +32,32 @@ const httpLong = axios.create({
   timeout: 60000,  // 60s for long operations
 })
 
-// Request interceptor - add auth token when present
-http.interceptors.request.use(
-  config => {
-    const token = localStorage.getItem('admin_token')
-    if (token) {
-      config.headers.Authorization = `Bearer ${token}`
-    }
-    return config
-  },
-  error => {
-    return Promise.reject(error)
+// Request interceptor - add auth token when present.
+// user_token (multi-user account) takes precedence over admin_token (legacy admin backdoor).
+const attachAuthToken = config => {
+  const token = localStorage.getItem('user_token') || localStorage.getItem('admin_token')
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`
   }
-)
+  return config
+}
 
-httpLong.interceptors.request.use(
-  config => {
-    const token = localStorage.getItem('admin_token')
-    if (token) {
-      config.headers.Authorization = `Bearer ${token}`
-    }
-    return config
-  },
-  error => {
-    return Promise.reject(error)
-  }
-)
+http.interceptors.request.use(attachAuthToken, error => Promise.reject(error))
+httpLong.interceptors.request.use(attachAuthToken, error => Promise.reject(error))
 
 // Response interceptor with better error handling
-const handleError = (error) => {
+// Exported for unit testing (tests/unit/auth.spec.js).
+export const handleError = (error) => {
   if (error.response?.status === 401) {
-    // Token expired or invalid — clear it and redirect to admin login if we had a token
+    // Multi-user write gate: 401 {"detail":"login_required"} means the write
+    // needs a logged-in user account — do NOT redirect to the admin login
+    // page; emit a global event so App.vue can pop the LoginDialog instead.
+    if (error.response?.data?.detail === 'login_required') {
+      authEvents.emit(AUTH_LOGIN_REQUIRED, { url: error.config?.url })
+      return Promise.reject(error)
+    }
+    // Legacy admin path: token expired or invalid — clear it and redirect to
+    // admin login if we had an admin token.
     const hadToken = !!localStorage.getItem('admin_token')
     localStorage.removeItem('admin_token')
     if (hadToken && !window.location.pathname.startsWith('/admin/login')) {
@@ -115,6 +111,12 @@ export default {
 
   // Auth (admin)
   login: (username, password) => http.post('/auth/login', { username, password }),
+
+  // Auth (multi-user accounts, Phase 1)
+  register: (nickname, password) => http.post('/auth/register', { nickname, password }),
+  userLogin: (nickname, password) => http.post('/auth/user-login', { nickname, password }),
+  whoami: () => http.get('/auth/whoami'),
+  setMyTeams: (tagIds) => http.put('/auth/me/teams', { tag_ids: tagIds }),
 
   // Admin monitor templates
   getMonitorTemplates: () => http.get('/admin/monitor-templates'),
