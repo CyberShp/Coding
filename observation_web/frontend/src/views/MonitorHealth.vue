@@ -32,6 +32,13 @@
       >
         <el-table-column prop="template_name" label="监测模板" min-width="160" />
         <el-table-column prop="array_id" label="阵列" min-width="140" />
+        <el-table-column label="执行" width="90">
+          <template #default="{ row }">
+            <el-tag :type="row.exec_location === 'backend' ? 'success' : 'primary'" size="small" effect="plain">
+              {{ row.exec_location === 'backend' ? '后端' : 'Agent' }}
+            </el-tag>
+          </template>
+        </el-table-column>
         <el-table-column prop="deployed_by" label="部署人" width="120">
           <template #default="{ row }">{{ row.deployed_by || '未知' }}</template>
         </el-table-column>
