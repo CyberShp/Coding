@@ -218,6 +218,7 @@
 <script setup>
 import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 import { useRoute } from 'vue-router'
+import router from './router'
 import { ElMessage } from 'element-plus'
 import zhCn from 'element-plus/dist/locale/zh-cn.mjs'
 import { Monitor, Odometer, Cpu, Bell, Search, Setting, User, Warning, Files, Timer, WarningFilled, Stopwatch, UserFilled, ChatDotRound, InfoFilled, Box, Star } from '@element-plus/icons-vue'
@@ -392,6 +393,27 @@ onMounted(() => {
   preferencesStore.load()
   loadUserCount()
   userCountInterval = setInterval(loadUserCount, 60000)
+
+  // Prefetch all lazy route chunks during idle time so switching pages is
+  // instant. Without this, the first click on a route (esp. heavy ones like
+  // AlertCenter / TestTasks) pays a chunk-download (prod) or on-demand-compile
+  // (vite dev) cost — the ~0.5s "nav doesn't respond" lag.
+  const prefetchRoutes = () => {
+    try {
+      router.getRoutes().forEach((r) => {
+        const comp = r.components && r.components.default
+        if (typeof comp === 'function') {
+          const p = comp()
+          if (p && typeof p.catch === 'function') p.catch(() => {})
+        }
+      })
+    } catch (e) { /* non-fatal */ }
+  }
+  if (typeof window.requestIdleCallback === 'function') {
+    window.requestIdleCallback(prefetchRoutes, { timeout: 3000 })
+  } else {
+    setTimeout(prefetchRoutes, 2000)
+  }
 })
 
 onUnmounted(() => {
