@@ -23,6 +23,7 @@ from backend.models import (  # noqa: E402, F401
     observer_config, ai_interpretation, card_inventory, alerts_v2,
     expected_window, observer_snapshot, agent_heartbeat, card_presence,
     viewer_profile, system_config, enrollment, baseline, causal,
+    user_account,
 )
 
 config = context.config
@@ -36,7 +37,15 @@ target_metadata = Base.metadata
 
 
 def _get_sync_database_url() -> str:
-    """Build sync SQLite URL (not async) for Alembic's synchronous runner."""
+    """Build sync SQLite URL (not async) for Alembic's synchronous runner.
+
+    Honors the same OBSERVATION_DB_URL override as backend.db.database so
+    migrations always run against the engine the app actually uses.
+    """
+    env_url = os.environ.get("OBSERVATION_DB_URL")
+    if env_url:
+        return env_url.replace("+aiosqlite", "").replace("+asyncpg", "")
+
     try:
         from backend.config import get_config
         app_cfg = get_config()

@@ -33,6 +33,7 @@
           </template>
           <div class="agg-header">
             <el-tag :type="getLevelType(item.level)" size="small">{{ getLevelText(item.level) }}</el-tag>
+            <el-tag v-if="isExpected(item)" type="info" size="small" effect="plain" class="expected-tag">预期内(测试期)</el-tag>
             <span class="agg-obs">{{ getObserverLabel(item.observer_name) }}</span>
             <span class="agg-msg">{{ getTranslatedSummary(item) }}</span>
             <span class="agg-time">{{ formatDateTime(item.timestamp) }}</span>
@@ -61,6 +62,7 @@
 import { Check } from '@element-plus/icons-vue'
 import { useAlertStore } from '@/stores/alerts'
 import { translateAlert, getObserverName, LEVEL_LABELS, LEVEL_TAG_TYPES } from '@/utils/alertTranslator'
+import { isExpectedTestAlert } from '@/utils/alertHelpers'
 
 const props = defineProps({
   alerts: { type: Array, default: () => [] },
@@ -70,6 +72,8 @@ const props = defineProps({
 defineEmits(['open', 'quick-ack'])
 
 const alertStore = useAlertStore()
+
+const isExpected = isExpectedTestAlert
 
 // AI context descriptions for observer types
 const OBSERVER_CONTEXT = {
@@ -151,6 +155,11 @@ function formatDateTime(timestamp) {
   font-weight: 500;
   font-size: 13px;
   color: var(--el-color-primary);
+}
+.expected-tag {
+  flex-shrink: 0;
+  font-size: 10px;
+  color: var(--el-text-color-secondary);
 }
 .agg-msg {
   flex: 1;

@@ -1,8 +1,9 @@
 """
-Admin monitor templates API.
+Monitor templates API (multi-user Phase 2).
 
-CRUD for custom monitor templates and deploy to arrays.
-Admin-only (require_admin).
+CRUD for custom monitor templates and deploy to arrays. Any logged-in user can
+create/read/deploy their own monitors; visibility (draft/team/global) controls
+who sees them and owner/admin gates mutation. Builtin templates stay admin-only.
 """
 
 import json
@@ -22,11 +23,15 @@ from ..models.monitor_template import (
 )
 from ..core.monitor_template_service import (
     CONFIG_FIELDS,
+    VISIBILITY_ORDER,
+    VISIBILITY_VALUES,
     add_version_snapshot,
     ensure_template_identity,
+    get_user_team_ids,
     template_to_agent_config,
 )
-from .auth import require_admin
+from ..models.user_account import UserAccountModel
+from .auth import get_current_user, require_user
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/admin/monitor-templates", tags=["admin-monitors"])
@@ -55,6 +60,10 @@ class MonitorTemplateCreate(BaseModel):
     is_enabled: bool = True
     visibility: str = "team"
     team_scope: str = ""
+
+
+class PublishRequest(BaseModel):
+    visibility: str
 
 
 class MonitorTemplateUpdate(BaseModel):
@@ -104,6 +113,7 @@ def _model_to_dict(m: MonitorTemplateModel) -> dict:
         "is_enabled": m.is_enabled if m.is_enabled is not None else True,
         "is_builtin": m.is_builtin or False,
         "created_by": m.created_by or "",
+        "owner_user_id": m.owner_user_id,
         "template_key": m.template_key or "",
         "version": m.version or 1,
         "visibility": m.visibility or "team",
@@ -115,15 +125,62 @@ def _model_to_dict(m: MonitorTemplateModel) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Permission helpers
+# ---------------------------------------------------------------------------
+
+def _is_owner_or_admin(user: UserAccountModel, template: MonitorTemplateModel) -> bool:
+    """Owner (by precise FK) or any admin may mutate a template."""
+    if user.is_admin:
+        return True
+    return (
+        template.owner_user_id is not None
+        and user.id
+        and template.owner_user_id == user.id
+    )
+
+
+def _is_visible(
+    template: MonitorTemplateModel,
+    user: Optional[UserAccountModel],
+    team_ids: set,
+) -> bool:
+    """Visibility rule (list_templates contract):
+    global ∪ builtin(default) ∪ (team ∧ team_scope∈user teams) ∪ owned-by-user.
+    Anonymous users see only global + builtin defaults.
+    """
+    visibility = template.visibility or "team"
+    if visibility == "global" or template.is_builtin:
+        return True
+    if user is None:
+        return False
+    if user.is_admin:
+        return True
+    if template.owner_user_id is not None and user.id and template.owner_user_id == user.id:
+        return True
+    if visibility == "team" and template.team_scope and str(template.team_scope) in team_ids:
+        return True
+    return False
+
+
+# ---------------------------------------------------------------------------
 # CRUD endpoints
 # ---------------------------------------------------------------------------
 
 @router.get("", response_model=List[dict])
 async def list_templates(
-    _payload: dict = Depends(require_admin),
+    request: Request,
     db: AsyncSession = Depends(get_db),
 ):
-    """List all monitor templates."""
+    """List monitor templates visible to the caller.
+
+    Anonymous callers see only global + builtin defaults; logged-in users
+    additionally see team templates scoped to their L1 tags and everything they
+    own; admins see all.
+    """
+    user = await get_current_user(request)
+    team_ids: set = set()
+    if user is not None and user.id:
+        team_ids = {str(t) for t in await get_user_team_ids(db, user.id)}
     result = await db.execute(select(MonitorTemplateModel).order_by(MonitorTemplateModel.id))
     rows = result.scalars().all()
     if rows:
@@ -147,20 +204,26 @@ async def list_templates(
             await db.commit()
             for row in rows:
                 await db.refresh(row)
-    return [_model_to_dict(r) for r in rows]
+    visible = [r for r in rows if _is_visible(r, user, team_ids)]
+    return [_model_to_dict(r) for r in visible]
 
 
 @router.post("", response_model=dict)
 async def create_template(
     body: MonitorTemplateCreate,
-    request: Request,
-    _payload: dict = Depends(require_admin),
+    user: UserAccountModel = Depends(require_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Create a new monitor template."""
-    created_by = _payload.get("sub") or (request.client.host if request.client else "")
-    if body.visibility not in {"private", "team", "global"}:
-        raise HTTPException(status_code=400, detail="visibility must be private, team or global")
+    """Create a new monitor template (any logged-in user)."""
+    created_by = user.nickname or ""
+    if body.visibility not in VISIBILITY_VALUES:
+        raise HTTPException(status_code=400, detail="visibility must be draft, team or global")
+    # team_scope: the user's first L1 tag id (string); empty => personal-only.
+    team_scope = body.team_scope or ""
+    if not team_scope and user.id:
+        team_ids = await get_user_team_ids(db, user.id)
+        if team_ids:
+            team_scope = str(team_ids[0])
     m = MonitorTemplateModel(
         name=body.name,
         description=body.description,
@@ -180,8 +243,9 @@ async def create_template(
         is_enabled=body.is_enabled,
         is_builtin=False,
         created_by=created_by,
+        owner_user_id=(user.id or None),
         visibility=body.visibility,
-        team_scope=body.team_scope,
+        team_scope=team_scope,
         version=1,
     )
     ensure_template_identity(m)
@@ -197,23 +261,27 @@ async def create_template(
 async def update_template(
     template_id: int,
     body: MonitorTemplateUpdate,
-    _payload: dict = Depends(require_admin),
+    user: UserAccountModel = Depends(require_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Update a monitor template."""
+    """Update a monitor template. Owner or admin only; builtin => admin only."""
     result = await db.execute(select(MonitorTemplateModel).where(MonitorTemplateModel.id == template_id))
     m = result.scalar_one_or_none()
     if not m:
         raise HTTPException(status_code=404, detail="Template not found")
+    if m.is_builtin and not user.is_admin:
+        raise HTTPException(status_code=403, detail="内置模板仅管理员可修改")
+    if not _is_owner_or_admin(user, m):
+        raise HTTPException(status_code=403, detail="仅创建者或管理员可修改")
     updates = body.model_dump(exclude_unset=True)
     visibility = updates.get("visibility")
-    if visibility is not None and visibility not in {"private", "team", "global"}:
-        raise HTTPException(status_code=400, detail="visibility must be private, team or global")
+    if visibility is not None and visibility not in VISIBILITY_VALUES:
+        raise HTTPException(status_code=400, detail="visibility must be draft, team or global")
     for k, v in updates.items():
         setattr(m, k, v)
     m.version = (m.version or 1) + 1
     await db.flush()
-    add_version_snapshot(db, m, _payload.get("sub", ""))
+    add_version_snapshot(db, m, user.nickname or "")
     assignment_result = await db.execute(
         select(MonitorAssignmentModel).where(MonitorAssignmentModel.template_id == m.id)
     )
@@ -226,10 +294,44 @@ async def update_template(
     return _model_to_dict(m)
 
 
+@router.post("/{template_id}/publish", response_model=dict)
+async def publish_template(
+    template_id: int,
+    body: PublishRequest,
+    user: UserAccountModel = Depends(require_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Change a template's visibility (publish). Owner or admin only.
+
+    Only upgrades along draft -> team -> global are allowed (never a downgrade),
+    matching the lifecycle in the design contract.
+    """
+    if body.visibility not in VISIBILITY_VALUES:
+        raise HTTPException(status_code=400, detail="visibility must be draft, team or global")
+    result = await db.execute(
+        select(MonitorTemplateModel).where(MonitorTemplateModel.id == template_id)
+    )
+    m = result.scalar_one_or_none()
+    if not m:
+        raise HTTPException(status_code=404, detail="Template not found")
+    if not _is_owner_or_admin(user, m):
+        raise HTTPException(status_code=403, detail="仅创建者或管理员可发布")
+    current = m.visibility or "team"
+    if VISIBILITY_ORDER[body.visibility] < VISIBILITY_ORDER[current]:
+        raise HTTPException(
+            status_code=400,
+            detail=f"不可降级可见性（{current} -> {body.visibility}）",
+        )
+    m.visibility = body.visibility
+    await db.commit()
+    await db.refresh(m)
+    return _model_to_dict(m)
+
+
 @router.get("/{template_id}/versions", response_model=List[dict])
 async def list_template_versions(
     template_id: int,
-    _payload: dict = Depends(require_admin),
+    _user: UserAccountModel = Depends(require_user),
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(
@@ -255,7 +357,7 @@ async def list_template_versions(
 async def restore_template_version(
     template_id: int,
     version: int,
-    _payload: dict = Depends(require_admin),
+    user: UserAccountModel = Depends(require_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Restore a historical snapshot as a new immutable version."""
@@ -265,6 +367,10 @@ async def restore_template_version(
     template = template_result.scalar_one_or_none()
     if not template:
         raise HTTPException(status_code=404, detail="Template not found")
+    if template.is_builtin and not user.is_admin:
+        raise HTTPException(status_code=403, detail="内置模板仅管理员可修改")
+    if not _is_owner_or_admin(user, template):
+        raise HTTPException(status_code=403, detail="仅创建者或管理员可恢复版本")
     version_result = await db.execute(
         select(MonitorTemplateVersionModel).where(
             MonitorTemplateVersionModel.template_id == template_id,
@@ -280,7 +386,7 @@ async def restore_template_version(
             setattr(template, field, snapshot[field])
     template.version = (template.version or 1) + 1
     await db.flush()
-    add_version_snapshot(db, template, _payload.get("sub", ""))
+    add_version_snapshot(db, template, user.nickname or "")
     assignment_result = await db.execute(
         select(MonitorAssignmentModel).where(MonitorAssignmentModel.template_id == template.id)
     )
@@ -296,16 +402,21 @@ async def restore_template_version(
 @router.delete("/{template_id}")
 async def delete_template(
     template_id: int,
-    _payload: dict = Depends(require_admin),
+    user: UserAccountModel = Depends(require_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Delete a monitor template. Builtin templates cannot be deleted."""
+    """Delete a monitor template. Owner or admin only; builtin => admin only."""
     result = await db.execute(select(MonitorTemplateModel).where(MonitorTemplateModel.id == template_id))
     m = result.scalar_one_or_none()
     if not m:
         raise HTTPException(status_code=404, detail="Template not found")
     if m.is_builtin:
+        # Builtin add/edit/delete stays admin-gated regardless of ownership.
+        if not user.is_admin:
+            raise HTTPException(status_code=403, detail="内置模板仅管理员可删除")
         raise HTTPException(status_code=400, detail="Builtin templates cannot be deleted")
+    if not _is_owner_or_admin(user, m):
+        raise HTTPException(status_code=403, detail="仅创建者或管理员可删除")
     await db.delete(m)
     await db.commit()
     return {"ok": True}

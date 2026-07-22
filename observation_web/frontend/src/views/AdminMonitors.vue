@@ -3,10 +3,10 @@
     <el-card>
       <template #header>
         <div class="page-header">
-          <span>观察点管理</span>
+          <span>自定义监测</span>
           <el-button type="primary" size="small" @click="openCreateDrawer">
             <el-icon><Plus /></el-icon>
-            创建自定义观察点
+            创建自定义监测
           </el-button>
         </div>
       </template>
@@ -27,6 +27,17 @@
           size="small"
           style="width: 220px"
         />
+      </div>
+
+      <!-- 可见性分区筛选（仅自定义监测有可见性） -->
+      <div class="visibility-bar">
+        <el-radio-group v-model="filterVisibility" size="small">
+          <el-radio-button label="">全部自定义 ({{ customTotal }})</el-radio-button>
+          <el-radio-button label="draft">我的草稿 ({{ visibilityGroups.draft.length }})</el-radio-button>
+          <el-radio-button label="team">本组 ({{ visibilityGroups.team.length }})</el-radio-button>
+          <el-radio-button label="global">全局库 ({{ visibilityGroups.global.length }})</el-radio-button>
+        </el-radio-group>
+        <span class="visibility-hint">全局库 / 本组的模板可直接“复用”部署到你关心的阵列</span>
       </div>
 
       <!-- 统一列表 -->
@@ -63,13 +74,21 @@
         <el-table-column label="间隔" width="75">
           <template #default="{ row }">{{ row.interval }}s</template>
         </el-table-column>
-        <el-table-column label="版本 / 范围" width="125">
+        <el-table-column label="版本 / 可见性" width="150">
           <template #default="{ row }">
             <span v-if="row.isBuiltin" class="text-muted">内置</span>
             <template v-else>
               <code class="obs-code">v{{ row.version || 1 }}</code>
-              <span class="scope-label">{{ { private: '个人', team: '团队', global: '全局' }[row.visibility] || '团队' }}</span>
+              <el-tag :type="VISIBILITY_TAG_TYPE[normalizeVisibility(row.visibility)]" size="small" effect="plain">
+                {{ VISIBILITY_LABELS[normalizeVisibility(row.visibility)] }}
+              </el-tag>
             </template>
+          </template>
+        </el-table-column>
+        <el-table-column label="创建者" width="120">
+          <template #default="{ row }">
+            <span v-if="row.isBuiltin" class="text-muted">—</span>
+            <span v-else class="creator-label">{{ row.created_by || '未知' }}</span>
           </template>
         </el-table-column>
         <el-table-column label="开关" width="70">
@@ -82,14 +101,30 @@
             />
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="160" fixed="right">
+        <el-table-column label="操作" width="300" fixed="right">
           <template #default="{ row }">
-            <el-button size="small" text type="primary" @click.stop="openDetailDrawer(row)">
-              {{ row.isBuiltin ? '配置' : '编辑' }}
+            <!-- 内置观察点：配置 -->
+            <el-button v-if="row.isBuiltin" size="small" text type="primary" @click.stop="openDetailDrawer(row)">
+              配置
             </el-button>
-            <template v-if="!row.isBuiltin">
-              <el-button size="small" text type="danger" @click.stop="handleDelete(row)">删除</el-button>
-              <el-button size="small" text type="success" @click.stop="openStudio(row)">运行状态</el-button>
+            <template v-else>
+              <!-- owner / admin: 编辑 / 删除 / 发布 -->
+              <template v-if="canManage(row)">
+                <el-button size="small" text type="primary" @click.stop="openStudio(row)">编辑</el-button>
+                <el-button size="small" text type="danger" @click.stop="handleDelete(row)">删除</el-button>
+                <el-button
+                  v-for="action in publishTargets(row.visibility)"
+                  :key="action.visibility"
+                  size="small"
+                  text
+                  type="warning"
+                  @click.stop="handlePublish(row, action)"
+                >{{ action.label }}</el-button>
+              </template>
+              <!-- 非 owner：只读署名 -->
+              <span v-else class="owner-note">由 {{ row.created_by || '未知' }} 创建</span>
+              <!-- 任何登录用户都可复用部署 -->
+              <el-button size="small" text type="success" @click.stop="openDeployDialog(row)">部署</el-button>
             </template>
           </template>
         </el-table-column>
@@ -101,6 +136,56 @@
       :template="studioTemplate"
       @saved="handleStudioSaved"
     />
+
+    <!-- 复用部署对话框：任何登录用户可将可见模板部署到阵列（版本固定） -->
+    <el-dialog v-model="deployVisible" title="部署监测到阵列" width="480px" destroy-on-close>
+      <template v-if="deployTarget">
+        <div class="deploy-summary">
+          <div><span class="deploy-key">监测</span>{{ deployTarget.name }}</div>
+          <div>
+            <span class="deploy-key">部署版本</span>
+            <code class="obs-code">v{{ deployTarget.version || 1 }}</code>
+            <span class="deploy-hint">（版本固定，作者后续改动不会自动影响此次部署）</span>
+          </div>
+          <div><span class="deploy-key">来源</span>{{ VISIBILITY_LABELS[normalizeVisibility(deployTarget.visibility)] }} · 由 {{ deployTarget.created_by || '未知' }} 创建</div>
+        </div>
+        <el-form label-width="90px" label-position="left" class="deploy-form">
+          <el-form-item label="部署维度">
+            <el-radio-group v-model="deployTargetType">
+              <el-radio-button label="tag">按标签</el-radio-button>
+              <el-radio-button label="array">按阵列</el-radio-button>
+            </el-radio-group>
+          </el-form-item>
+          <el-form-item label="部署目标">
+            <el-select
+              v-model="deployTargetIds"
+              multiple
+              filterable
+              collapse-tags
+              collapse-tags-tooltip
+              placeholder="选择目标"
+              style="width: 100%"
+            >
+              <el-option
+                v-for="item in deployOptions"
+                :key="item.id"
+                :label="deployOptionLabel(item)"
+                :value="item.id"
+              />
+            </el-select>
+          </el-form-item>
+        </el-form>
+      </template>
+      <template #footer>
+        <el-button @click="deployVisible = false">取消</el-button>
+        <el-button
+          type="primary"
+          :loading="deploying"
+          :disabled="!deployTargetIds.length"
+          @click="submitDeploy"
+        >部署 v{{ deployTarget?.version || 1 }}</el-button>
+      </template>
+    </el-dialog>
 
     <!-- 详情 / 编辑 抽屉 -->
     <el-drawer
@@ -160,8 +245,19 @@
 import { ref, reactive, computed, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus } from '@element-plus/icons-vue'
-import api from '@/api'
+import api, { extractError } from '@/api'
 import CustomObserverStudio from '@/components/admin/CustomObserverStudio.vue'
+import { useAuthStore } from '@/stores/auth'
+import {
+  VISIBILITY_LABELS,
+  VISIBILITY_TAG_TYPE,
+  normalizeVisibility,
+  partitionByVisibility,
+  canManageTemplate,
+  publishTargets,
+} from './monitorHelpers'
+
+const authStore = useAuthStore()
 
 const CATEGORY_LABELS = { port: '端口级', card: '卡件级', system: '系统级', custom: '自定义' }
 const CATEGORY_TAG_TYPE = { port: '', card: 'warning', system: 'success', custom: 'info' }
@@ -198,9 +294,31 @@ const loading = ref(false)
 const templates = ref([])
 const observerOverrides = ref({})
 const filterCategory = ref('')
+const filterVisibility = ref('')
 const searchText = ref('')
 const studioVisible = ref(false)
 const studioTemplate = ref(null)
+
+// Deploy (reuse) dialog state
+const deployVisible = ref(false)
+const deployTarget = ref(null)
+const deployTargetType = ref('tag')
+const deployTargetIds = ref([])
+const deploying = ref(false)
+const arrays = ref([])
+const tags = ref([])
+
+const visibilityGroups = computed(() => partitionByVisibility(templates.value))
+const customTotal = computed(() => templates.value.length)
+const deployOptions = computed(() => (deployTargetType.value === 'tag' ? tags.value : arrays.value))
+
+function canManage(row) {
+  return canManageTemplate(row, authStore.currentUser, authStore.isAdmin)
+}
+
+function deployOptionLabel(item) {
+  return item.array_id ? `${item.name} (${item.array_id})` : item.name
+}
 
 // Drawer state
 const drawerVisible = ref(false)
@@ -242,6 +360,11 @@ const filteredRows = computed(() => {
     } else {
       rows = rows.filter(r => r.category === filterCategory.value)
     }
+  }
+  // Visibility filter applies only to custom templates; when set, builtin rows
+  // are hidden so the zone shows exactly its own templates.
+  if (filterVisibility.value) {
+    rows = rows.filter(r => !r.isBuiltin && normalizeVisibility(r.visibility) === filterVisibility.value)
   }
   if (searchText.value) {
     const q = searchText.value.toLowerCase()
@@ -338,6 +461,57 @@ async function handleToggle(row, val) {
   }
 }
 
+async function handlePublish(row, action) {
+  try {
+    await ElMessageBox.confirm(
+      `确定将「${row.name}」${action.label}？发布后该范围内用户均可见并复用。`,
+      '确认发布',
+      { type: 'warning' },
+    )
+    await api.publishMonitorTemplate(row.id, action.visibility)
+    ElMessage.success('已发布')
+    loadTemplates()
+  } catch (e) {
+    if (e !== 'cancel') {
+      ElMessage.error('发布失败: ' + extractError(e))
+    }
+  }
+}
+
+// ── Deploy (reuse) ──
+
+function openDeployDialog(row) {
+  deployTarget.value = row
+  deployTargetType.value = 'tag'
+  deployTargetIds.value = []
+  deployVisible.value = true
+  if (!arrays.value.length || !tags.value.length) loadDeployTargets()
+}
+
+async function loadDeployTargets() {
+  try {
+    const [arrayRes, tagRes] = await Promise.all([api.getArrays(), api.getTags()])
+    arrays.value = arrayRes.data || []
+    tags.value = tagRes.data || []
+  } catch (e) {
+    ElMessage.error('加载部署目标失败: ' + extractError(e))
+  }
+}
+
+async function submitDeploy() {
+  if (!deployTarget.value || !deployTargetIds.value.length) return
+  deploying.value = true
+  try {
+    await api.deployMonitorTemplates([deployTarget.value.id], deployTargetType.value, deployTargetIds.value)
+    ElMessage.success(`已部署 v${deployTarget.value.version || 1}，状态以 Agent 加载回执为准`)
+    deployVisible.value = false
+  } catch (e) {
+    ElMessage.error('部署失败: ' + extractError(e))
+  } finally {
+    deploying.value = false
+  }
+}
+
 async function handleDelete(row) {
   try {
     await ElMessageBox.confirm(`确定删除模板「${row.label}」？`, '确认删除', { type: 'warning' })
@@ -401,8 +575,49 @@ onMounted(() => {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 16px;
+  margin-bottom: 12px;
   gap: 12px;
+}
+.visibility-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+.visibility-hint {
+  color: var(--el-text-color-placeholder);
+  font-size: 12px;
+}
+.creator-label {
+  font-size: 13px;
+  color: var(--el-text-color-regular);
+}
+.owner-note {
+  color: var(--el-text-color-placeholder);
+  font-size: 12px;
+  margin-right: 8px;
+}
+.deploy-summary {
+  background: var(--el-fill-color-light);
+  border-radius: 6px;
+  padding: 12px 14px;
+  margin-bottom: 16px;
+  font-size: 13px;
+  line-height: 1.9;
+}
+.deploy-key {
+  display: inline-block;
+  width: 68px;
+  color: var(--el-text-color-secondary);
+}
+.deploy-hint {
+  color: var(--el-text-color-placeholder);
+  font-size: 12px;
+  margin-left: 6px;
+}
+.deploy-form {
+  margin-top: 4px;
 }
 .obs-label {
   font-weight: 500;

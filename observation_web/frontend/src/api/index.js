@@ -1,4 +1,5 @@
 import axios from 'axios'
+import authEvents, { AUTH_LOGIN_REQUIRED } from '../utils/authEvents'
 
 /**
  * Unified error-message extractor.
@@ -31,37 +32,32 @@ const httpLong = axios.create({
   timeout: 60000,  // 60s for long operations
 })
 
-// Request interceptor - add auth token when present
-http.interceptors.request.use(
-  config => {
-    const token = localStorage.getItem('admin_token')
-    if (token) {
-      config.headers.Authorization = `Bearer ${token}`
-    }
-    return config
-  },
-  error => {
-    return Promise.reject(error)
+// Request interceptor - add auth token when present.
+// user_token (multi-user account) takes precedence over admin_token (legacy admin backdoor).
+const attachAuthToken = config => {
+  const token = localStorage.getItem('user_token') || localStorage.getItem('admin_token')
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`
   }
-)
+  return config
+}
 
-httpLong.interceptors.request.use(
-  config => {
-    const token = localStorage.getItem('admin_token')
-    if (token) {
-      config.headers.Authorization = `Bearer ${token}`
-    }
-    return config
-  },
-  error => {
-    return Promise.reject(error)
-  }
-)
+http.interceptors.request.use(attachAuthToken, error => Promise.reject(error))
+httpLong.interceptors.request.use(attachAuthToken, error => Promise.reject(error))
 
 // Response interceptor with better error handling
-const handleError = (error) => {
+// Exported for unit testing (tests/unit/auth.spec.js).
+export const handleError = (error) => {
   if (error.response?.status === 401) {
-    // Token expired or invalid — clear it and redirect to admin login if we had a token
+    // Multi-user write gate: 401 {"detail":"login_required"} means the write
+    // needs a logged-in user account — do NOT redirect to the admin login
+    // page; emit a global event so App.vue can pop the LoginDialog instead.
+    if (error.response?.data?.detail === 'login_required') {
+      authEvents.emit(AUTH_LOGIN_REQUIRED, { url: error.config?.url })
+      return Promise.reject(error)
+    }
+    // Legacy admin path: token expired or invalid — clear it and redirect to
+    // admin login if we had an admin token.
     const hadToken = !!localStorage.getItem('admin_token')
     localStorage.removeItem('admin_token')
     if (hadToken && !window.location.pathname.startsWith('/admin/login')) {
@@ -116,22 +112,30 @@ export default {
   // Auth (admin)
   login: (username, password) => http.post('/auth/login', { username, password }),
 
-  // Admin monitor templates
-  getMonitorTemplates: () => http.get('/admin/monitor-templates'),
-  createMonitorTemplate: (data) => http.post('/admin/monitor-templates', data),
-  updateMonitorTemplate: (id, data) => http.put(`/admin/monitor-templates/${id}`, data),
-  deleteMonitorTemplate: (id) => http.delete(`/admin/monitor-templates/${id}`),
-  getMonitorTemplateVersions: (id) => http.get(`/admin/monitor-templates/${id}/versions`),
-  restoreMonitorTemplateVersion: (id, version) => http.post(`/admin/monitor-templates/${id}/versions/${version}/restore`),
-  getMonitorAssignments: (id) => http.get(`/admin/monitor-templates/${id}/assignments`),
+  // Auth (multi-user accounts, Phase 1)
+  register: (nickname, password) => http.post('/auth/register', { nickname, password }),
+  userLogin: (nickname, password) => http.post('/auth/user-login', { nickname, password }),
+  whoami: () => http.get('/auth/whoami'),
+  setMyTeams: (tagIds) => http.put('/auth/me/teams', { tag_ids: tagIds }),
+
+  // Monitor templates (multi-user Phase 2 —登录用户可用, visibility-scoped)
+  getMonitorTemplates: () => http.get('/monitor-templates'),
+  createMonitorTemplate: (data) => http.post('/monitor-templates', data),
+  updateMonitorTemplate: (id, data) => http.put(`/monitor-templates/${id}`, data),
+  deleteMonitorTemplate: (id) => http.delete(`/monitor-templates/${id}`),
+  publishMonitorTemplate: (id, visibility) => http.post(`/monitor-templates/${id}/publish`, { visibility }),
+  getMonitorHealth: () => http.get('/monitor-templates/health'),
+  getMonitorTemplateVersions: (id) => http.get(`/monitor-templates/${id}/versions`),
+  restoreMonitorTemplateVersion: (id, version) => http.post(`/monitor-templates/${id}/versions/${version}/restore`),
+  getMonitorAssignments: (id) => http.get(`/monitor-templates/${id}/assignments`),
   saveMonitorAssignments: (id, targetType, targetIds) =>
-    http.put(`/admin/monitor-templates/${id}/assignments`, {
+    http.put(`/monitor-templates/${id}/assignments`, {
       target_type: targetType,
       target_ids: targetIds,
     }),
-  getMonitorDeployments: (id) => http.get(`/admin/monitor-templates/${id}/deployments`),
+  getMonitorDeployments: (id) => http.get(`/monitor-templates/${id}/deployments`),
   deployMonitorTemplates: (templateIds, targetType, targetIds) =>
-    httpLong.post('/admin/monitor-templates/deploy', {
+    httpLong.post('/monitor-templates/deploy', {
       template_ids: templateIds,
       target_type: targetType,
       target_ids: targetIds,
@@ -140,6 +144,11 @@ export default {
   // Observer config overrides (built-in observers)
   getObserverConfigs: () => http.get('/admin/observer-configs'),
   updateObserverConfig: (name, data) => http.put(`/admin/observer-configs/${name}`, data),
+  // Scoped overrides (global default + per-tag / per-array), Phase 3
+  getObserverConfigOverrides: (name) => http.get(`/admin/observer-configs/${name}/overrides`),
+  upsertObserverConfigOverride: (name, data) => http.post(`/admin/observer-configs/${name}/overrides`, data),
+  deleteObserverConfigOverride: (name, scopeType, scopeId) =>
+    http.delete(`/admin/observer-configs/${name}/overrides/${scopeType}/${scopeId}`),
 
   // Observer template builder (P3)
   generateObserverTemplate: (description) => http.post('/observer-templates/generate', { description }),

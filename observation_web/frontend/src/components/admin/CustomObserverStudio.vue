@@ -76,7 +76,7 @@
           <el-form label-position="top" size="small">
             <el-form-item label="可见范围">
               <el-radio-group v-model="form.visibility" class="visibility-control">
-                <el-radio-button label="private">个人</el-radio-button><el-radio-button label="team">团队</el-radio-button><el-radio-button label="global">全局</el-radio-button>
+                <el-radio-button label="draft">草稿</el-radio-button><el-radio-button label="team">团队</el-radio-button><el-radio-button label="global">全局</el-radio-button>
               </el-radio-group>
               <small>模板共享范围；阵列端是否执行由下方分配决定。</small>
             </el-form-item>

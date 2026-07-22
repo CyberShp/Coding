@@ -7,7 +7,7 @@ from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import get_config
@@ -19,12 +19,14 @@ from ..core.monitor_template_service import (
 )
 from ..core.ssh_pool import get_ssh_pool
 from ..db.database import get_db
+from ..models.alert import AlertModel
 from ..models.monitor_template import (
     MonitorAssignmentModel,
     MonitorDeploymentModel,
     MonitorTemplateModel,
 )
-from .auth import require_admin
+from ..models.user_account import UserAccountModel
+from .auth import require_user
 
 
 logger = logging.getLogger(__name__)
@@ -59,7 +61,7 @@ def _assignment_to_dict(row: MonitorAssignmentModel) -> dict:
 @router.get("/{template_id}/assignments", response_model=List[dict])
 async def list_assignments(
     template_id: int,
-    _payload: dict = Depends(require_admin),
+    user: UserAccountModel = Depends(require_user),
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(
@@ -77,7 +79,7 @@ async def list_assignments(
 async def save_assignments(
     template_id: int,
     body: AssignmentRequest,
-    _payload: dict = Depends(require_admin),
+    user: UserAccountModel = Depends(require_user),
     db: AsyncSession = Depends(get_db),
 ):
     if body.target_type not in {"array", "tag"}:
@@ -89,7 +91,7 @@ async def save_assignments(
     if not template:
         raise HTTPException(status_code=404, detail="Template not found")
     rows = await replace_assignments(
-        db, template, body.target_type, body.target_ids, _payload.get("sub", "")
+        db, template, body.target_type, body.target_ids, user.nickname or ""
     )
     await db.commit()
     return [_assignment_to_dict(row) for row in rows]
@@ -98,7 +100,7 @@ async def save_assignments(
 @router.get("/{template_id}/deployments", response_model=List[dict])
 async def list_deployments(
     template_id: int,
-    _payload: dict = Depends(require_admin),
+    user: UserAccountModel = Depends(require_user),
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(
@@ -122,6 +124,60 @@ async def list_deployments(
         }
         for row in result.scalars().all()
     ]
+
+
+@router.get("/health", response_model=List[dict])
+async def deployment_health(
+    _user: UserAccountModel = Depends(require_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Health dashboard: one row per deployment with its last-alert time.
+
+    last_alert_at is correlated from the alerts table. Agent-executed custom
+    monitors stamp their originating template_id into ``alerts.details`` (see
+    CustomMonitorObserver._template_details), so we match on that substring
+    scoped to the same array_id — this is robust regardless of the
+    owner-suffixed observer_name and needs no schema change.
+    """
+    result = await db.execute(
+        select(MonitorDeploymentModel, MonitorTemplateModel, MonitorAssignmentModel)
+        .join(
+            MonitorTemplateModel,
+            MonitorTemplateModel.id == MonitorDeploymentModel.template_id,
+            isouter=True,
+        )
+        .join(
+            MonitorAssignmentModel,
+            MonitorAssignmentModel.id == MonitorDeploymentModel.assignment_id,
+            isouter=True,
+        )
+        .order_by(MonitorDeploymentModel.template_id, MonitorDeploymentModel.array_id)
+    )
+    rows = result.all()
+
+    out: List[dict] = []
+    for deployment, template, assignment in rows:
+        last_alert = (
+            await db.execute(
+                select(func.max(AlertModel.timestamp)).where(
+                    AlertModel.array_id == deployment.array_id,
+                    AlertModel.details.like(
+                        f'%"template_id": {deployment.template_id}%'
+                    ),
+                )
+            )
+        ).scalar()
+        out.append({
+            "template_id": deployment.template_id,
+            "template_name": template.name if template else "",
+            "array_id": deployment.array_id,
+            "deployed_by": (assignment.created_by if assignment else "") or "",
+            "version": deployment.desired_version,
+            "status": deployment.status,
+            "confirmed_at": deployment.confirmed_at.isoformat() if deployment.confirmed_at else None,
+            "last_alert_at": last_alert.isoformat() if last_alert else None,
+        })
+    return out
 
 
 async def _deploy_plans(plans: dict) -> List[dict]:
@@ -224,7 +280,7 @@ async def _record_results(
 @router.post("/deploy")
 async def deploy_templates(
     body: DeployRequest,
-    _payload: dict = Depends(require_admin),
+    user: UserAccountModel = Depends(require_user),
     db: AsyncSession = Depends(get_db),
 ):
     if not body.template_ids:
@@ -257,7 +313,7 @@ async def deploy_templates(
     assignments = []
     for template in templates:
         assignments.extend(await replace_assignments(
-            db, template, body.target_type, body.target_ids, _payload.get("sub", "")
+            db, template, body.target_type, body.target_ids, user.nickname or ""
         ))
     active_resolved = await resolve_assignment_arrays(db, assignments)
     current_result = await db.execute(

@@ -21,6 +21,8 @@ from ..models.query import (
     QueryTemplateCreate, QueryTemplateResponse, RuleType, ExtractField
 )
 
+from .auth import require_user
+
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/query", tags=["query"])
 
@@ -30,6 +32,7 @@ async def execute_query(
     task: QueryTask,
     db: AsyncSession = Depends(get_db),
     ssh_pool: SSHPool = Depends(get_ssh_pool),
+    _user=Depends(require_user),
 ):
     """
     Execute a custom query on target arrays.
@@ -76,6 +79,7 @@ async def test_pattern(
     test_text: str = Body(..., embed=True),
     rule_type: str = Body("valid_match", embed=True),
     expect_match: bool = Body(True, embed=True),
+    _user=Depends(require_user),
 ):
     """
     Test a regex pattern against sample text.
@@ -102,6 +106,7 @@ async def test_pattern(
 @router.post("/validate-pattern")
 async def validate_pattern(
     pattern: str = Body(..., embed=True),
+    _user=Depends(require_user),
 ):
     """Validate a regex pattern"""
     engine = QueryEngine()
@@ -170,6 +175,7 @@ async def list_templates(
 async def create_template(
     template: QueryTemplateCreate,
     db: AsyncSession = Depends(get_db),
+    _user=Depends(require_user),
 ):
     """Create a new query template"""
     db_template = QueryTemplateModel(
@@ -219,6 +225,7 @@ async def create_template(
 async def delete_template(
     template_id: int,
     db: AsyncSession = Depends(get_db),
+    _user=Depends(require_user),
 ):
     """Delete a query template"""
     if template_id < 0:
@@ -400,6 +407,7 @@ def _enforce_limit(sql: str) -> str:
 async def natural_language_query(
     question: str = Body(..., embed=True, min_length=2, max_length=500),
     db: AsyncSession = Depends(get_db),
+    _user=Depends(require_user),
 ):
     """
     F201: Natural Language Query.

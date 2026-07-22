@@ -12,6 +12,7 @@
         <template #header>
           <div class="section-header">
             <el-tag :type="levelTagType" effect="dark" size="small">{{ levelLabel }}</el-tag>
+            <el-tag v-if="isExpected" type="info" size="small" effect="plain" class="expected-tag">预期内(测试期)</el-tag>
             <span class="observer-badge">{{ observerName }}</span>
             <span v-if="alert.array_name || alert.array_id" class="meta-array">{{ alert.array_name || alert.array_id }}</span>
             <span class="meta-time">
@@ -258,14 +259,22 @@
               {{ ackInfo.note || ackInfo.comment }}
             </el-descriptions-item>
           </el-descriptions>
-          <el-button
-            type="warning"
-            plain
-            size="small"
-            style="margin-top:12px"
-            :loading="ackActing"
-            @click="handleUnack"
-          >撤销确认</el-button>
+          <el-tooltip
+            :disabled="canUndo"
+            :content="UNDO_FORBIDDEN_HINT"
+            placement="top"
+          >
+            <span style="display:inline-block;margin-top:12px">
+              <el-button
+                type="warning"
+                plain
+                size="small"
+                :loading="ackActing"
+                :disabled="!canUndo"
+                @click="handleUnack"
+              >撤销确认</el-button>
+            </span>
+          </el-tooltip>
         </div>
 
         <!-- Not acknowledged — 3-type selector -->
@@ -322,6 +331,8 @@
 import { ref, computed, watch } from 'vue'
 import { Warning, Clock, Monitor, InfoFilled, List, Document, DocumentCopy, More, ArrowRight, CircleCheck, Check, Loading, MagicStick } from '@element-plus/icons-vue'
 import { translateAlert, getObserverName, LEVEL_LABELS, LEVEL_TAG_TYPES } from '@/utils/alertTranslator'
+import { canUndoAck, ackUndoErrorMessage, isExpectedTestAlert, UNDO_FORBIDDEN_HINT } from '@/utils/alertHelpers'
+import { useAuthStore } from '@/stores/auth'
 import { ElMessage } from 'element-plus'
 import api from '@/api'
 
@@ -331,6 +342,13 @@ const props = defineProps({
 })
 
 const emit = defineEmits(['update:modelValue', 'ack-changed'])
+
+const authStore = useAuthStore()
+
+// Only the acknowledger or an admin may undo; system/public acks (no human
+// acknowledger) are undoable by any logged-in user. Anonymous → disabled.
+const canUndo = computed(() => canUndoAck(ackInfo.value, authStore.currentUser))
+const isExpected = computed(() => isExpectedTestAlert(props.alert))
 
 const visible = computed({
   get: () => props.modelValue,
@@ -483,7 +501,7 @@ async function handleUnack() {
     ElMessage.success('已撤销确认')
     emit('ack-changed', { alertId, acked: false })
   } catch (e) {
-    ElMessage.error('撤销失败: ' + (e.response?.data?.detail || e.message))
+    ElMessage.error(ackUndoErrorMessage(e))
   } finally {
     ackActing.value = false
   }

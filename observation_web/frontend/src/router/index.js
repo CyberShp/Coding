@@ -1,5 +1,18 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
+import authEvents, { AUTH_LOGIN_REQUIRED } from '../utils/authEvents'
+
+// Guard for pages that any logged-in user may use (multi-user Phase 2).
+// Anonymous users get the LoginDialog popped (via the global auth event bus)
+// instead of being redirected to the legacy admin-login page; navigation is
+// aborted so they stay where they are until they log in.
+function requireLogin(to) {
+  const auth = useAuthStore()
+  if (!auth.isLoggedIn) {
+    authEvents.emit(AUTH_LOGIN_REQUIRED, { url: to.fullPath })
+    return false
+  }
+}
 
 const routes = [
   {
@@ -41,12 +54,13 @@ const routes = [
     path: '/admin/monitors',
     name: 'AdminMonitors',
     component: () => import('../views/AdminMonitors.vue'),
-    beforeEnter: () => {
-      const auth = useAuthStore()
-      if (!auth.isAdmin) {
-        return { path: '/admin/login', query: { redirect: '/admin/monitors' } }
-      }
-    },
+    beforeEnter: requireLogin,
+  },
+  {
+    path: '/monitor-health',
+    name: 'MonitorHealth',
+    component: () => import('../views/MonitorHealth.vue'),
+    beforeEnter: requireLogin,
   },
   {
     path: '/settings',

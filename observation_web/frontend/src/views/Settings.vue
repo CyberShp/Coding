@@ -163,6 +163,16 @@
         </el-card>
       </el-tab-pane>
 
+      <!-- Observer config overrides (admin only) -->
+      <el-tab-pane v-if="authStore.isAdmin" label="观察点配置" name="observer-overrides">
+        <el-card>
+          <template #header>
+            <span>内置观察点配置覆盖</span>
+          </template>
+          <ObserverConfigOverrides />
+        </el-card>
+      </el-tab-pane>
+
       <!-- AI Settings (admin only) -->
       <el-tab-pane v-if="authStore.isAdmin" label="AI 设置" name="ai">
         <el-card>
@@ -287,6 +297,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { useAlertStore } from '../stores/alerts'
 import { useAuthStore } from '../stores/auth'
 import { usePreferencesStore } from '../stores/preferences'
+import ObserverConfigOverrides from '../components/admin/ObserverConfigOverrides.vue'
 import api from '../api'
 
 const alertStore = useAlertStore()

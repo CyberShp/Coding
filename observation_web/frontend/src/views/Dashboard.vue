@@ -88,6 +88,7 @@ import { useArrayStore } from '../stores/arrays'
 import { useAlertStore } from '../stores/alerts'
 import { usePreferencesStore } from '../stores/preferences'
 import api from '../api'
+import { ackUndoErrorMessage } from '@/utils/alertHelpers'
 import AlertDetailDrawer from '@/components/AlertDetailDrawer.vue'
 import ActiveTaskBanner from '@/components/ActiveTaskBanner.vue'
 import DashboardSummary from '@/components/DashboardSummary.vue'
@@ -302,7 +303,7 @@ async function handleUndoAck({ alertIds }) {
       if (alertIds.includes(a.id)) a.is_acked = false
     })
   } catch (e) {
-    ElMessage.error('撤销失败: ' + (e.response?.data?.detail || e.message))
+    ElMessage.error(ackUndoErrorMessage(e))
   }
 }
 

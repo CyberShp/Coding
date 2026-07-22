@@ -29,7 +29,7 @@ async def db_session():
     async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
     # Import ALL models so Base.metadata is fully populated before create_all
-    from backend.models import array, alert, query, lifecycle, scheduler, traffic, task_session, snapshot, tag, user_session, user_preference, array_lock, alert_rule, audit_log, issue, monitor_template, observer_config, ai_interpretation, card_inventory, alerts_v2, expected_window, observer_snapshot, agent_heartbeat, card_presence, viewer_profile, system_config, enrollment, baseline, causal  # noqa: F401
+    from backend.models import array, alert, query, lifecycle, scheduler, traffic, task_session, snapshot, tag, user_session, user_preference, array_lock, alert_rule, audit_log, issue, monitor_template, observer_config, ai_interpretation, card_inventory, alerts_v2, expected_window, observer_snapshot, agent_heartbeat, card_presence, viewer_profile, system_config, enrollment, baseline, causal, user_account  # noqa: F401
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
@@ -42,8 +42,41 @@ async def db_session():
     await engine.dispose()
 
 
-@pytest_asyncio.fixture
-async def app_client():
+# Cached PBKDF2 hash so we only pay the 100k-iteration cost once per test run
+_TEST_USER_PASSWORD = "pytest-password"
+_test_password_hash_cache = {}
+
+
+async def seed_test_user(session_factory, nickname="pytest_user", is_admin=True):
+    """Insert a user account directly and return (user, token).
+
+    Bypasses the /auth/register endpoint so tests don't pay the PBKDF2 cost
+    for every fixture instantiation (hash is computed once and reused).
+    """
+    from backend.models.user_account import UserAccountModel, hash_password
+    from backend.api.user_auth import _create_user_token
+
+    if "hash" not in _test_password_hash_cache:
+        _test_password_hash_cache["hash"] = hash_password(_TEST_USER_PASSWORD)
+
+    async with session_factory() as session:
+        user = UserAccountModel(
+            nickname=nickname,
+            password_hash=_test_password_hash_cache["hash"],
+            is_admin=is_admin,
+        )
+        session.add(user)
+        await session.commit()
+        await session.refresh(user)
+
+    return user, _create_user_token(user).token
+
+
+import contextlib
+
+
+@contextlib.asynccontextmanager
+async def _app_client_ctx(with_auth: bool = True):
     """Create test client for API testing with a fresh in-memory database."""
     import backend.db.database as db_mod
     from httpx import AsyncClient, ASGITransport
@@ -60,13 +93,18 @@ async def app_client():
     db_mod.AsyncSessionLocal = session_factory
 
     # Import ALL models so Base.metadata is fully populated, then create tables
-    from backend.models import array, alert, query, lifecycle, scheduler, traffic, task_session, snapshot, tag, user_session, user_preference, array_lock, alert_rule, audit_log, issue, monitor_template, observer_config, ai_interpretation, card_inventory, alerts_v2, expected_window, observer_snapshot, agent_heartbeat, card_presence, viewer_profile, system_config, enrollment, baseline, causal  # noqa: F401
+    from backend.models import array, alert, query, lifecycle, scheduler, traffic, task_session, snapshot, tag, user_session, user_preference, array_lock, alert_rule, audit_log, issue, monitor_template, observer_config, ai_interpretation, card_inventory, alerts_v2, expected_window, observer_snapshot, agent_heartbeat, card_presence, viewer_profile, system_config, enrollment, baseline, causal, user_account  # noqa: F401
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
     app = create_app()
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
+        if with_auth:
+            # Seed a logged-in user so legacy tests exercising write endpoints
+            # keep passing under the require_user gate.
+            _, token = await seed_test_user(session_factory)
+            client.headers["Authorization"] = f"Bearer {token}"
         yield client
 
     # Teardown
@@ -75,6 +113,20 @@ async def app_client():
     await engine.dispose()
     db_mod._async_engine = old_engine
     db_mod.AsyncSessionLocal = old_session
+
+
+@pytest_asyncio.fixture
+async def app_client():
+    """API test client carrying a default logged-in test user token."""
+    async with _app_client_ctx(with_auth=True) as client:
+        yield client
+
+
+@pytest_asyncio.fixture
+async def anonymous_client():
+    """API test client without any auth token (for 401 gate tests)."""
+    async with _app_client_ctx(with_auth=False) as client:
+        yield client
 
 
 @pytest_asyncio.fixture
@@ -92,15 +144,18 @@ async def app_client_with_db():
     db_mod._async_engine = engine
     db_mod.AsyncSessionLocal = session_factory
 
-    from backend.models import array, alert, query, lifecycle, scheduler, traffic, task_session, snapshot, tag, user_session, user_preference, array_lock, alert_rule, audit_log, issue, monitor_template, observer_config, ai_interpretation, card_inventory, alerts_v2, expected_window, observer_snapshot, agent_heartbeat, card_presence, viewer_profile, system_config, enrollment, baseline, causal  # noqa: F401
+    from backend.models import array, alert, query, lifecycle, scheduler, traffic, task_session, snapshot, tag, user_session, user_preference, array_lock, alert_rule, audit_log, issue, monitor_template, observer_config, ai_interpretation, card_inventory, alerts_v2, expected_window, observer_snapshot, agent_heartbeat, card_presence, viewer_profile, system_config, enrollment, baseline, causal, user_account  # noqa: F401
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
     app = create_app()
     transport = ASGITransport(app=app)
 
+    _, token = await seed_test_user(session_factory)
+
     async with session_factory() as session:
         async with AsyncClient(transport=transport, base_url="http://test") as client:
+            client.headers["Authorization"] = f"Bearer {token}"
             yield client, session
 
     async with engine.begin() as conn:

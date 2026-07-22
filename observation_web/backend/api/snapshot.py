@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..db.database import get_db
 from ..models.snapshot import SnapshotModel, SnapshotResponse, SnapshotDiffResponse
 from ..models.alert import AlertModel
+from .auth import require_user
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/snapshots", tags=["snapshots"])
@@ -51,6 +52,7 @@ async def create_snapshot(
     label: str = Query("", description="Optional label"),
     task_id: Optional[int] = Query(None),
     db: AsyncSession = Depends(get_db),
+    _user=Depends(require_user),
 ):
     """
     Capture current array state as a snapshot.
