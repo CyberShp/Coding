@@ -62,6 +62,17 @@ class MonitorTemplateModel(Base):
     visibility = Column(String(16), default="team", nullable=False)
     team_scope = Column(String(128), default="")
     config_fingerprint = Column(String(80), default="")
+    # Unified monitor: where this definition runs.
+    #   agent   → deployed via assignments/deployments to the agent (uses `command`)
+    #   backend → run by the scheduler over SSH on `monitor_arrays` (uses `commands_json`)
+    exec_location = Column(String(16), default="agent", nullable=False)
+    commands_json = Column(Text, nullable=True)   # backend multi-command list (JSON)
+    monitor_arrays = Column(Text, nullable=True)  # backend target array_ids (JSON)
+    # Rule judging uses DIFFERENT engines per exec_location: agent uses the v2
+    # strategy engine (match_type/match_expression); backend uses QueryEngine.
+    # backend definitions carry their QueryEngine rule here (rule_type/pattern/
+    # expect_match/extract_fields as JSON); agent definitions leave it NULL.
+    rule_spec_json = Column(Text, nullable=True)
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
