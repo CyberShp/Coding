@@ -144,6 +144,11 @@ export default {
   // Observer config overrides (built-in observers)
   getObserverConfigs: () => http.get('/admin/observer-configs'),
   updateObserverConfig: (name, data) => http.put(`/admin/observer-configs/${name}`, data),
+  // Scoped overrides (global default + per-tag / per-array), Phase 3
+  getObserverConfigOverrides: (name) => http.get(`/admin/observer-configs/${name}/overrides`),
+  upsertObserverConfigOverride: (name, data) => http.post(`/admin/observer-configs/${name}/overrides`, data),
+  deleteObserverConfigOverride: (name, scopeType, scopeId) =>
+    http.delete(`/admin/observer-configs/${name}/overrides/${scopeType}/${scopeId}`),
 
   // Observer template builder (P3)
   generateObserverTemplate: (description) => http.post('/observer-templates/generate', { description }),

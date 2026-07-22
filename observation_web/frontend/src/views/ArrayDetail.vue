@@ -63,6 +63,7 @@ import { Refresh } from '@element-plus/icons-vue'
 import { useArrayStore } from '../stores/arrays'
 import { useAlertStore } from '../stores/alerts'
 import api from '../api'
+import { ackUndoErrorMessage } from '@/utils/alertHelpers'
 import AlertDetailDrawer from '@/components/AlertDetailDrawer.vue'
 import ArrayStatusHeader from '@/components/array-detail/ArrayStatusHeader.vue'
 import AnomalyPanel from '@/components/array-detail/AnomalyPanel.vue'
@@ -149,7 +150,7 @@ async function handleUndoAck({ alertIds }) {
     ElMessage.success('已撤销确认')
     recentAlerts.value.forEach(a => { if (alertIds.includes(a.id)) a.is_acked = false })
     if (array.value?.active_issues) await loadArray()
-  } catch (e) { ElMessage.error('撤销失败: ' + errMsg(e, '未知错误')) }
+  } catch (e) { ElMessage.error(ackUndoErrorMessage(e)) }
 }
 
 async function handleModifyAck({ alertIds, ackType }) {

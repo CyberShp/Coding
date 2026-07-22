@@ -69,6 +69,7 @@ import { ref, reactive, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import api from '../api'
+import { ackUndoErrorMessage } from '@/utils/alertHelpers'
 import { useAlertStore } from '@/stores/alerts'
 import { usePreferencesStore } from '@/stores/preferences'
 import { useArrayStore } from '@/stores/arrays'
@@ -147,7 +148,7 @@ async function handleUndoAck({ alertIds }) {
       if (alertIds.includes(a.id)) a.is_acked = false
     })
   } catch (e) {
-    ElMessage.error('撤销失败: ' + (e.response?.data?.detail || e.message))
+    ElMessage.error(ackUndoErrorMessage(e))
   }
 }
 
@@ -170,7 +171,7 @@ async function handleBatchUndo() {
     })
     selectedIds.value = []
   } catch (e) {
-    ElMessage.error('撤销失败: ' + (e.response?.data?.detail || e.message))
+    ElMessage.error(ackUndoErrorMessage(e))
   }
 }
 

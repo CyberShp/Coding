@@ -20,11 +20,12 @@
           </span>
           <el-tag v-if="group.items[0].baseline_status === 'normal'" type="info" size="small" effect="plain" class="baseline-tag">基线内</el-tag>
           <el-tag v-else-if="group.items[0].baseline_status === 'anomalous'" type="danger" size="small" effect="plain" class="baseline-tag">超基线</el-tag>
+          <el-tag v-if="isExpected(group.items[0])" type="info" size="small" effect="plain" class="expected-tag">预期内(测试期)</el-tag>
           <el-dropdown v-if="group.items[0].is_acked" trigger="click" @command="(cmd) => handleAckedAction(group.items[0], cmd)">
             <el-tag type="success" size="small" effect="plain" class="ack-badge ack-action">已确认<el-icon class="el-icon--right"><ArrowDown /></el-icon></el-tag>
             <template #dropdown>
               <el-dropdown-menu>
-                <el-dropdown-item command="undo">撤销确认</el-dropdown-item>
+                <el-dropdown-item command="undo" :disabled="!canUndoItem(group.items[0])">撤销确认</el-dropdown-item>
                 <el-dropdown-item command="confirmed_ok">更改为 确认无问题</el-dropdown-item>
                 <el-dropdown-item command="dismiss">更改为 忽略24h</el-dropdown-item>
               </el-dropdown-menu>
@@ -65,11 +66,12 @@
           <el-tag v-else type="primary" size="small" effect="plain" round class="progress-tag">
             {{ group.progressSummary || `${group.count} 变化` }}
           </el-tag>
+          <el-tag v-if="groupHasExpected(group)" type="info" size="small" effect="plain" class="expected-tag">预期内(测试期)</el-tag>
           <el-dropdown v-if="isGroupAllAcked(group)" trigger="click" @command="(cmd) => handleAckedGroupAction(group, cmd)">
             <el-tag type="success" size="small" effect="plain" class="ack-badge ack-action">全部已确认<el-icon class="el-icon--right"><ArrowDown /></el-icon></el-tag>
             <template #dropdown>
               <el-dropdown-menu>
-                <el-dropdown-item command="undo">撤销全组确认</el-dropdown-item>
+                <el-dropdown-item command="undo" :disabled="!canUndoGroup(group)">撤销全组确认</el-dropdown-item>
                 <el-dropdown-item command="confirmed_ok">更改为 全部确认无问题</el-dropdown-item>
                 <el-dropdown-item command="dismiss">更改为 全部忽略24h</el-dropdown-item>
               </el-dropdown-menu>
@@ -112,11 +114,12 @@
               </span>
               <el-tag v-if="item.baseline_status === 'normal'" type="info" size="small" effect="plain" class="baseline-tag">基线内</el-tag>
               <el-tag v-else-if="item.baseline_status === 'anomalous'" type="danger" size="small" effect="plain" class="baseline-tag">超基线</el-tag>
+              <el-tag v-if="isExpected(item)" type="info" size="small" effect="plain" class="expected-tag">预期内(测试期)</el-tag>
               <el-dropdown v-if="item.is_acked" trigger="click" @command="(cmd) => handleAckedAction(item, cmd)">
                 <el-tag type="success" size="small" effect="plain" class="ack-badge ack-action">已确认<el-icon class="el-icon--right"><ArrowDown /></el-icon></el-tag>
                 <template #dropdown>
                   <el-dropdown-menu>
-                    <el-dropdown-item command="undo">撤销确认</el-dropdown-item>
+                    <el-dropdown-item command="undo" :disabled="!canUndoItem(item)">撤销确认</el-dropdown-item>
                     <el-dropdown-item command="confirmed_ok">更改为 确认无问题</el-dropdown-item>
                     <el-dropdown-item command="dismiss">更改为 忽略24h</el-dropdown-item>
                   </el-dropdown-menu>
@@ -146,8 +149,10 @@
 <script setup>
 import { ArrowRight, ArrowDown, Check } from '@element-plus/icons-vue'
 import { translateAlert, getObserverName, LEVEL_LABELS, LEVEL_TAG_TYPES } from '@/utils/alertTranslator'
+import { canUndoAck, isExpectedTestAlert } from '@/utils/alertHelpers'
 import { useAlertFolding } from '@/composables/useAlertFolding'
 import { useAlertStore } from '@/stores/alerts'
+import { useAuthStore } from '@/stores/auth'
 import { toRef, computed } from 'vue'
 
 const props = defineProps({
@@ -169,7 +174,25 @@ const emit = defineEmits(['select', 'ack', 'undoAck', 'modifyAck', 'update:selec
 
 const { foldedAlerts, toggleExpand } = useAlertFolding(toRef(props, 'alerts'))
 
+const authStore = useAuthStore()
+
 const selectedIdsSet = computed(() => new Set(props.selectedIds || []))
+
+// Test-period "expected" flag (is_expected === 1) helpers — used to render a
+// grey tag without disturbing folding.
+const isExpected = isExpectedTestAlert
+function groupHasExpected(group) {
+  return (group.items || []).some(isExpectedTestAlert)
+}
+
+// Undo-permission gating: only the acknowledger or an admin may undo. A group
+// undo is only offered when every acked item is undoable by the current user.
+function canUndoItem(item) {
+  return canUndoAck(item, authStore.currentUser)
+}
+function canUndoGroup(group) {
+  return (group.items || []).every(i => canUndoAck(i, authStore.currentUser))
+}
 
 function handleToggle(group) {
   toggleExpand(group.key)
@@ -530,6 +553,13 @@ function formatLatency(alert) {
 .baseline-tag {
   flex-shrink: 0;
   font-size: 10px;
+}
+
+/* Phase 3: test-period expected alert tag */
+.expected-tag {
+  flex-shrink: 0;
+  font-size: 10px;
+  color: var(--el-text-color-secondary);
 }
 
 .is-baseline-normal {
