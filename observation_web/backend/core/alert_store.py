@@ -28,12 +28,31 @@ class AlertStore:
     - Generate statistics
     """
     
+    async def _active_lock_task_id(self, db: AsyncSession, array_id: str):
+        """task_id of an active test lock on this array (None if not locked).
+
+        Alerts created while an array is locked for a test task are auto-flagged
+        is_expected=1 + task_id, so test-induced fault noise is marked "expected"
+        and doesn't alarm the whole team; it reverts once the lock is released.
+        """
+        from ..models.array_lock import ArrayLockModel
+        return (await db.execute(
+            select(ArrayLockModel.task_id).where(ArrayLockModel.array_id == array_id)
+        )).scalar_one_or_none()
+
     async def create_alert(
         self,
         db: AsyncSession,
         alert: AlertCreate,
     ) -> AlertModel:
-        """Create a new alert"""
+        """Create a new alert (auto-flags expected during a test lock)."""
+        is_expected = getattr(alert, "is_expected", 0) or 0
+        task_id = getattr(alert, "task_id", None)
+        if not is_expected:  # not explicitly classified → auto-mark under test lock
+            lock_task = await self._active_lock_task_id(db, alert.array_id)
+            if lock_task is not None:
+                is_expected, task_id = 1, lock_task
+
         db_alert = AlertModel(
             array_id=alert.array_id,
             observer_name=alert.observer_name,
@@ -41,12 +60,14 @@ class AlertStore:
             message=alert.message,
             details=json.dumps(alert.details, ensure_ascii=False),
             timestamp=alert.timestamp,
+            is_expected=is_expected,
+            task_id=task_id,
         )
-        
+
         db.add(db_alert)
         await db.commit()
         await db.refresh(db_alert)
-        
+
         return db_alert
     
     async def create_alerts_batch(
@@ -58,18 +79,28 @@ class AlertStore:
         if not alerts:
             return 0, []
         
-        db_alerts = [
-            AlertModel(
+        lock_cache: Dict[str, Optional[int]] = {}
+        db_alerts = []
+        for a in alerts:
+            is_expected = getattr(a, "is_expected", 0) or 0
+            task_id = getattr(a, "task_id", None)
+            if not is_expected:
+                if a.array_id not in lock_cache:
+                    lock_cache[a.array_id] = await self._active_lock_task_id(db, a.array_id)
+                lock_task = lock_cache[a.array_id]
+                if lock_task is not None:
+                    is_expected, task_id = 1, lock_task
+            db_alerts.append(AlertModel(
                 array_id=a.array_id,
                 observer_name=a.observer_name,
                 level=a.level.value,
                 message=a.message,
                 details=json.dumps(a.details, ensure_ascii=False),
                 timestamp=a.timestamp,
-            )
-            for a in alerts
-        ]
-        
+                is_expected=is_expected,
+                task_id=task_id,
+            ))
+
         db.add_all(db_alerts)
         await db.flush()  # Assign IDs before commit
         await db.commit()

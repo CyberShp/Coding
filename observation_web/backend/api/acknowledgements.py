@@ -184,15 +184,27 @@ async def ack_all_visible(
     return {"acked_count": len(created), "message": f"Acknowledged {len(created)} alerts"}
 
 
+def _can_modify_ack(user: UserAccountModel, ack: AlertAckModel) -> bool:
+    """Only the acknowledger (matched by nickname) or an admin may undo/modify an
+    ack; system-created acks may be undone by any logged-in user. Prevents one
+    person silently overturning another's acknowledgement."""
+    if getattr(user, "is_admin", False):
+        return True
+    if (ack.acked_by_ip or "") == "system":
+        return True
+    return bool(user.nickname) and (ack.acked_by_ip or "") == user.nickname
+
+
 @router.delete("/ack/{alert_id}")
 async def unack_alert(
     alert_id: int,
     db: AsyncSession = Depends(get_db),
-    _user: UserAccountModel = Depends(require_user),
+    user: UserAccountModel = Depends(require_user),
 ):
     """
     Revoke acknowledgement for a specific alert.
     Deletes the ack record so the alert becomes unacknowledged again.
+    Only the original acknowledger or an admin may revoke.
     """
     result = await db.execute(
         select(AlertAckModel).where(AlertAckModel.alert_id == alert_id)
@@ -202,6 +214,11 @@ async def unack_alert(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"No acknowledgement found for alert {alert_id}",
+        )
+    if not _can_modify_ack(user, ack):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="only the acknowledger or an admin can undo",
         )
     await db.delete(ack)
     await db.commit()
@@ -222,12 +239,19 @@ class BatchModifyRequest(BaseModel):
 async def batch_undo_ack(
     body: BatchUndoRequest,
     db: AsyncSession = Depends(get_db),
-    _user: UserAccountModel = Depends(require_user),
+    user: UserAccountModel = Depends(require_user),
 ):
-    """Batch revoke acknowledgements for multiple alerts."""
+    """Batch revoke acknowledgements. Non-admins only revoke their own (or system) acks."""
     if not body.alert_ids:
         return {"undone_count": 0, "message": "No alert IDs provided"}
-    result = await db.execute(delete(AlertAckModel).where(AlertAckModel.alert_id.in_(body.alert_ids)))
+    from sqlalchemy import or_
+    stmt = delete(AlertAckModel).where(AlertAckModel.alert_id.in_(body.alert_ids))
+    if not getattr(user, "is_admin", False):
+        stmt = stmt.where(or_(
+            AlertAckModel.acked_by_ip == user.nickname,
+            AlertAckModel.acked_by_ip == "system",
+        ))
+    result = await db.execute(stmt)
     await db.commit()
     undone = result.rowcount
     try:
@@ -242,9 +266,9 @@ async def batch_modify_ack(
     body: BatchModifyRequest,
     request: Request,
     db: AsyncSession = Depends(get_db),
-    _user: UserAccountModel = Depends(require_user),
+    user: UserAccountModel = Depends(require_user),
 ):
-    """Batch change ack type for multiple alerts. Updates existing ack records."""
+    """Batch change ack type. Non-admins only modify their own (or system) acks."""
     if not body.alert_ids:
         return {"modified_count": 0, "message": "No alert IDs provided"}
     valid_types = {t.value for t in AckType}
@@ -261,11 +285,18 @@ async def batch_modify_ack(
             h = 24
         expires_at = datetime.now() + timedelta(hours=h)
 
-    result = await db.execute(
+    from sqlalchemy import or_
+    stmt = (
         update(AlertAckModel)
         .where(AlertAckModel.alert_id.in_(body.alert_ids))
         .values(ack_type=ack_type, ack_expires_at=expires_at)
     )
+    if not getattr(user, "is_admin", False):
+        stmt = stmt.where(or_(
+            AlertAckModel.acked_by_ip == user.nickname,
+            AlertAckModel.acked_by_ip == "system",
+        ))
+    result = await db.execute(stmt)
     await db.commit()
     modified = result.rowcount
     return {"modified_count": modified, "message": f"Modified {modified} acknowledgements"}
