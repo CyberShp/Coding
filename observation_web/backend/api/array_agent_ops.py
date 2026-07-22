@@ -51,11 +51,17 @@ async def _run_blocking(func, _timeout: float, *args, **kwargs):
 # Helpers
 # ---------------------------------------------------------------------------
 
-async def _apply_observer_overrides(conn, config, db: AsyncSession):
-    """After deploy, merge observer_configs overrides into remote config.json."""
+async def _apply_observer_overrides(conn, config, db: AsyncSession, array_id: str):
+    """After deploy, merge the array's resolved observer overrides into remote
+    config.json.
+
+    Resolution is layered global < L1 tag < array (see
+    ``resolve_observer_config``); this array receives its most-specific effective
+    config rather than the flat global override.
+    """
     try:
-        from .observer_configs import get_all_observer_overrides
-        overrides = await get_all_observer_overrides(db)
+        from .observer_configs import get_resolved_observer_overrides
+        overrides = await get_resolved_observer_overrides(db, array_id)
         if not overrides:
             return
         config_path = "/etc/observation-points/config.json"
@@ -146,7 +152,7 @@ async def deploy_agent(
             {"array_id": array_id, "warnings": result["warnings"]},
         )
 
-    await _apply_observer_overrides(conn, config, db)
+    await _apply_observer_overrides(conn, config, db, array_id)
 
     status_obj = _get_array_status(array_id)
     status_obj.agent_deployed = await _run_blocking(deployer.check_deployed, 10)
