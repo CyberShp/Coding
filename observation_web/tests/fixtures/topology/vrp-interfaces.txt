@@ -1,0 +1,7 @@
+<HUAWEI>display interface brief
+Interface                   PHY   Protocol InUti OutUti inErrors outErrors
+10GE1/0/1                   up    up       0%    0%     0        0
+GigabitEthernet 1/0/2        *down down     0%    0%     0        0
+Eth-Trunk1                  up    up       0%    0%     0        0
+NULL0                       up    up(s)    0%    0%     0        0
+<HUAWEI>

@@ -15,6 +15,7 @@ function requireLogin(to) {
 }
 
 const routes = [
+  { path: '/topology', name: 'Topology', component: () => import('../views/Topology.vue') },
   {
     path: '/',
     name: 'Dashboard',

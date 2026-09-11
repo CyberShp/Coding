@@ -1,0 +1,6 @@
+admin:/>show port general physical_type=ETH
+  ID               Health Status  Running Status  Type       MAC                Working Rate(Mbps)
+  ---------------  -------------  --------------  ---------  -----------------  ------------------
+  CTE0.A.IOM0.P0   Normal         Link Up         Host Port  aa:bb:cc:dd:00:10  10000
+  CTE0.A.NET0.P0   Normal         Link Down       Host Port  aa:bb:cc:dd:00:11  --
+admin:/>

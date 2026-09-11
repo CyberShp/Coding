@@ -1,4 +1,5 @@
 """Data models"""
+from .topology import TopologySwitchModel, TopologySnapshotModel, TopologyCableModel
 from .array import Array, ArrayCreate, ArrayUpdate, ArrayResponse
 from .alert import Alert, AlertCreate, AlertResponse, AlertStats
 from .query import QueryTemplate, QueryTask, QueryResult, QueryRule

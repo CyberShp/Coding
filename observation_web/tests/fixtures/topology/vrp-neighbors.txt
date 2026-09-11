@@ -1,0 +1,12 @@
+10GE 1/0/1 has 1 neighbor(s):
+Neighbor index                     :1
+Chassis type                       :MAC Address
+Chassis ID                         :aabb-ccdd-0011
+Port ID subtype                    :Interface Name
+Port ID                            :CTE0.A.IOM0.P0
+System name                        :storage-a
+Management address type            :IPv4
+Management address                 :192.0.2.10
+Expired time                       :96s
+GigabitEthernet 1/0/2 has 0 neighbor(s):
+<HUAWEI>

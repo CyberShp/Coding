@@ -13,53 +13,9 @@
             router
             class="sidebar-menu"
           >
-            <el-menu-item index="/">
-              <el-icon><Odometer /></el-icon>
-              <span>仪表盘</span>
-            </el-menu-item>
-            <el-menu-item index="/arrays">
-              <el-icon><Cpu /></el-icon>
-              <span>阵列管理</span>
-            </el-menu-item>
-            <el-menu-item index="/alerts">
-              <el-icon><Bell /></el-icon>
-              <span>告警中心</span>
-            </el-menu-item>
-            <el-menu-item index="/query">
-              <el-icon><Search /></el-icon>
-              <span>自定义查询</span>
-            </el-menu-item>
-            <el-menu-item index="/settings">
-              <el-icon><Setting /></el-icon>
-              <span>系统设置</span>
-            </el-menu-item>
-            <el-menu-item index="/system-alerts">
-              <el-icon><Warning /></el-icon>
-              <span>系统告警</span>
-            </el-menu-item>
-            <el-menu-item index="/tasks">
-              <el-icon><Timer /></el-icon>
-              <span>定时任务</span>
-            </el-menu-item>
-            <el-menu-item index="/test-tasks">
-              <el-icon><Stopwatch /></el-icon>
-              <span>测试任务</span>
-            </el-menu-item>
-            <el-menu-item index="/issues">
-              <el-icon><ChatDotRound /></el-icon>
-              <span>建议反馈</span>
-            </el-menu-item>
-            <el-menu-item index="/card-inventory">
-              <el-icon><Box /></el-icon>
-              <span>卡件列表</span>
-            </el-menu-item>
-            <el-menu-item index="/admin/monitors">
-              <el-icon><View /></el-icon>
-              <span>自定义监测</span>
-            </el-menu-item>
-            <el-menu-item index="/monitor-health">
-              <el-icon><FirstAidKit /></el-icon>
-              <span>监测健康度</span>
+            <el-menu-item v-for="section in navigationSections" :key="section.path" :index="section.path">
+              <el-icon><component :is="section.icon" /></el-icon>
+              <span>{{ section.label }}</span>
             </el-menu-item>
           </el-menu>
         </el-aside>
@@ -74,6 +30,7 @@
               </el-breadcrumb>
             </div>
             <div class="header-right">
+              <el-button text @click="$router.push('/issues')">帮助与反馈</el-button>
               <!-- Personal View Toggle -->
               <el-tooltip :content="preferencesStore.personalViewActive ? '切换到全局视图' : '切换到个人视图'">
                 <el-button
@@ -238,6 +195,7 @@
           </div>
 
           <el-main class="main-content">
+            <SectionNavigation />
             <router-view />
           </el-main>
         </el-container>
@@ -252,6 +210,8 @@ import { useRoute } from 'vue-router'
 import router from './router'
 import { ElMessage } from 'element-plus'
 import zhCn from 'element-plus/dist/locale/zh-cn.mjs'
+import SectionNavigation from './components/SectionNavigation.vue'
+import { sections, sectionForPath } from './navigation'
 import { Monitor, Odometer, Cpu, Bell, Search, Setting, User, Warning, Files, Timer, WarningFilled, Stopwatch, UserFilled, ChatDotRound, InfoFilled, Box, Star, View, FirstAidKit } from '@element-plus/icons-vue'
 import { useAlertStore } from './stores/alerts'
 import { useAuthStore } from './stores/auth'
@@ -319,11 +279,13 @@ function handleUserLogout() {
   ElMessage.success('已退出登录')
 }
 
-const activeMenu = computed(() => route.path)
+const navigationSections = sections.map(s => ({ ...s, icon: { overview: Odometer, devices: Cpu, alerts: Bell, monitoring: View, settings: Setting }[s.id] }))
+const activeMenu = computed(() => sectionForPath(route.path)?.path || '/')
 const currentRoute = computed(() => {
   const routes = {
     '/': '',
-    '/arrays': '阵列管理',
+    '/arrays': '设备',
+    '/topology': '以太网拓扑',
     '/alerts': '告警中心',
     '/query': '自定义查询',
     '/settings': '系统设置',
@@ -333,7 +295,7 @@ const currentRoute = computed(() => {
     '/test-tasks': '测试任务',
     '/card-inventory': '卡件列表',
     '/admin/monitors': '自定义监测',
-    '/monitor-health': '监测健康度',
+    '/monitor-health': '部署状态',
   }
   return routes[route.path] || ''
 })

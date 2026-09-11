@@ -81,6 +81,15 @@ http.interceptors.response.use(response => response, handleError)
 httpLong.interceptors.response.use(response => response, handleError)
 
 export default {
+  confirmTopologyCable: (data) => http.post('/topology/links', data),
+  removeTopologyCable: (id) => http.delete(`/topology/links/${encodeURIComponent(id)}`),
+  getTopology: () => http.get('/topology'),
+  getTopologySwitches: () => http.get('/topology/switches'),
+  createTopologySwitch: (data) => http.post('/topology/switches', data),
+  updateTopologySwitch: (id, data) => http.put(`/topology/switches/${encodeURIComponent(id)}`, data),
+  deleteTopologySwitch: (id) => http.delete(`/topology/switches/${encodeURIComponent(id)}`),
+  collectTopologyDevice: (id) => httpLong.post(`/topology/collect/${encodeURIComponent(id)}`, null, { timeout: 120000 }),
+
   // Arrays
   getArrays: (tagId = null) => http.get('/arrays', { params: tagId ? { tag_id: tagId } : {} }),
   getArrayStatuses: (tagId = null, options = {}) => http.get('/arrays/statuses', { params: tagId ? { tag_id: tagId } : {}, ...options }),

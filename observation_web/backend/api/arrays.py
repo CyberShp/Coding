@@ -20,7 +20,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, File, HTTPException, status, Body, Query, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from sqlalchemy import select, func
+from sqlalchemy import select, func, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import get_config
@@ -32,6 +32,7 @@ from ..models.array import (
     ArrayModel, ArrayCreate, ArrayUpdate, ArrayResponse,
     ArrayStatus, ConnectionState,
 )
+from ..models.topology import TopologySnapshotModel, TopologyCableModel
 
 from .array_status import (
     _array_status_cache,
@@ -439,6 +440,13 @@ async def update_array(
 
     update_data = update.model_dump(exclude_unset=True)
     update_data.pop('expected_version', None)
+    if any(field in update_data and update_data[field] != getattr(array, field)
+           for field in ('host', 'port', 'username', 'key_path', 'mgmt_ip')):
+        await db.execute(delete(TopologySnapshotModel).where(
+            TopologySnapshotModel.device_id == 'storage:' + array_id))
+        await db.execute(delete(TopologyCableModel).where(
+            (TopologyCableModel.source == 'storage:' + array_id) |
+            (TopologyCableModel.target == 'storage:' + array_id)))
     for field, value in update_data.items():
         setattr(array, field, value)
     array.version = (getattr(array, 'version', 1) or 1) + 1
@@ -475,6 +483,11 @@ async def delete_array(
     if array_id in _array_status_cache:
         del _array_status_cache[array_id]
     await db.delete(array)
+    await db.execute(delete(TopologySnapshotModel).where(
+        TopologySnapshotModel.device_id == 'storage:' + array_id))
+    await db.execute(delete(TopologyCableModel).where(
+        (TopologyCableModel.source == 'storage:' + array_id) |
+        (TopologyCableModel.target == 'storage:' + array_id)))
     await db.commit()
     logger.info(f"Deleted array: {array_id}")
 

@@ -3,7 +3,7 @@
     <el-card>
       <template #header>
         <div class="page-header">
-          <span>监测健康度</span>
+          <span>部署状态</span>
           <el-button size="small" :loading="loading" @click="load">
             <el-icon><Refresh /></el-icon>刷新
           </el-button>
