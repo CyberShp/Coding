@@ -216,3 +216,7 @@ observation_web/
 ## 许可证
 
 MIT License
+
+## Windows 便携包
+
+使用 [Windows 构建与运行说明](docs/WINDOWS_PORTABLE.md) 生成内置运行环境的 ZIP，或通过 GitHub Actions 获取构建产物。
