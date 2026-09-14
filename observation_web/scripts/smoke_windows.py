@@ -1,5 +1,6 @@
 """Validate the extracted portable runtime, HTTP UI/API and DB restart."""
 import json
+from contextlib import closing
 from pathlib import Path
 import re
 import socket
@@ -53,11 +54,12 @@ def check(archive):
                         assert len(get(asset)) > 0
                     assert isinstance(json.loads(get('/api/topology')), dict)
                     assert database.is_file()
-                    with sqlite3.connect(database) as db:
+                    with closing(sqlite3.connect(database)) as db:
                         assert db.execute('select version_num from alembic_version').fetchone()
                         if attempt == 0:
                             db.execute('create table portable_smoke (value text)')
                             db.execute("insert into portable_smoke values ('retained')")
+                            db.commit()
                         else:
                             assert db.execute('select value from portable_smoke').fetchone()[0] == 'retained'
                 except Exception:
